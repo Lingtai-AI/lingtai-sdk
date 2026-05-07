@@ -498,10 +498,12 @@ def _handle_request(agent, msg: Message) -> None:
 
     # Molt pressure — warn agent when context is getting full.
     #
-    # Hard ceiling and forced-wipe paths still prepend their notice to the
-    # current user message because they are kernel ACTIONS the agent must
-    # see this turn (the wipe already happened; the agent needs to know
-    # working memory just got cleared).
+    # Hard ceiling is two-phase: first hit publishes a critical
+    # notification (same channel as graduated warnings) so the agent
+    # gets one turn to molt voluntarily; subsequent hits force-wipe.
+    # The forced-wipe path prepends its notice to the current user
+    # message because it is a kernel ACTION the agent must see this
+    # turn (the wipe already happened).
     #
     # Graduated warnings (level 1/2/3 below the hard ceiling) are routed
     # through the .notification/molt.json channel instead of being baked
@@ -513,15 +515,52 @@ def _handle_request(agent, msg: Message) -> None:
     pressure = agent._session.get_context_pressure()
 
     if pressure >= agent._config.molt_hard_ceiling and has_molt:
-        # Hard ceiling — unconditional force-wipe (action, stays inline).
-        lang = agent._config.language
-        agent._log("auto_forget", reason="hard ceiling", pressure=pressure, ceiling=agent._config.molt_hard_ceiling)
-        from ..intrinsics import psyche as _psyche
-        from ..intrinsics.system import clear_notification
-        _psyche.context_forget(agent)
-        agent._session._compaction_warnings = 0
-        clear_notification(agent._working_dir, "molt")
-        content = f"{_t(lang, 'system.molt_wiped')}\n\n{content}"
+        if agent._session._compaction_warnings > 0:
+            # Hard ceiling, already warned — force-wipe.
+            lang = agent._config.language
+            agent._log("auto_forget", reason="hard ceiling", pressure=pressure, ceiling=agent._config.molt_hard_ceiling)
+            from ..intrinsics import psyche as _psyche
+            from ..intrinsics.system import clear_notification
+            _psyche.context_forget(agent)
+            agent._session._compaction_warnings = 0
+            clear_notification(agent._working_dir, "molt")
+            content = f"{_t(lang, 'system.molt_wiped')}\n\n{content}"
+        else:
+            # Hard ceiling, first hit — publish urgent notification so
+            # the agent gets one turn to see the warning and molt
+            # voluntarily before the next turn force-wipes.
+            agent._session._compaction_warnings += 1
+            warnings = agent._session._compaction_warnings
+            max_warnings = agent._config.molt_warnings
+            remaining = max(0, max_warnings - warnings)
+            lang = agent._config.language
+            level = 3  # highest urgency
+            level_prompt = _t(
+                lang,
+                "system.molt_warning_level3",
+                pressure=f"{pressure:.0%}",
+                remaining=remaining,
+            )
+            level_prompt = level_prompt + "\n\n" + _t(lang, "system.molt_procedure")
+            molt_prompt = agent._config.molt_prompt or level_prompt
+            status = f"[context: {pressure:.0%} | CRITICAL]"
+            from ..intrinsics.system import publish_notification
+            publish_notification(
+                agent._working_dir, "molt",
+                header=f"context {pressure:.0%}, CRITICAL — force-wipe next turn",
+                icon="🚨",
+                priority="high",
+                data={
+                    "pressure": pressure,
+                    "level": level,
+                    "warnings": warnings,
+                    "remaining": remaining,
+                    "max_warnings": max_warnings,
+                    "warning_text": molt_prompt,
+                    "status": status,
+                },
+            )
+            agent._log("molt_hard_ceiling_warning", pressure=pressure, ceiling=agent._config.molt_hard_ceiling)
     elif pressure >= agent._config.molt_pressure and has_molt:
         max_warnings = agent._config.molt_warnings
         agent._session._compaction_warnings += 1
