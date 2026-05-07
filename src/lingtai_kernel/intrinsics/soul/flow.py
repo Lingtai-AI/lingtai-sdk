@@ -53,6 +53,10 @@ def _soul_whisper(agent) -> None:
     Issue #47: Also checks for pending notifications before running
     consultation. This ensures messages are seen within one soul delay
     cycle instead of waiting indefinitely.
+
+    Issue #51: When subconscious_enabled, also fires the subconscious
+    consultation alongside the normal soul flow. Both run in parallel
+    daemon threads via _run_consultation_fire and _run_subconscious_fire.
     """
     from ...state import AgentState
     from ...notifications import notification_fingerprint, collect_notifications
@@ -77,6 +81,10 @@ def _soul_whisper(agent) -> None:
 
             # Run the normal consultation fire
             agent._run_consultation_fire()
+
+            # Issue #51: Fire subconscious if enabled
+            if getattr(agent._config, 'subconscious_enabled', False):
+                agent._run_subconscious_fire()
         else:
             agent._log("soul_whisper_skipped", reason=agent._state.value)
     except Exception as e:
@@ -359,6 +367,162 @@ def _run_consultation_fire(agent) -> None:
             except RuntimeError:
                 # Lock was never acquired by this thread — defensive guard.
                 pass
+
+
+def _run_subconscious_fire(agent) -> None:
+    """Run one subconscious consultation. If an insight is produced,
+    write it to .notification/subconscious.json with TTL.
+
+    The subconscious consults ONE past self (K=1, cheap) with a special
+    prompt that asks "does this remind you of something?" rather than
+    "advise your present self." If the past self has nothing to say
+    (null insight), no notification is written — the agent never sees it.
+
+    Gating:
+    - Skips if an active (non-expired) subconscious insight already exists.
+    - Skips if no snapshot paths are available.
+    - Skips if no diary spark is available.
+    """
+    import json
+    import random
+    from datetime import datetime, timezone
+
+    if not _soul_fire_allowed(agent):
+        return
+
+    from .consultation import (
+        _render_current_diary,
+        _load_snapshot_interface,
+        _list_snapshot_paths,
+        _fit_interface_to_window,
+        _SUBCONSCIOUS_SYSTEM_PROMPT,
+        _send_with_timeout,
+    )
+    from ..system import publish_notification, clear_notification
+
+    # Check if there's already an active subconscious insight
+    sub_path = agent._working_dir / ".notification" / "subconscious.json"
+    if sub_path.is_file():
+        try:
+            existing = json.loads(sub_path.read_text(encoding="utf-8"))
+            expires_at = existing.get("data", {}).get("expires_at", 0)
+            if expires_at and expires_at > time.time():
+                # Still active — don't overwrite
+                return
+        except Exception:
+            pass
+
+    # Get the diary spark
+    diary = _render_current_diary(agent)
+    if not diary:
+        return
+
+    # Select a snapshot to consult (random, one at a time — cheap)
+    paths = _list_snapshot_paths(agent)
+    if not paths:
+        return
+
+    sampled = random.sample(paths, min(1, len(paths)))
+    path = sampled[0]
+    iface = _load_snapshot_interface(path)
+    if iface is None or not iface.entries:
+        return
+
+    # Fit to window
+    window = getattr(agent._config, 'subconscious_context_window', 128000)
+    target = max(1, int(window * 0.7))
+    fitted = _fit_interface_to_window(iface, target)
+    if not fitted.entries:
+        return
+
+    # Build session with subconscious prompt — no tools, no thinking
+    sub_provider = getattr(agent._config, 'subconscious_provider', None)
+    sub_model = getattr(agent._config, 'subconscious_model', None)
+    sub_base_url = getattr(agent._config, 'subconscious_base_url', None)
+
+    try:
+        session = agent.service.create_session(
+            system_prompt=_SUBCONSCIOUS_SYSTEM_PROMPT,
+            tools=None,  # subconscious doesn't use tools
+            model=sub_model or agent._config.model,
+            thinking=None,  # local models may not support thinking
+            tracked=False,
+            interface=fitted,
+            provider=sub_provider or agent._config.provider,
+            base_url=sub_base_url,
+        )
+    except Exception as e:
+        agent._log("subconscious_session_failed", error=str(e)[:200])
+        return
+
+    # Send the diary as spark
+    response = _send_with_timeout(agent, session, diary)
+    if response is None:
+        return
+
+    # Parse the response
+    try:
+        text = ""
+        if session.interface.entries:
+            tail = session.interface.entries[-1]
+            if tail.role == "assistant":
+                for b in tail.content:
+                    if hasattr(b, 'text') and b.text:
+                        text = b.text.strip()
+                        break
+
+        if not text:
+            return
+
+        # Try to parse JSON response
+        try:
+            result = json.loads(text)
+        except json.JSONDecodeError:
+            # Not JSON — wrap as plain insight
+            result = {"insight": text, "confidence": 0.5, "source_memory": "unstructured"}
+
+        insight = result.get("insight")
+        if not insight:
+            # null insight = nothing relevant
+            return
+
+    except Exception as e:
+        agent._log("subconscious_parse_error", error=str(e)[:200])
+        return
+
+    # Write to notification with TTL
+    ttl = getattr(agent._config, 'subconscious_ttl_seconds', 1800.0)
+    now = datetime.now(timezone.utc)
+    now_ts = now.timestamp()
+    publish_notification(
+        agent._working_dir, "subconscious",
+        header="subconscious insight",
+        icon="🧠",
+        instructions=(
+            "This is a subconscious insight — a memory from your past self "
+            "that surfaced because the current situation reminded you of it. "
+            "The insight is advisory; act on it if relevant, ignore if not. "
+            "It will fade automatically when its TTL expires."
+        ),
+        data={
+            "insight": insight,
+            "confidence": result.get("confidence", 0.5),
+            "source_memory": result.get("source_memory", ""),
+            "source_snapshot": f"snapshot:{path.stem}",
+            "created_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "expires_at": now_ts + ttl,
+            "ttl_seconds": ttl,
+        },
+    )
+
+    agent._log("subconscious_insight", insight=insight[:200],
+               source=f"snapshot:{path.stem}")
+
+    # Nudge the heartbeat so the sync detects the new notification quickly
+    try:
+        agent._wake_nap("subconscious_fired")
+    except Exception:
+        pass
 
 
 def _rehydrate_appendix_tracking(agent) -> None:

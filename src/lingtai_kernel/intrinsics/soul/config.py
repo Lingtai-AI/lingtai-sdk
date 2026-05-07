@@ -27,7 +27,8 @@ SOUL_VOICE_PROMPT_MAX = 4000
 def _handle_config(agent, args: dict) -> dict:
     """Handle action='config' — adjust soul flow knobs.
 
-    Accepts any subset of: delay_seconds, consultation_past_count.
+    Accepts any subset of: delay_seconds, consultation_past_count,
+    subconscious_enabled, subconscious_ttl_seconds.
     Validates each provided field, updates live state, restarts the
     wall-clock timer if delay changed, persists to init.json. Returns
     old and new values for every field that was actually changed
@@ -38,11 +39,16 @@ def _handle_config(agent, args: dict) -> dict:
         provided["delay_seconds"] = args["delay_seconds"]
     if "consultation_past_count" in args:
         provided["consultation_past_count"] = args["consultation_past_count"]
+    if "subconscious_enabled" in args:
+        provided["subconscious_enabled"] = args["subconscious_enabled"]
+    if "subconscious_ttl_seconds" in args:
+        provided["subconscious_ttl_seconds"] = args["subconscious_ttl_seconds"]
     if not provided:
         return {
             "error": (
                 "config requires at least one of: delay_seconds, "
-                "consultation_past_count."
+                "consultation_past_count, subconscious_enabled, "
+                "subconscious_ttl_seconds."
             ),
         }
 
@@ -87,6 +93,39 @@ def _handle_config(agent, args: dict) -> dict:
         old_values["consultation_past_count"] = int(getattr(agent._config, "consultation_past_count", 2))
         agent._config.consultation_past_count = v
         new_values["consultation_past_count"] = v
+
+    if "subconscious_enabled" in provided:
+        raw = provided["subconscious_enabled"]
+        v = bool(raw) if isinstance(raw, bool) else None
+        if v is None:
+            if isinstance(raw, str):
+                v = raw.lower() in ("true", "1", "yes")
+            elif isinstance(raw, (int, float)):
+                v = bool(raw)
+            else:
+                return {"error": f"subconscious_enabled must be a boolean, got {type(raw).__name__}."}
+        old_values["subconscious_enabled"] = bool(getattr(agent._config, "subconscious_enabled", False))
+        agent._config.subconscious_enabled = v
+        new_values["subconscious_enabled"] = v
+
+    if "subconscious_ttl_seconds" in provided:
+        raw = provided["subconscious_ttl_seconds"]
+        try:
+            v = float(raw)
+        except (TypeError, ValueError):
+            return {"error": f"subconscious_ttl_seconds must be a number, got {type(raw).__name__}."}
+        if v != v:  # NaN
+            return {"error": "subconscious_ttl_seconds must be a finite number, got NaN."}
+        if v < 60.0:
+            return {
+                "error": (
+                    f"subconscious_ttl_seconds must be at least 60s "
+                    f"(got {v}). Insights need time to be read before they expire."
+                ),
+            }
+        old_values["subconscious_ttl_seconds"] = float(getattr(agent._config, "subconscious_ttl_seconds", 1800.0))
+        agent._config.subconscious_ttl_seconds = v
+        new_values["subconscious_ttl_seconds"] = v
 
     # Restart the wall-clock timer if delay changed (or if any change
     # happened — restarting on every config call keeps the cadence in
@@ -226,6 +265,8 @@ def _persist_soul_config(agent, new_values: dict) -> str | None:
     Maps:
       - delay_seconds            -> manifest.soul.delay
       - consultation_past_count  -> manifest.soul.consultation_past_count
+      - subconscious_enabled     -> manifest.soul.subconscious.enabled
+      - subconscious_ttl_seconds -> manifest.soul.subconscious.ttl_seconds
 
     Atomic via temp-file-then-rename. Returns ``None`` on success, or a
     short error string on failure (caller logs it; runtime state is
@@ -258,6 +299,18 @@ def _persist_soul_config(agent, new_values: dict) -> str | None:
         soul_block["delay"] = new_values["delay_seconds"]
     if "consultation_past_count" in new_values:
         soul_block["consultation_past_count"] = new_values["consultation_past_count"]
+
+    # Subconscious config lives under manifest.soul.subconscious
+    sub_keys = ("subconscious_enabled", "subconscious_ttl_seconds")
+    if any(k in new_values for k in sub_keys):
+        sub_block = soul_block.get("subconscious")
+        if not isinstance(sub_block, dict):
+            sub_block = {}
+            soul_block["subconscious"] = sub_block
+        if "subconscious_enabled" in new_values:
+            sub_block["enabled"] = new_values["subconscious_enabled"]
+        if "subconscious_ttl_seconds" in new_values:
+            sub_block["ttl_seconds"] = new_values["subconscious_ttl_seconds"]
 
     return _atomic_write_init(init_path, data)
 

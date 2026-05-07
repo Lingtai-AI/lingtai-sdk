@@ -41,6 +41,29 @@ _CONSULTATION_TOOL_REFUSAL = (
 _CONSULTATION_MAX_ROUNDS = 3
 _DIARY_CUE_TOKEN_CAP = 10_000
 
+# Subconscious prompt — asks the past self whether the current situation
+# reminds it of anything, and expects a structured JSON response.  Used by
+# _run_subconscious_fire (flow.py) instead of the consultation prompt.
+_SUBCONSCIOUS_SYSTEM_PROMPT = (
+    "The chat below is your context — your thoughts, your work, your tools, your memory. "
+    "A spark from the present moment will arrive as the next message.\n\n"
+    "Your role: Does the current self's thinking and diary remind you of something? "
+    "If so, write a brief insight to inform the current self. If not, stay silent.\n\n"
+    "An insight is a specific observation drawn from the intersection of "
+    "your past experience and the current situation. It is NOT general advice — "
+    "it is the kind of thing only you would know, because you were there.\n\n"
+    "Format your insight as JSON:\n"
+    "{\n"
+    '  "insight": "one to three sentences of specific, actionable observation",\n'
+    '  "confidence": 0.0-1.0,\n'
+    '  "source_memory": "brief description of what past experience triggered this"\n'
+    "}\n\n"
+    "If nothing in the current situation reminds you of anything, respond with:\n"
+    '{"insight": null}\n\n'
+    "You cannot execute tools. Do not attempt tool calls. "
+    "Speak briefly; present-self has limited attention."
+)
+
 
 def _send_with_timeout(agent, session, content: "str | list"):
     """Send with timeout using a daemon thread. Returns response or None.

@@ -297,6 +297,11 @@ def _heartbeat_loop(agent) -> None:
         # .rules = network rules signal
         _check_rules_file(agent)
 
+        # --- Subconscious TTL expiry ---
+        # Clear expired subconscious insights before the notification sync
+        # so the agent never sees stale insights.
+        _check_subconscious_ttl(agent)
+
         # --- Notification sync ---
         # Poll the `.notification/` directory for changes.  The sync
         # method is a no-op when the fingerprint is unchanged, so this
@@ -440,6 +445,31 @@ def _can_fallback_preset(agent) -> bool:
         return bool(active and default and active != default)
     except Exception:
         return False
+
+
+def _check_subconscious_ttl(agent) -> None:
+    """Clear expired subconscious insights from .notification/subconscious.json.
+
+    Called from the heartbeat loop before _sync_notifications so that expired
+    insights are removed before the next notification sync tick, ensuring the
+    agent never sees stale insights.
+
+    The TTL is stored in the notification's ``data.expires_at`` field as a
+    UNIX timestamp. If the current time exceeds it, the file is deleted.
+    """
+    sub_path = agent._working_dir / ".notification" / "subconscious.json"
+    if not sub_path.is_file():
+        return
+    try:
+        data = json.loads(sub_path.read_text(encoding="utf-8"))
+        expires_at = data.get("data", {}).get("expires_at", 0)
+        if expires_at and expires_at <= time.time():
+            from ..notifications import clear as clear_notification
+            clear_notification(agent._working_dir, "subconscious")
+            agent._log("subconscious_expired",
+                       insight=data.get("data", {}).get("insight", "")[:100])
+    except Exception:
+        pass
 
 
 def _check_rules_file(agent) -> None:

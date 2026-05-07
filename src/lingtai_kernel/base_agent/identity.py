@@ -75,6 +75,12 @@ def _build_manifest(agent) -> dict:
     # can show the active prompt without calling soul(action='voice').
     if data["soul_voice"] == "custom":
         data["soul_voice_prompt"] = getattr(agent._config, "soul_voice_prompt", "") or ""
+    # Subconscious config — surface enabled state + TTL in the manifest
+    # so the TUI / portal can show it without calling soul(action='config').
+    sub_enabled = getattr(agent._config, "subconscious_enabled", False)
+    data["subconscious_enabled"] = sub_enabled
+    if sub_enabled:
+        data["subconscious_ttl_seconds"] = getattr(agent._config, "subconscious_ttl_seconds", 1800.0)
     if agent._mail_service is not None and agent._mail_service.address:
         data["address"] = agent._mail_service.address
     return data

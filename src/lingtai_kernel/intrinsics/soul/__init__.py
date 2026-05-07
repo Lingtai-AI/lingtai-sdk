@@ -45,6 +45,7 @@ from .consultation import (
     _CONSULTATION_TOOL_REFUSAL,
     _CONSULTATION_MAX_ROUNDS,
     _DIARY_CUE_TOKEN_CAP,
+    _SUBCONSCIOUS_SYSTEM_PROMPT,
     _send_with_timeout,
     _render_current_diary,
     _write_soul_tokens,
@@ -101,6 +102,15 @@ def get_schema(lang: str = "en") -> dict:
                 "minimum": CONSULTATION_PAST_COUNT_MIN,
                 "maximum": CONSULTATION_PAST_COUNT_MAX,
                 "description": t(lang, "soul.consultation_past_count_description"),
+            },
+            "subconscious_enabled": {
+                "type": "boolean",
+                "description": t(lang, "soul.subconscious_enabled_description"),
+            },
+            "subconscious_ttl_seconds": {
+                "type": "number",
+                "minimum": 60,
+                "description": t(lang, "soul.subconscious_ttl_seconds_description"),
             },
             "set": {
                 "type": "string",

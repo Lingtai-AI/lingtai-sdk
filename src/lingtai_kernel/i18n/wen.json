@@ -84,5 +84,9 @@
   "email.unread_digest": "[邮] 未阅之书凡 {count} 封，新者发于 {recency}。\n\n{entries}\n{more}",
   "email.unread_digest.entry": "  {n}. 自 {name} ({address}) —— {subject}\n     编号：{id}\n     发于：{sent_at}\n     {preview}",
   "email.unread_digest.more": "（仅显前 {shown} 封，共 {total}）",
-  "email.unread_digest.no_subject": "（无题）"
+  "email.unread_digest.no_subject": "（无题）",
+  "subconscious.header": "潜识所见",
+  "subconscious.instructions": "此乃潜识之见——昔时自吾之忆，因今之情境而浮现。若切则取之，不切则舍之。时辰既至，自当消散。",
+  "soul.subconscious_enabled_description": "启用潜识——并行之咨询也，问昔时之己曰'此事令汝忆及何？'并将所得之忆以简见之形通于通知。启用后，潜识与正魂流同节律而发。默认：闭。",
+  "soul.subconscious_ttl_seconds_description": "潜识之见存于通知中之时辰（以秒计），期满自除。至少六十秒。默认：千八百（三十分时）。"
 }

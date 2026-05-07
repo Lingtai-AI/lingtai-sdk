@@ -84,5 +84,9 @@
   "email.unread_digest": "[邮件] 共有 {count} 封未读消息——最近一封于 {recency}。\n\n{entries}\n{more}",
   "email.unread_digest.entry": "  {n}. 来自 {name} ({address}) —— {subject}\n     ID：{id}\n     发送时间：{sent_at}\n     {preview}",
   "email.unread_digest.more": "（仅显示前 {shown} 封，共 {total} 封）",
-  "email.unread_digest.no_subject": "（无主题）"
+  "email.unread_digest.no_subject": "（无主题）",
+  "subconscious.header": "潜意识洞见",
+  "subconscious.instructions": "这是一条潜意识洞见——来自过去的自我的记忆，因当前情境触发而浮现。此洞见仅供参考；如相关则采纳，不相关则忽略。它将在TTL过期后自动消退。",
+  "soul.subconscious_enabled_description": "启用或禁用潜意识——一个并行的咨询机制，会问过去的自己'这让你想起了什么？'并将相关的记忆以简短洞见的形式通过通知系统呈现。启用后，潜意识会与正常的灵魂流动在同一个定时器节奏上一起触发。默认：关闭。",
+  "soul.subconscious_ttl_seconds_description": "潜意识洞见在通知中保持活跃的时长（秒），超时后自动清除。最短60秒。默认：1800（30分钟）。"
 }
