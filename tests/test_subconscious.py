@@ -449,3 +449,303 @@ class TestIdleGatedSoulFlow:
         agent._state = AgentState.ASLEEP
         from lingtai_kernel.intrinsics.soul.flow import _soul_fire_allowed
         assert _soul_fire_allowed(agent) is False
+
+
+# ---------------------------------------------------------------------------
+# Architecture C — Selective snapshot sampling
+# ---------------------------------------------------------------------------
+
+
+class TestSelectiveSnapshotSampling:
+    """Architecture C: random sample of N snapshots instead of all."""
+
+    def test_sample_n_default_is_3(self, tmp_path):
+        """Default sample_n is 3."""
+        from lingtai_kernel.intrinsics.soul.subconscious import _SUBCONSCIOUS_SAMPLE_N
+        assert _SUBCONSCIOUS_SAMPLE_N == 3
+
+    def test_sample_n_config_persists(self, tmp_path):
+        """sample_n persists to init.json."""
+        agent = _make_agent(tmp_path)
+        init_path = agent._working_dir / "init.json"
+        init_path.parent.mkdir(parents=True, exist_ok=True)
+        init_path.write_text(json.dumps({
+            "manifest": {"llm": {}}
+        }), encoding="utf-8")
+
+        from lingtai_kernel.intrinsics.soul.config import _persist_soul_config
+        _persist_soul_config(agent, {
+            "subconscious_sample_n": 5,
+        })
+
+        data = json.loads(init_path.read_text())
+        sub = data["manifest"]["soul"]["subconscious"]
+        assert sub["sample_n"] == 5
+
+    def test_sample_n_config_validation(self, tmp_path):
+        """sample_n must be a positive integer."""
+        agent = _make_agent(tmp_path)
+        from lingtai_kernel.intrinsics.soul.config import _handle_config
+
+        # Zero fails.
+        result = _handle_config(agent, {"subconscious_sample_n": 0})
+        assert "error" in result
+
+        # Negative fails.
+        result = _handle_config(agent, {"subconscious_sample_n": -1})
+        assert "error" in result
+
+        # String fails.
+        result = _handle_config(agent, {"subconscious_sample_n": "abc"})
+        assert "error" in result
+
+        # Positive succeeds.
+        result = _handle_config(agent, {"subconscious_sample_n": 5})
+        assert result["status"] == "ok"
+        assert result["new"]["subconscious_sample_n"] == 5
+
+    def test_fire_respects_sample_n(self, tmp_path):
+        """When there are more snapshots than sample_n, only sample_n are used."""
+        from lingtai_kernel.intrinsics.soul.subconscious import _run_subconscious_fire
+
+        agent = _make_agent(tmp_path,
+                            subconscious_enabled=True,
+                            subconscious_provider="test",
+                            subconscious_model="test",
+                            subconscious_sample_n=2)
+        agent._state = AgentState.ACTIVE
+        agent._shutdown = threading.Event()
+
+        # Create 5 fake snapshot files.
+        snap_dir = agent._working_dir / "history" / "snapshots"
+        snap_dir.mkdir(parents=True, exist_ok=True)
+        for i in range(5):
+            (snap_dir / f"snapshot_{i:03d}.json").write_text(
+                json.dumps({"schema_version": 1, "interface": []}),
+                encoding="utf-8",
+            )
+
+        # Mock the snapshot runner to count invocations.
+        call_count = {"n": 0}
+        def mock_run_snapshot(agent, path, diary, fire_id, overrides):
+            call_count["n"] += 1
+            return None
+
+        with patch(
+            "lingtai_kernel.intrinsics.soul.subconscious._run_subconscious_snapshot",
+            side_effect=mock_run_snapshot,
+        ), patch(
+            "lingtai_kernel.intrinsics.soul.consultation._render_current_diary",
+            return_value="test diary",
+        ):
+            _run_subconscious_fire(agent)
+
+        assert call_count["n"] == 2, f"Expected 2 snapshot calls, got {call_count['n']}"
+
+    def test_fire_uses_all_when_fewer_than_sample_n(self, tmp_path):
+        """When there are fewer snapshots than sample_n, all are used."""
+        from lingtai_kernel.intrinsics.soul.subconscious import _run_subconscious_fire
+
+        agent = _make_agent(tmp_path,
+                            subconscious_enabled=True,
+                            subconscious_provider="test",
+                            subconscious_model="test",
+                            subconscious_sample_n=5)
+        agent._state = AgentState.ACTIVE
+        agent._shutdown = threading.Event()
+
+        # Create only 2 snapshot files.
+        snap_dir = agent._working_dir / "history" / "snapshots"
+        snap_dir.mkdir(parents=True, exist_ok=True)
+        for i in range(2):
+            (snap_dir / f"snapshot_{i:03d}.json").write_text(
+                json.dumps({"schema_version": 1, "interface": []}),
+                encoding="utf-8",
+            )
+
+        call_count = {"n": 0}
+        def mock_run_snapshot(agent, path, diary, fire_id, overrides):
+            call_count["n"] += 1
+            return None
+
+        with patch(
+            "lingtai_kernel.intrinsics.soul.subconscious._run_subconscious_snapshot",
+            side_effect=mock_run_snapshot,
+        ), patch(
+            "lingtai_kernel.intrinsics.soul.consultation._render_current_diary",
+            return_value="test diary",
+        ):
+            _run_subconscious_fire(agent)
+
+        assert call_count["n"] == 2, f"Expected 2 snapshot calls, got {call_count['n']}"
+
+
+# ---------------------------------------------------------------------------
+# Architecture C — Confidence threshold filtering
+# ---------------------------------------------------------------------------
+
+
+class TestConfidenceThresholdFiltering:
+    """Architecture C: only append insights with confidence > threshold."""
+
+    def test_confidence_threshold_default_is_06(self, tmp_path):
+        """Default threshold is 0.6."""
+        from lingtai_kernel.intrinsics.soul.subconscious import _SUBCONSCIOUS_CONFIDENCE_THRESHOLD
+        assert _SUBCONSCIOUS_CONFIDENCE_THRESHOLD == 0.6
+
+    def test_confidence_threshold_config_persists(self, tmp_path):
+        """confidence_threshold persists to init.json."""
+        agent = _make_agent(tmp_path)
+        init_path = agent._working_dir / "init.json"
+        init_path.parent.mkdir(parents=True, exist_ok=True)
+        init_path.write_text(json.dumps({
+            "manifest": {"llm": {}}
+        }), encoding="utf-8")
+
+        from lingtai_kernel.intrinsics.soul.config import _persist_soul_config
+        _persist_soul_config(agent, {
+            "subconscious_confidence_threshold": 0.8,
+        })
+
+        data = json.loads(init_path.read_text())
+        sub = data["manifest"]["soul"]["subconscious"]
+        assert sub["confidence_threshold"] == 0.8
+
+    def test_confidence_threshold_config_validation(self, tmp_path):
+        """confidence_threshold must be in [0.0, 1.0]."""
+        agent = _make_agent(tmp_path)
+        from lingtai_kernel.intrinsics.soul.config import _handle_config
+
+        # Out of range high.
+        result = _handle_config(agent, {"subconscious_confidence_threshold": 1.5})
+        assert "error" in result
+
+        # Out of range low.
+        result = _handle_config(agent, {"subconscious_confidence_threshold": -0.1})
+        assert "error" in result
+
+        # NaN.
+        result = _handle_config(agent, {"subconscious_confidence_threshold": float("nan")})
+        assert "error" in result
+
+        # Valid value.
+        result = _handle_config(agent, {"subconscious_confidence_threshold": 0.7})
+        assert result["status"] == "ok"
+        assert result["new"]["subconscious_confidence_threshold"] == 0.7
+
+    def _make_mock_iface(self):
+        """Create a mock ChatInterface with at least one entry."""
+        from lingtai_kernel.llm.interface import ChatInterface
+        iface = ChatInterface()
+        iface.add_user_message("test snapshot content")
+        return iface
+
+    def test_low_confidence_insight_discarded(self, tmp_path):
+        """Insights below threshold are not appended to JSONL."""
+        from lingtai_kernel.intrinsics.soul.subconscious import (
+            _run_subconscious_snapshot,
+            _read_subconscious_tail,
+        )
+
+        agent = _make_agent(tmp_path,
+                            subconscious_confidence_threshold=0.6)
+        agent._state = AgentState.ACTIVE
+        snap_path = tmp_path / "snapshot_001.json"
+
+        # Mock consultation to return low-confidence result.
+        from lingtai_kernel.llm.interface import TextBlock
+        low_confidence_result = {
+            "source": "snapshot:001",
+            "blocks": [TextBlock(text='{"insight": "weak match", "confidence": 0.3, "source_memory": "test"}')],
+        }
+
+        with patch(
+            "lingtai_kernel.intrinsics.soul.consultation._load_snapshot_interface",
+            return_value=self._make_mock_iface(),
+        ), patch(
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation_voice",
+            return_value=low_confidence_result,
+        ):
+            result = _run_subconscious_snapshot(
+                agent, snap_path, "diary", "fire_1", {},
+            )
+
+        # Should return None (discarded).
+        assert result is None
+
+        # JSONL should be empty.
+        tail = _read_subconscious_tail(agent, n=5)
+        assert tail == ""
+
+    def test_high_confidence_insight_kept(self, tmp_path):
+        """Insights at or above threshold are appended to JSONL."""
+        from lingtai_kernel.intrinsics.soul.subconscious import (
+            _run_subconscious_snapshot,
+            _read_subconscious_tail,
+        )
+
+        agent = _make_agent(tmp_path,
+                            subconscious_confidence_threshold=0.6)
+        agent._state = AgentState.ACTIVE
+        snap_path = tmp_path / "snapshot_001.json"
+
+        # Mock consultation to return high-confidence result.
+        from lingtai_kernel.llm.interface import TextBlock
+        high_confidence_result = {
+            "source": "snapshot:001",
+            "blocks": [TextBlock(text='{"insight": "strong match", "confidence": 0.9, "source_memory": "test"}')],
+        }
+
+        with patch(
+            "lingtai_kernel.intrinsics.soul.consultation._load_snapshot_interface",
+            return_value=self._make_mock_iface(),
+        ), patch(
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation_voice",
+            return_value=high_confidence_result,
+        ):
+            result = _run_subconscious_snapshot(
+                agent, snap_path, "diary", "fire_1", {},
+            )
+
+        # Should return the record.
+        assert result is not None
+        assert result["insight"] == "strong match"
+        assert result["confidence"] == 0.9
+
+        # JSONL should contain the record.
+        tail = _read_subconscious_tail(agent, n=5)
+        assert "strong match" in tail
+
+    def test_exact_threshold_included(self, tmp_path):
+        """Insight at exactly the threshold is included (>= threshold)."""
+        from lingtai_kernel.intrinsics.soul.subconscious import (
+            _run_subconscious_snapshot,
+            _read_subconscious_tail,
+        )
+
+        agent = _make_agent(tmp_path,
+                            subconscious_confidence_threshold=0.6)
+        agent._state = AgentState.ACTIVE
+        snap_path = tmp_path / "snapshot_001.json"
+
+        # Mock consultation to return exactly-threshold result.
+        from lingtai_kernel.llm.interface import TextBlock
+        exact_threshold_result = {
+            "source": "snapshot:001",
+            "blocks": [TextBlock(text='{"insight": "exact match", "confidence": 0.6, "source_memory": "test"}')],
+        }
+
+        with patch(
+            "lingtai_kernel.intrinsics.soul.consultation._load_snapshot_interface",
+            return_value=self._make_mock_iface(),
+        ), patch(
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation_voice",
+            return_value=exact_threshold_result,
+        ):
+            result = _run_subconscious_snapshot(
+                agent, snap_path, "diary", "fire_1", {},
+            )
+
+        # Should be included (>= threshold).
+        assert result is not None
+        assert result["insight"] == "exact match"

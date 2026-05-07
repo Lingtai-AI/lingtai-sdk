@@ -16,6 +16,7 @@ which fans out across ALL snapshots in parallel daemon threads.
 from __future__ import annotations
 
 import json
+import random
 import re
 import threading
 import time
@@ -23,6 +24,8 @@ import time
 _SUBCONSCIOUS_FIRE_INTERVAL = 60.0
 _SUBCONSCIOUS_DISPLAY_N = 10
 _SUBCONSCIOUS_JSONL = "subconscious.jsonl"
+_SUBCONSCIOUS_SAMPLE_N = 3
+_SUBCONSCIOUS_CONFIDENCE_THRESHOLD = 0.6
 
 
 # ── Timer management ────────────────────────────────────────────────────
@@ -82,12 +85,12 @@ def _subconscious_tick(agent) -> None:
 
 
 def _run_subconscious_fire(agent) -> None:
-    """Fire one subconscious batch — fan out across ALL snapshots.
+    """Fire one subconscious batch — fan out across a RANDOM SAMPLE of snapshots.
 
     Uses _subconscious_fire_lock (try-acquire non-blocking) to prevent
     overlapping fires. Each snapshot gets its own daemon thread running
-    _run_subconscious_snapshot. Non-null insights are appended directly
-    to the JSONL by the per-snapshot thread.
+    _run_subconscious_snapshot. Non-null insights above the confidence
+    threshold are appended directly to the JSONL by the per-snapshot thread.
     """
     from ...state import AgentState
     from .consultation import (
@@ -117,14 +120,23 @@ def _run_subconscious_fire(agent) -> None:
             agent._log("subconscious_fire_empty", fire_id=fire_id)
             return
 
-        # Fan out across ALL snapshots.
-        paths = _list_snapshot_paths(agent)
-        if not paths:
+        # Sample N snapshots instead of all.
+        all_paths = _list_snapshot_paths(agent)
+        if not all_paths:
             agent._log("subconscious_fire_no_snapshots", fire_id=fire_id)
             return
 
+        sample_n = int(getattr(agent._config, "subconscious_sample_n", _SUBCONSCIOUS_SAMPLE_N))
+        sample_n = max(1, sample_n)
+        if sample_n >= len(all_paths):
+            paths = all_paths
+        else:
+            paths = random.sample(all_paths, sample_n)
+
         agent._log("subconscious_fire_start",
-                   fire_id=fire_id, snapshot_count=len(paths))
+                   fire_id=fire_id,
+                   snapshot_count=len(paths),
+                   total_snapshots=len(all_paths))
 
         # Session overrides from subconscious config.
         session_overrides = _build_session_overrides(agent)
@@ -189,8 +201,8 @@ def _run_subconscious_snapshot(
     """Run one subconscious snapshot. Returns insight dict if non-null, else None.
 
     Uses the shared consultation engine with allow_tool_recommendations=False.
-    On non-null insight, appends directly to the JSONL (file-append is
-    thread-safe on macOS/Linux for small records).
+    On non-null insight above the confidence threshold, appends directly to
+    the JSONL (file-append is thread-safe on macOS/Linux for small records).
     """
     from .consultation import (
         _load_snapshot_interface,
@@ -227,12 +239,24 @@ def _run_subconscious_snapshot(
     if insight_data is None:
         return None  # Model said nothing relevant.
 
+    # Confidence filtering — discard low-confidence insights.
+    confidence = insight_data.get("confidence", 0.5)
+    threshold = float(getattr(
+        agent._config, "subconscious_confidence_threshold",
+        _SUBCONSCIOUS_CONFIDENCE_THRESHOLD,
+    ))
+    if confidence < threshold:
+        agent._log("subconscious_snapshot_below_threshold",
+                   fire_id=fire_id, source=source,
+                   confidence=confidence, threshold=threshold)
+        return None
+
     # Append to JSONL.
     record = {
         "ts": time.time(),
         "fire_id": fire_id,
         "insight": insight_data["insight"],
-        "confidence": insight_data.get("confidence", 0.5),
+        "confidence": confidence,
         "source_memory": insight_data.get("source_memory", "unstructured"),
         "source_snapshot": source,
         "model_used": session_overrides.get("model", "unknown"),

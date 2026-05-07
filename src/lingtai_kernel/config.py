@@ -38,10 +38,12 @@ class AgentConfig:
     soul_voice: str = "inner"  # consultation prompt profile — "inner" (terse, "you are the soul, speak as inner voice"), "observer" (structured stepped-back hook framing), or "custom" (use soul_voice_prompt). One unified prompt per profile; the per-fire cue text differentiates insights (current diary) vs past (future-self diary).
     soul_voice_prompt: str = ""  # custom voice prompt — only used when soul_voice == "custom". Set/cleared by the agent via soul(action="voice", set="custom", prompt="..."). Length-capped at SOUL_VOICE_PROMPT_MAX in soul.py.
     snapshot_interval: float | None = None  # seconds between git snapshots; None = off
-    # Subconscious config — fan-out across ALL snapshots while in a tool-call loop.
+    # Subconscious config — fan-out across sampled snapshots while in a tool-call loop.
     # Requires explicit cheap-model config; no silent fallback to primary model.
     subconscious_enabled: bool = False
     subconscious_provider: str | None = None  # required when enabled
     subconscious_model: str | None = None  # required when enabled
     subconscious_base_url: str | None = None  # optional override for custom endpoints
     subconscious_context_window: int = 128_000  # target window for snapshot fitting
+    subconscious_sample_n: int = 3  # number of snapshots to sample per fire (Architecture C)
+    subconscious_confidence_threshold: float = 0.6  # minimum confidence to append insight (Architecture C)

@@ -29,7 +29,8 @@ def _handle_config(agent, args: dict) -> dict:
 
     Accepts any subset of: delay_seconds, consultation_past_count,
     subconscious_enabled, subconscious_provider, subconscious_model,
-    subconscious_base_url.
+    subconscious_base_url, subconscious_sample_n,
+    subconscious_confidence_threshold.
 
     Validates each provided field, updates live state, restarts the
     wall-clock timer if delay changed, persists to init.json. Returns
@@ -46,6 +47,8 @@ def _handle_config(agent, args: dict) -> dict:
         "subconscious_provider",
         "subconscious_model",
         "subconscious_base_url",
+        "subconscious_sample_n",
+        "subconscious_confidence_threshold",
     }
     provided: dict = {}
     if "delay_seconds" in args:
@@ -61,7 +64,8 @@ def _handle_config(agent, args: dict) -> dict:
                 "config requires at least one of: delay_seconds, "
                 "consultation_past_count, subconscious_enabled, "
                 "subconscious_provider, subconscious_model, "
-                "subconscious_base_url."
+                "subconscious_base_url, subconscious_sample_n, "
+                "subconscious_confidence_threshold."
             ),
         }
 
@@ -132,6 +136,32 @@ def _handle_config(agent, args: dict) -> dict:
         old_values["subconscious_base_url"] = getattr(agent._config, "subconscious_base_url", None)
         agent._config.subconscious_base_url = raw.strip() if isinstance(raw, str) and raw.strip() else None
         new_values["subconscious_base_url"] = agent._config.subconscious_base_url
+
+    if "subconscious_sample_n" in provided:
+        raw = provided["subconscious_sample_n"]
+        try:
+            v = int(raw)
+        except (TypeError, ValueError):
+            return {"error": f"subconscious_sample_n must be a positive integer, got {type(raw).__name__}."}
+        if v < 1:
+            return {"error": f"subconscious_sample_n must be at least 1 (got {v})."}
+        old_values["subconscious_sample_n"] = int(getattr(agent._config, "subconscious_sample_n", 3))
+        agent._config.subconscious_sample_n = v
+        new_values["subconscious_sample_n"] = v
+
+    if "subconscious_confidence_threshold" in provided:
+        raw = provided["subconscious_confidence_threshold"]
+        try:
+            v = float(raw)
+        except (TypeError, ValueError):
+            return {"error": f"subconscious_confidence_threshold must be a number, got {type(raw).__name__}."}
+        if v != v:  # NaN
+            return {"error": "subconscious_confidence_threshold must be a finite number, got NaN."}
+        if v < 0.0 or v > 1.0:
+            return {"error": f"subconscious_confidence_threshold must be in [0.0, 1.0] (got {v})."}
+        old_values["subconscious_confidence_threshold"] = float(getattr(agent._config, "subconscious_confidence_threshold", 0.6))
+        agent._config.subconscious_confidence_threshold = v
+        new_values["subconscious_confidence_threshold"] = v
 
     if "subconscious_enabled" in provided:
         raw = provided["subconscious_enabled"]
@@ -341,6 +371,8 @@ def _persist_soul_config(agent, new_values: dict) -> str | None:
         "subconscious_provider": ("subconscious", "provider"),
         "subconscious_model": ("subconscious", "model"),
         "subconscious_base_url": ("subconscious", "base_url"),
+        "subconscious_sample_n": ("subconscious", "sample_n"),
+        "subconscious_confidence_threshold": ("subconscious", "confidence_threshold"),
     }
     any_sub = any(k in new_values for k in _SUBCONSCIOUS_PERSIST_MAP)
     if any_sub:
