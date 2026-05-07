@@ -472,9 +472,15 @@ def _handle_message(agent, msg: Message) -> None:
 def _handle_request(agent, msg: Message) -> None:
     """Send request to LLM, process response with tool calls."""
     from ..llm import LLMResponse
+    from ..intrinsics.soul.subconscious import _clear_subconscious_state
 
     # Splice any queued involuntary tool-call pairs
     agent._drain_tc_inbox()
+
+    # Subconscious lifecycle: clear stale insights at turn start.
+    # Insights are ephemeral — they exist only for the current tool-call
+    # loop and are discarded at turn end.
+    _clear_subconscious_state(agent)
 
     max_calls, dup_free, dup_hard = _get_guard_limits(agent)
     guard = LoopGuard(
@@ -844,6 +850,15 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
             return {"text": "", "failed": False, "errors": []}
 
         guard.record_calls(len(response.tool_calls))
+
+        # Event-driven subconscious: fire after each tool-call batch.
+        # Runs in a daemon thread — non-blocking. Insights will appear
+        # in the meta block on the next turn iteration.
+        try:
+            from ..intrinsics.soul.subconscious import _fire_subconscious
+            _fire_subconscious(agent)
+        except Exception:
+            pass  # subconscious is advisory — never break the turn loop
 
         # Break on repeated identical errors
         if (

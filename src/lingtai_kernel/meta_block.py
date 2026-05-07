@@ -157,6 +157,10 @@ def render_meta(agent, meta: dict) -> str:
     Composes the existing ``system.current_time`` template plus a context
     fragment via ``system.context_breakdown`` (or ``system.context_unknown``
     when the session has not yet computed its token decomposition).
+
+    When subconscious is enabled and has active insights, they are appended
+    as a second line with the 🧠 prefix — "always-on peripheral vision"
+    for the agent.
     """
     if not meta:
         return ""
@@ -167,12 +171,32 @@ def render_meta(agent, meta: dict) -> str:
     if time_val == "" and ctx_val == "":
         return ""
 
-    return _t(
+    main_line = _t(
         agent._config.language,
         "system.current_time",
         time=time_val,
         ctx=ctx_val,
     )
+
+    # Subconscious insights — event-driven meta block injection.
+    # Append as a second line if any insights are available.
+    sub_line = _render_subconscious_fragment(agent)
+    if sub_line:
+        return f"{main_line}\n{sub_line}"
+    return main_line
+
+
+def _render_subconscious_fragment(agent) -> str:
+    """Render subconscious insights for the meta block.
+
+    Returns '' when subconscious is disabled or has no active insights.
+    Returns a 🧠-prefixed line when insights are available.
+    """
+    try:
+        from .intrinsics.soul.subconscious import _render_subconscious_insights
+        return _render_subconscious_insights(agent)
+    except Exception:
+        return ""
 
 
 def _render_context_fragment(agent, meta: dict) -> str:

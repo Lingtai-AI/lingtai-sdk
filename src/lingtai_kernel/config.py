@@ -38,3 +38,9 @@ class AgentConfig:
     soul_voice: str = "inner"  # consultation prompt profile — "inner" (terse, "you are the soul, speak as inner voice"), "observer" (structured stepped-back hook framing), or "custom" (use soul_voice_prompt). One unified prompt per profile; the per-fire cue text differentiates insights (current diary) vs past (future-self diary).
     soul_voice_prompt: str = ""  # custom voice prompt — only used when soul_voice == "custom". Set/cleared by the agent via soul(action="voice", set="custom", prompt="..."). Length-capped at SOUL_VOICE_PROMPT_MAX in soul.py.
     snapshot_interval: float | None = None  # seconds between git snapshots; None = off
+    # Subconscious config (Architecture A: event-driven + meta block injection)
+    subconscious_enabled: bool = False  # enable the subconscious engine
+    subconscious_provider: str | None = None  # LLM provider for subconscious (may equal primary)
+    subconscious_model: str | None = None  # LLM model for subconscious (cheap model recommended)
+    subconscious_base_url: str | None = None  # optional base URL override
+    subconscious_context_window: int = 128_000  # context window for subconscious sessions

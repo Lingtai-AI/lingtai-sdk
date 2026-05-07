@@ -407,6 +407,8 @@ class BaseAgent:
         # the call is rejected with "soul flow ongoing".
         self._soul_fire_lock: threading.Lock = threading.Lock()
         self._insight_turn_counter: int = 0
+        # Subconscious — event-driven insight accumulation per turn
+        self._subconscious_insights: list[dict] = []
 
         # Heartbeat — always-on health monitor
         self._heartbeat: float = 0.0

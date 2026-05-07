@@ -71,6 +71,15 @@ from .flow import (
     _rehydrate_appendix_tracking,
 )
 
+# Re-export subconscious (event-driven insight engine)
+from .subconscious import (
+    _clear_subconscious_state,
+    _fire_subconscious,
+    _render_subconscious_insights,
+    _read_subconscious_tail,
+    _get_subconscious_insights,
+)
+
 
 def get_description(lang: str = "en") -> str:
     from ...i18n import t
@@ -110,6 +119,27 @@ def get_schema(lang: str = "en") -> dict:
                 "type": "string",
                 "maxLength": SOUL_VOICE_PROMPT_MAX,
                 "description": t(lang, "soul.voice_prompt_description"),
+            },
+            "subconscious_enabled": {
+                "type": "boolean",
+                "description": t(lang, "soul.subconscious_enabled_description"),
+            },
+            "subconscious_provider": {
+                "type": "string",
+                "description": t(lang, "soul.subconscious_provider_description"),
+            },
+            "subconscious_model": {
+                "type": "string",
+                "description": t(lang, "soul.subconscious_model_description"),
+            },
+            "subconscious_base_url": {
+                "type": "string",
+                "description": t(lang, "soul.subconscious_base_url_description"),
+            },
+            "subconscious_context_window": {
+                "type": "integer",
+                "minimum": 1000,
+                "description": t(lang, "soul.subconscious_context_window_description"),
             },
         },
         "required": ["action"],

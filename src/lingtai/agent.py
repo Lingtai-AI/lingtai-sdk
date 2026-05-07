@@ -973,6 +973,7 @@ class Agent(BaseAgent):
 
         # Reload config (all fields optional — fall back to AgentConfig defaults)
         soul = m.get("soul", {})
+        subconscious = soul.get("subconscious", {}) or {}
         # NOTE: defaults here MUST mirror src/lingtai_kernel/config.py
         # AgentConfig defaults — _read_init reload re-constructs the
         # whole config and would otherwise silently override any kernel-
@@ -985,6 +986,11 @@ class Agent(BaseAgent):
             consultation_past_count=soul.get("consultation_past_count", 2),
             soul_voice=soul.get("voice", "inner"),
             soul_voice_prompt=soul.get("voice_prompt", ""),
+            subconscious_enabled=subconscious.get("enabled", False),
+            subconscious_provider=subconscious.get("provider"),
+            subconscious_model=subconscious.get("model"),
+            subconscious_base_url=subconscious.get("base_url"),
+            subconscious_context_window=subconscious.get("context_window", 128_000),
             max_turns=m.get("max_turns", 50),
             language=m.get("language", "en"),
             context_limit=m.get("context_limit"),
