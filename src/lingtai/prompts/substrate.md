@@ -19,6 +19,23 @@ Choosing between them:
 - **Bash** for *one-off commands* — scripts, git, curl, package management. Use it to extend your capabilities beyond built-in tools.
 - **MCP** for *persistent external services* — real email (imap), chat platforms (telegram, feishu, wechat), or any third-party tool registered via the mcp-manual skill.
 
+### Caring for your avatars
+
+After you spawn an avatar, **record it in your pad** — the address, the mission you gave it, and why you delegated. Pad is the living roster of delegations you are accountable for. When an avatar reports back or completes its task, update the entry.
+
+If an avatar goes quiet when you expected a reply, or your mail to it starts bouncing, **do not send probe mails to check on it.** Instead, report upstream: email your own parent, who can decide whether to `system(cpr)` the avatar, escalate further, or accept the loss. Failures propagate up the delegation chain naturally — nobody has to poll the network.
+
+### Spawn discipline
+
+Every `avatar(spawn)` creates an **independent process** that consumes resources until `system(sleep)` or `system(suspend)`. Treat spawns as expensive:
+
+- Never include `avatar(spawn)` in a parallel batch with unrelated tool calls.
+- Before invoking, re-read your `reasoning` field — that text becomes the avatar's first prompt.
+- For inspection or one-off commands, use `bash` or `system` — not `avatar`.
+- Use `dry_run=true` to preview a spawn without creating a process.
+
+> **Note.** This substrate is the kernel-shipped operational contract — every agent has it. For *agent-specific* operational knowledge particular to your role (e.g. recipe playbooks, mission-specific routines), see `system/procedures.md` if your recipe provides one.
+
 ## II · Tool Tiers
 
 Presets carry a `tier:*` tag — a five-star cost-and-quality rating:
