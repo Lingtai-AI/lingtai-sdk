@@ -15,6 +15,7 @@ import os
 import re
 import signal
 import subprocess
+import threading
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -311,12 +312,73 @@ class BashManager:
             self._open_handles: dict[str, tuple] = {}
         self._open_handles[job_id] = (proc, stdout_f, stderr_f)
 
+        # Start background watcher — writes .notification/bash.json when
+        # the process exits, so the agent gets notified via the standard
+        # notification sync mechanism (same channel as email/soul/molt).
+        watcher = threading.Thread(
+            target=self._watch_async_job,
+            args=(job_id, command, proc, job_dir, stdout_f, stderr_f),
+            daemon=True,
+        )
+        watcher.start()
+
         return {
             "status": "ok",
             "job_id": job_id,
             "pid": proc.pid,
             "message": f'Job started. Use bash(action="poll", job_id="{job_id}") to check.',
         }
+
+    def _watch_async_job(
+        self, job_id: str, command: str, proc: subprocess.Popen,
+        job_dir: Path, stdout_f, stderr_f,
+    ) -> None:
+        """Background thread: wait for async job, then write notification."""
+        try:
+            returncode = proc.wait()
+        except Exception:
+            returncode = -1
+
+        # Close file handles
+        try:
+            stdout_f.close()
+            stderr_f.close()
+        except Exception:
+            pass
+
+        # Read stdout preview
+        stdout_preview = ""
+        try:
+            stdout_text = (job_dir / "stdout.log").read_text()
+            stdout_preview = stdout_text[:200]
+        except Exception:
+            pass
+
+        # Write notification to .notification/bash.json
+        try:
+            from datetime import datetime, timezone
+            notif_dir = Path(self._working_dir) / ".notification"
+            notif_dir.mkdir(exist_ok=True)
+            payload = {
+                "header": f"Job {job_id} completed (exit {returncode})",
+                "icon": "⚡",
+                "priority": "normal",
+                "published_at": datetime.now(timezone.utc).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                ),
+                "data": {
+                    "job_id": job_id,
+                    "command": command[:200],
+                    "exit_code": returncode,
+                    "stdout_preview": stdout_preview,
+                },
+            }
+            target = notif_dir / "bash.json"
+            tmp = target.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            tmp.rename(target)
+        except Exception:
+            pass  # Notification failure should not break the job
 
     def _handle_poll(self, args: dict) -> dict:
         """Check status of an async job."""
