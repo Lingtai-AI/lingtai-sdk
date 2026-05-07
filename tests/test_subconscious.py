@@ -30,7 +30,7 @@ def _make_agent(**overrides):
     agent._config.subconscious_base_url = overrides.get("subconscious_base_url", None)
     agent._config.subconscious_context_window = overrides.get("subconscious_context_window", 128000)
     agent._config.subconscious_confidence_threshold = overrides.get("subconscious_confidence_threshold", 0.6)
-    agent._config.subconscious_sample_n = overrides.get("subconscious_sample_n", 2)
+    agent._config.subconscious_sample_n = overrides.get("subconscious_sample_n", 9999)
     agent._config.provider = "primary-provider"
     agent._config.model = "primary-model"
     agent._config.retry_timeout = 30.0
@@ -498,12 +498,12 @@ class TestConfidenceFiltering:
         assert agent._subconscious_insights[0]["insight"] == "borderline idea"
 
 
-# ── Sample N (K=2) ──────────────────────────────────────────────────────
+# ── Sample N (default=all) ───────────────────────────────────────────────
 
 class TestSampleN:
     def test_default_sample_n_constant(self):
         from lingtai_kernel.intrinsics.soul.subconscious import _DEFAULT_SAMPLE_N
-        assert _DEFAULT_SAMPLE_N == 2
+        assert _DEFAULT_SAMPLE_N == 9999
 
     def test_fire_spawns_sample_n_threads(self):
         """_fire_subconscious should spawn sample_n worker threads."""
@@ -517,15 +517,15 @@ class TestSampleN:
             assert mock_thread.start.call_count == 3
 
     def test_fire_default_sample_n(self):
-        """Default sample_n=2 spawns 2 threads."""
+        """Default sample_n=9999 spawns 9999 threads."""
         from lingtai_kernel.intrinsics.soul.subconscious import _fire_subconscious
         agent = _make_agent(subconscious_enabled=True)
         with patch("lingtai_kernel.intrinsics.soul.subconscious.threading.Thread") as MockThread:
             mock_thread = MagicMock()
             MockThread.return_value = mock_thread
             _fire_subconscious(agent)
-            assert MockThread.call_count == 2
-            assert mock_thread.start.call_count == 2
+            assert MockThread.call_count == 9999
+            assert mock_thread.start.call_count == 9999
 
     def test_fire_sample_n_1(self):
         """sample_n=1 reverts to single-thread behavior."""
@@ -577,14 +577,14 @@ class TestNewConfigFields:
         agent = _make_agent()
         result = _handle_config(agent, {"subconscious_sample_n": 0})
         assert "error" in result
-        assert "[1, 5]" in result["error"]
+        assert "[1, 9999]" in result["error"]
 
     def test_sample_n_too_high(self):
         from lingtai_kernel.intrinsics.soul.config import _handle_config
         agent = _make_agent()
-        result = _handle_config(agent, {"subconscious_sample_n": 10})
+        result = _handle_config(agent, {"subconscious_sample_n": 10000})
         assert "error" in result
-        assert "[1, 5]" in result["error"]
+        assert "[1, 9999]" in result["error"]
 
     def test_persist_new_fields_round_trip(self):
         """New fields round-trip through init.json persistence."""

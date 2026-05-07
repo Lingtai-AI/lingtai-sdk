@@ -179,9 +179,9 @@ def _handle_config(agent, args: dict) -> dict:
             v = int(raw)
         except (TypeError, ValueError):
             return {"error": f"subconscious_sample_n must be an integer, got {type(raw).__name__}."}
-        if v < 1 or v > 5:
-            return {"error": f"subconscious_sample_n must be in [1, 5], got {v}."}
-        old_values["subconscious_sample_n"] = getattr(agent._config, "subconscious_sample_n", 2)
+        if v < 1 or v > 9999:
+            return {"error": f"subconscious_sample_n must be in [1, 9999], got {v}."}
+        old_values["subconscious_sample_n"] = getattr(agent._config, "subconscious_sample_n", 9999)
         agent._config.subconscious_sample_n = v
         new_values["subconscious_sample_n"] = v
 

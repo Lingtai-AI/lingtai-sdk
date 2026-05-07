@@ -6,7 +6,7 @@ Architecture A (event-driven + meta block injection):
   - Delivery: insights are stored on the agent and injected into the meta
     block (text-input prefix) on subsequent turns. No JSONL, no notification
     system — the agent sees insights directly in its prompt prefix.
-  - Model: cheap model, K random snapshots per fire (default K=2,
+  - Model: cheap model, ALL snapshots per fire (default: all available,
     configurable via subconscious_sample_n).
   - Confidence filtering: only insights with confidence >= threshold
     (default 0.6, configurable via subconscious_confidence_threshold)
@@ -47,9 +47,9 @@ _MAX_INSIGHTS_PER_TURN = 3
 # Default confidence threshold — insights below this are silently dropped.
 _DEFAULT_CONFIDENCE_THRESHOLD = 0.6
 
-# Default number of random snapshots to sample per fire (K).
-# K=2 improves recall at modest cost vs K=1.
-_DEFAULT_SAMPLE_N = 2
+# Default number of snapshots to sample per fire.
+# 9999 effectively means ALL available snapshots.
+_DEFAULT_SAMPLE_N = 9999
 
 # Subconscious system prompt — "does this remind you of something?"
 _SUBCONSCIOUS_SYSTEM_PROMPT = (
@@ -100,7 +100,7 @@ def _fire_subconscious(agent) -> None:
     - _SUBCONSCIOUS_SYSTEM_PROMPT (cheap "remind" prompt)
     - No tools, single round
     - Cheap model via session_overrides
-    - K random snapshots (default K=2, configurable)
+    - ALL snapshots by default (configurable via subconscious_sample_n)
     """
     if not getattr(agent._config, "subconscious_enabled", False):
         return
