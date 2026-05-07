@@ -384,7 +384,7 @@ def test_snapshot_written_on_agent_molt(tmp_path):
                 if (block.get("type") == "tool_result"
                         and block.get("id") == molt_id):
                     content = block.get("content", {})
-                    if isinstance(content, str) and "[synthesized]" in content:
+                    if isinstance(content, str) and "[kernel notice" in content:
                         molt_result_found = True
                     elif isinstance(content, dict) and "error" in content:
                         molt_result_found = True

@@ -120,20 +120,6 @@ class TestAvatarManager:
         child_admin = child_init.get("manifest", {}).get("admin", {})
         assert child_admin == {}
 
-    @pytest.mark.skip(reason="max_agents enforcement removed in current avatar architecture")
-    def test_spawn_max_agents(self, tmp_path):
-        """Originally: spawning should be refused when max_agents is reached.
-        The current AvatarManager no longer enforces a per-parent agent cap;
-        callers are expected to track this themselves if needed."""
-        from lingtai.agent import Agent
-        parent = Agent(service=make_mock_service(), agent_name="parent", working_dir=tmp_path / "test",
-                            capabilities={"avatar": {"max_agents": 2}})
-        mgr = parent.get_capability("avatar")
-        r1 = mgr.handle({"name": "a1", "confirm": True})
-        assert r1["status"] == "ok"
-        r2 = mgr.handle({"name": "a2", "confirm": True})
-        assert "error" in r2
-
     def test_spawn_duplicate_name_error(self, tmp_path):
         """Spawning a name that already exists on disk should return an error.
 
@@ -153,8 +139,9 @@ class TestAvatarManager:
         r2 = mgr.handle({"name": "helper", "confirm": True})
         assert "error" in r2 or r2.get("status") == "already_active"
 
-    def test_spawn_mirror_false_no_identity_files(self, tmp_path):
-        """mirror=False (default) should not copy character/pad/codex."""
+    def test_spawn_does_not_copy_identity_files(self, tmp_path):
+        """Spawning an avatar should not copy parent character/pad/codex.
+        (The legacy ``mirror=True`` identity-copy behavior was removed.)"""
         from lingtai.agent import Agent
         parent = Agent(service=make_mock_service(), agent_name="parent", working_dir=tmp_path / "test",
                             capabilities=["avatar"])
@@ -175,40 +162,13 @@ class TestAvatarManager:
         assert not (child_dir / "system" / "character.md").is_file()
         assert not (child_dir / "codex" / "codex.json").is_file()
 
-    @pytest.mark.skip(reason="mirror=True identity-copy removed from current AvatarManager")
-    def test_spawn_mirror_true_copies_identity(self, tmp_path):
-        """mirror=True should copy character, pad, codex, and exports."""
-        from lingtai.agent import Agent
-        parent = Agent(service=make_mock_service(), agent_name="parent", working_dir=tmp_path / "test",
-                            capabilities=["avatar"])
-        # Write identity files to parent
-        system_dir = parent._working_dir / "system"
-        system_dir.mkdir(parents=True, exist_ok=True)
-        (system_dir / "character.md").write_text("I am the parent")
-        (system_dir / "pad.md").write_text("Parent pad")
-        lib_dir = parent._working_dir / "codex"
-        lib_dir.mkdir(parents=True, exist_ok=True)
-        (lib_dir / "codex.json").write_text('{"entries": []}')
-        exports_dir = parent._working_dir / "exports"
-        exports_dir.mkdir(parents=True, exist_ok=True)
-        (exports_dir / "abc123.txt").write_text("exported knowledge")
-
-        mgr = parent.get_capability("avatar")
-        result = mgr.handle({"name": "clone", "mirror": True, "confirm": True})
-        assert result["status"] == "ok"
-        child_dir = parent._working_dir.parent / "clone"
-        assert (child_dir / "system" / "character.md").read_text() == "I am the parent"
-        assert (child_dir / "system" / "pad.md").read_text() == "Parent pad"
-        assert (child_dir / "codex" / "codex.json").read_text() == '{"entries": []}'
-        assert (child_dir / "exports" / "abc123.txt").read_text() == "exported knowledge"
-
-    def test_spawn_mirror_missing_files_ok(self, tmp_path):
-        """mirror=True with no identity files should not error."""
+    def test_spawn_missing_files_ok(self, tmp_path):
+        """Spawn with no identity files in the parent should not error."""
         from lingtai.agent import Agent
         parent = Agent(service=make_mock_service(), agent_name="parent", working_dir=tmp_path / "test",
                             capabilities=["avatar"])
         mgr = parent.get_capability("avatar")
-        result = mgr.handle({"name": "clone", "mirror": True, "confirm": True})
+        result = mgr.handle({"name": "clone", "confirm": True})
         assert result["status"] == "ok"
 
     def test_ledger_records_spawn(self, tmp_path):

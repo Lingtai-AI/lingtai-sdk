@@ -113,21 +113,43 @@ def test_remove_pair_by_call_id_returns_false_when_missing():
     assert len(iface.entries) == n_before
 
 
-def test_remove_pair_by_call_id_refuses_mixed_assistant_content():
-    """Strict match: an assistant entry containing tool_call PLUS another
-    block (e.g. a TextBlock) is NOT a synthesized appendix pair, so refuse
-    to remove it. Protects normal tool-call history from accidental id
-    collisions with appendix mechanisms."""
+def test_remove_pair_by_call_id_allows_text_plus_tool_call():
+    """An assistant entry containing one ToolCallBlock plus TextBlocks IS
+    accepted: the synthesized notification pair carries a leading text
+    summary alongside the tool call (see ChatInterface.remove_pair_by_call_id
+    docstring). The user entry must still be exactly one ToolResultBlock."""
     iface = ChatInterface()
     iface.add_system("sys")
     iface.add_user_message("hi")
-    # Mixed assistant: text + tool_call (a real model emission shape).
     iface.add_assistant_message([
         TextBlock(text="thinking aloud"),
         ToolCallBlock(id="tc_real", name="bash", args={"cmd": "ls"}),
     ])
     iface.add_tool_results([
         ToolResultBlock(id="tc_real", name="bash", content="file.txt"),
+    ])
+
+    n_before = len(iface.entries)
+    removed = iface.remove_pair_by_call_id("tc_real")
+    assert removed is True
+    assert len(iface.entries) == n_before - 2
+
+
+def test_remove_pair_by_call_id_refuses_multiple_tool_calls():
+    """An assistant entry with more than one ToolCallBlock is NOT a
+    synthesized appendix pair shape (those carry exactly one call), so
+    refuse to remove it. Protects parallel-tool-call history from
+    accidental id collisions with appendix mechanisms."""
+    iface = ChatInterface()
+    iface.add_system("sys")
+    iface.add_user_message("hi")
+    iface.add_assistant_message([
+        ToolCallBlock(id="tc_real", name="bash", args={"cmd": "ls"}),
+        ToolCallBlock(id="tc_other", name="bash", args={"cmd": "pwd"}),
+    ])
+    iface.add_tool_results([
+        ToolResultBlock(id="tc_real", name="bash", content="file.txt"),
+        ToolResultBlock(id="tc_other", name="bash", content="/tmp"),
     ])
 
     n_before = len(iface.entries)

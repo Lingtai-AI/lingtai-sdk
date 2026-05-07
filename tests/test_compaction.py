@@ -213,15 +213,22 @@ def _make_agent_with_psyche(tmp_path):
     )
 
 
-def test_compaction_warning_injected_at_80_percent(tmp_path):
-    """At 80%+ context, a [system] warning should be prepended to content."""
+def test_compaction_warning_published_at_80_percent(tmp_path):
+    """At 80%+ context (warn band, below hard ceiling), the kernel publishes
+    a molt-pressure notification to .notification/molt.json instead of
+    inlining a [system] block in user content. The notification channel
+    routes through the synthetic-pair mechanism on the next sync tick.
+
+    Hard-ceiling and forced-wipe paths still inline content; those remain
+    covered by their own tests."""
     agent = _make_agent_with_psyche(tmp_path)
     agent.start()
     try:
         # Stamp a real int context_limit so build_meta() doesn't fall through
         # to chat_obj.context_window() (a MagicMock that breaks comparisons).
         agent._config.context_limit = 100_000
-        # Mock session to report 85% context pressure
+        # Mock session to report 85% context pressure (warn band, below the
+        # default hard ceiling).
         agent._session.get_context_pressure = lambda: 0.85
         agent._session._compaction_warnings = 0
 
@@ -239,15 +246,26 @@ def test_compaction_warning_injected_at_80_percent(tmp_path):
 
         agent._session.send = capture_send
 
-        # Use _handle_request directly with a mock message
         from lingtai_kernel.message import _make_message, MSG_REQUEST
         msg = _make_message(MSG_REQUEST, sender="test", content="do something")
         agent._handle_request(msg)
 
+        # User content is NOT mutated at warn level — the molt warning is
+        # routed through .notification/molt.json instead.
         assert len(sent_content) > 0
-        assert any("[system]" in c for c in sent_content)
-        assert any("molt" in c.lower() for c in sent_content)
+        assert not any("[system]" in c for c in sent_content)
+
+        # Counter incremented once for this turn.
         assert agent._session._compaction_warnings == 1
+
+        # Notification file was written by publish_notification.
+        notif_path = agent._working_dir / ".notification" / "molt.json"
+        assert notif_path.is_file(), "warn-level molt should publish a notification"
+        import json
+        notif = json.loads(notif_path.read_text())
+        # The notification carries molt-pressure context the agent will read
+        # via the synthetic-pair channel on the next sync.
+        assert "molt" in json.dumps(notif).lower()
     finally:
         agent.stop()
 
