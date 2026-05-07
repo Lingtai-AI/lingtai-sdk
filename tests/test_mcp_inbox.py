@@ -150,18 +150,26 @@ def test_scan_dispatches_valid_event_to_notification(tmp_path):
 
 def test_scan_coalesces_multiple_events_into_one_notification(tmp_path):
     """Issue #37: multiple events from the same MCP in one sweep produce
-    exactly one notification with the count, never inlined bodies."""
+    exactly one notification.
+
+    Senders + subjects + truncated body snippets are surfaced as triage
+    previews; full bodies stay behind the MCP read action so the agent has
+    one source of truth and avoids the re-processing loop that issue #37
+    originally fixed."""
     import json as _json
 
     agent, workdir = _mk_agent(tmp_path)
     _write_event(workdir, "telegram", "ev1", {
-        "from": "alice", "subject": "s1", "body": "secret-body-1",
+        "from": "alice", "subject": "s1",
+        "body": "first 100 chars of body 1 are visible to the agent as a triage hint, the rest stays behind read.",
     })
     _write_event(workdir, "telegram", "ev2", {
-        "from": "bob", "subject": "s2", "body": "secret-body-2",
+        "from": "bob", "subject": "s2",
+        "body": "second body content goes here as the snippet.",
     })
     _write_event(workdir, "telegram", "ev3", {
-        "from": "carol", "subject": "s3", "body": "secret-body-3",
+        "from": "carol", "subject": "s3",
+        "body": "third body content snippet for triage.",
     })
 
     dispatched = _scan_once(agent, workdir / INBOX_DIRNAME)
@@ -174,9 +182,24 @@ def test_scan_coalesces_multiple_events_into_one_notification(tmp_path):
     assert "telegram" in notif["header"]
     assert "3 new events" in notif["header"]
     assert notif["data"]["count"] == 3
-    # No body / sender / subject content leaked.
-    for forbidden in ("secret-body", "alice", "bob", "carol", "s1", "s2", "s3"):
-        assert forbidden not in notif["header"], f"leaked {forbidden!r} into notification"
+
+    # Senders, subjects, and body snippets are all surfaced as triage previews.
+    previews = notif["data"]["previews"]
+    assert len(previews) == 3
+    assert {p["from"] for p in previews} == {"alice", "bob", "carol"}
+    assert {p["subject"] for p in previews} == {"s1", "s2", "s3"}
+    # Body snippets are present and capped at _PREVIEW_FIELD_CAP.
+    from lingtai.core.mcp.inbox import _PREVIEW_FIELD_CAP
+    for p in previews:
+        assert "preview" in p
+        assert len(p["preview"]) <= _PREVIEW_FIELD_CAP
+    # Instructions should render senders, subjects, and snippets so the
+    # model sees them inline.
+    for sender in ("alice", "bob", "carol"):
+        assert sender in notif["instructions"]
+    for subject in ("s1", "s2", "s3"):
+        assert subject in notif["instructions"]
+    assert "second body content" in notif["instructions"]
 
 
 def test_scan_summary_uses_singular_for_one_event(tmp_path):
@@ -209,7 +232,39 @@ def test_scan_publishes_notification_file(tmp_path):
     notif = _json.loads(notif_file.read_text(encoding="utf-8"))
     assert notif["icon"] == "💬"
     assert notif["data"]["source"] == "telegram"
-    assert "body" in notif["data"]
+    assert "previews" in notif["data"]
+
+
+def test_scan_truncates_long_body_into_preview_snippet(tmp_path):
+    """The body snippet (`preview` field) is hard-truncated at
+    _PREVIEW_FIELD_CAP — keeps notification footprint bounded even for very
+    long bodies (multi-paragraph emails, OCR text, voice transcripts).
+
+    `from` and `subject` pass through uncapped — both are bounded by
+    upstream construction (subject is also validated <= 200 chars by
+    validate_event)."""
+    import json as _json
+
+    from lingtai.core.mcp.inbox import _PREVIEW_FIELD_CAP
+
+    agent, workdir = _mk_agent(tmp_path)
+    long_body = "B" * (_PREVIEW_FIELD_CAP + 500)
+    _write_event(workdir, "telegram", "ev1", {
+        "from": "alice@example.com",
+        "subject": "S" * 150,  # well under the 200 validate_event cap
+        "body": long_body,
+    })
+
+    _scan_once(agent, workdir / INBOX_DIRNAME)
+    notif_file = workdir / ".notification" / "mcp.telegram.json"
+    notif = _json.loads(notif_file.read_text(encoding="utf-8"))
+    preview = notif["data"]["previews"][0]
+    # Snippet hard-capped.
+    assert len(preview["preview"]) == _PREVIEW_FIELD_CAP
+    assert preview["preview"] == "B" * _PREVIEW_FIELD_CAP
+    # from/subject pass through unchanged — no truncation at this layer.
+    assert preview["from"] == "alice@example.com"
+    assert preview["subject"] == "S" * 150
 
 
 def test_scan_publishes_notification_even_when_wake_false(tmp_path):

@@ -57,6 +57,16 @@ POLL_INTERVAL = 0.5  # seconds; matches FilesystemMailService poll cadence
 MAX_EVENTS_PER_CYCLE = 100
 _MAX_SUBJECT_LEN = 200
 
+# Notification preview cap. The preview is the first N chars of the message
+# body — the content-bearing snippet that lets the agent triage what arrived
+# without calling read() on every event. The full body still stays behind the
+# MCP's read action so the agent has one source of truth (issue #37 invariant
+# preserved). Sender and subject are NOT capped here — sender is bounded by
+# upstream MCP construction (usernames, email addresses) and subject is
+# already validated <= _MAX_SUBJECT_LEN by validate_event. One preview entry
+# per consumed event — list length is naturally bounded by MAX_EVENTS_PER_CYCLE.
+_PREVIEW_FIELD_CAP = 200   # chars of body to inline as the snippet
+
 
 # ---------------------------------------------------------------------------
 # Validation
@@ -122,27 +132,56 @@ def _format_notification_summary(mcp_name: str, count: int, has_human_messages: 
     )
 
 
-def _consume_event(agent: "BaseAgent", mcp_name: str, event: dict) -> bool:
-    """Record the per-event log entry; return whether this event requested wake.
+def _consume_event(agent: "BaseAgent", mcp_name: str, event: dict) -> tuple[bool, dict]:
+    """Record the per-event log entry; return (wake, preview).
 
-    The user-visible inbox notification is dispatched once per MCP per sweep
-    by ``_dispatch_summary`` after ``_scan_once`` has consumed all events
-    in this MCP's directory. Per-event traceability still flows to the agent
-    log so operators can audit individual deliveries.
+    The preview surfaces sender + subject + a 100-char snippet of the body
+    so the agent can triage what arrived without calling read() on every
+    event. ``from`` and ``subject`` pass through uncapped — both are bounded
+    by upstream MCP construction (subject is also validated <= 200 chars).
+    Only ``preview`` is truncated, since bodies can be arbitrarily large
+    (multi-paragraph emails, OCR text, voice transcripts).
+
+    The full body is NOT included — it stays behind the MCP's read action
+    so the agent has one source of truth and avoids the re-processing loop
+    that issue #37 fixed.
+
+    Per-event traceability flows to the agent log so operators can audit
+    individual deliveries; the user-visible coalesced notification is
+    dispatched once per MCP per sweep by ``_dispatch_summary``.
     """
     wake = bool(event.get("wake", True))
+    sender = event["from"]
+    subject = event["subject"]
+    body = event["body"]
     agent._log(
         "mcp_inbox_event",
         mcp=mcp_name,
-        sender=event["from"],
-        subject=event["subject"],
+        sender=sender,
+        subject=subject,
         wake=wake,
     )
-    return wake
+    preview = {
+        "from": sender,
+        "subject": subject,
+        "preview": body[:_PREVIEW_FIELD_CAP],
+    }
+    return wake, preview
 
 
-def _dispatch_summary(agent: "BaseAgent", mcp_name: str, count: int, wake: bool, has_human_messages: bool = False) -> None:
-    """Publish one signal-only notification covering ``count`` events from ``mcp_name``.
+def _dispatch_summary(
+    agent: "BaseAgent",
+    mcp_name: str,
+    count: int,
+    wake: bool,
+    has_human_messages: bool = False,
+    previews: list[dict] | None = None,
+) -> None:
+    """Publish one coalesced notification covering ``count`` events from ``mcp_name``.
+
+    Each preview entry has ``{"from": <sender>, "subject": <subject>}`` with
+    both fields capped at ``_PREVIEW_FIELD_CAP`` chars. Full message bodies
+    are NOT included — those stay behind the MCP's read action (issue #37).
 
     Uses the kernel's canonical ``.notification/`` filesystem-as-protocol
     instead of the legacy inbox queue.  The notification file is written as
@@ -157,27 +196,37 @@ def _dispatch_summary(agent: "BaseAgent", mcp_name: str, count: int, wake: bool,
     from lingtai_kernel.notifications import submit as publish_notification
 
     plural = "" if count == 1 else "s"
-    header = (
-        f"{count} new event{plural} from MCP '{mcp_name}'"
-    )
-    notification_text = _format_notification_summary(mcp_name, count, has_human_messages=has_human_messages)
+    header = f"{count} new event{plural} from MCP '{mcp_name}'"
     priority = "high" if has_human_messages else "normal"
+    previews = previews or []
+
+    instructions_lines = [
+        f"Call the MCP '{mcp_name}' read/check action to fetch "
+        f"the {count} new event{plural}. Each preview shows sender, subject, "
+        f"and the first {_PREVIEW_FIELD_CAP} chars of the body — full content "
+        f"stays behind the read action."
+    ]
+    if previews:
+        instructions_lines.append("")
+        instructions_lines.append("Previews:")
+        for i, p in enumerate(previews, start=1):
+            instructions_lines.append(f"  {i}. {p['from']} — {p['subject']}")
+            snippet = p.get("preview", "")
+            if snippet:
+                instructions_lines.append(f"     {snippet}")
+
     publish_notification(
         agent._working_dir,
         f"mcp.{mcp_name}",
         header=header,
         icon="💬",
         priority=priority,
-        instructions=(
-            f"Call the MCP '{mcp_name}' read/check action to fetch "
-            f"the {count} new event{plural}. "
-            f"The event details are NOT inlined here — use the MCP tool."
-        ),
+        instructions="\n".join(instructions_lines),
         data={
             "count": count,
             "source": mcp_name,
-            "body": notification_text,
             "has_human_messages": has_human_messages,
+            "previews": previews,
         },
     )
 
@@ -236,6 +285,9 @@ def _scan_once(agent: "BaseAgent", inbox_root: Path) -> int:
         # Bound work per cycle to avoid pathological backlog blocking.
         events_this_mcp = 0
         any_wake = False
+        # One preview per consumed event — naturally bounded by
+        # MAX_EVENTS_PER_CYCLE. Each preview is sender + truncated subject.
+        previews: list[dict] = []
         # Issue #47: Track if this MCP has human messages
         # Human messages come from messaging MCPs (telegram, email, feishu, wechat)
         has_human_messages = False
@@ -269,13 +321,14 @@ def _scan_once(agent: "BaseAgent", inbox_root: Path) -> int:
                 _dead_letter(entry, f"validation failed: {err}")
                 continue
 
-            # Consume (log per-event + collect wake intent) and delete on success.
+            # Consume (log per-event + collect wake intent + preview) and delete on success.
             try:
-                wake = _consume_event(agent, mcp_name, event)
+                wake, preview = _consume_event(agent, mcp_name, event)
             except Exception as e:
                 _dead_letter(entry, f"dispatch failed: {e}")
                 continue
             any_wake = any_wake or wake
+            previews.append(preview)
 
             # Issue #47: Detect human messages
             # Human messages come from messaging MCPs (telegram, email, feishu, wechat)
@@ -303,7 +356,8 @@ def _scan_once(agent: "BaseAgent", inbox_root: Path) -> int:
         if events_this_mcp > 0:
             try:
                 _dispatch_summary(agent, mcp_name, events_this_mcp, any_wake,
-                                  has_human_messages=has_human_messages)
+                                  has_human_messages=has_human_messages,
+                                  previews=previews)
             except Exception as e:
                 log.error(
                     "mcp_inbox: failed to post summary for %s (count=%d): %s",
