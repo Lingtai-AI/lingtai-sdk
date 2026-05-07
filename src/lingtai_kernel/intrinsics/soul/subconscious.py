@@ -6,7 +6,11 @@ Architecture A (event-driven + meta block injection):
   - Delivery: insights are stored on the agent and injected into the meta
     block (text-input prefix) on subsequent turns. No JSONL, no notification
     system — the agent sees insights directly in its prompt prefix.
-  - Model: cheap model, single snapshot per fire (K=1 random sample).
+  - Model: cheap model, K random snapshots per fire (default K=2,
+    configurable via subconscious_sample_n).
+  - Confidence filtering: only insights with confidence >= threshold
+    (default 0.6, configurable via subconscious_confidence_threshold)
+    are stored.
   - Lifecycle: cleared at turn start, persisted until turn end.
 
 Why event-driven instead of timer:
@@ -39,6 +43,13 @@ import time
 # Maximum number of insights to retain per turn. Old insights are evicted
 # FIFO when this limit is reached. Keeps the meta block lean.
 _MAX_INSIGHTS_PER_TURN = 3
+
+# Default confidence threshold — insights below this are silently dropped.
+_DEFAULT_CONFIDENCE_THRESHOLD = 0.6
+
+# Default number of random snapshots to sample per fire (K).
+# K=2 improves recall at modest cost vs K=1.
+_DEFAULT_SAMPLE_N = 2
 
 # Subconscious system prompt — "does this remind you of something?"
 _SUBCONSCIOUS_SYSTEM_PROMPT = (
@@ -89,21 +100,27 @@ def _fire_subconscious(agent) -> None:
     - _SUBCONSCIOUS_SYSTEM_PROMPT (cheap "remind" prompt)
     - No tools, single round
     - Cheap model via session_overrides
-    - Single random snapshot (K=1)
+    - K random snapshots (default K=2, configurable)
     """
     if not getattr(agent._config, "subconscious_enabled", False):
         return
     if agent._shutdown.is_set():
         return
 
-    # Fire in a daemon thread — non-blocking.
-    t = threading.Thread(
-        target=_subconscious_fire_worker,
-        args=(agent,),
-        daemon=True,
-        name=f"sub-{agent.agent_name or 'agent'}",
-    )
-    t.start()
+    # Determine how many snapshots to sample this fire.
+    sample_n = getattr(agent._config, "subconscious_sample_n", _DEFAULT_SAMPLE_N)
+    if not isinstance(sample_n, int) or sample_n < 1:
+        sample_n = _DEFAULT_SAMPLE_N
+
+    # Fire in daemon threads — non-blocking, one per sampled snapshot.
+    for i in range(sample_n):
+        t = threading.Thread(
+            target=_subconscious_fire_worker,
+            args=(agent,),
+            daemon=True,
+            name=f"sub-{agent.agent_name or 'agent'}-{i}",
+        )
+        t.start()
 
 
 def _subconscious_fire_worker(agent) -> None:
@@ -127,13 +144,13 @@ def _subconscious_fire_worker(agent) -> None:
             agent._log("subconscious_fire_empty")
             return
 
-        # Select a random snapshot (K=1).
+        # Select a random snapshot.
         paths = _list_snapshot_paths(agent)
         if not paths:
             agent._log("subconscious_fire_no_snapshots")
             return
 
-        path = random.choice(paths)
+        path = random.choice(paths)  # each worker picks one independently
         iface = _load_snapshot_interface(path)
         if iface is None or not iface.entries:
             agent._log("subconscious_fire_load_failed", path=str(path))
@@ -188,6 +205,21 @@ def _subconscious_fire_worker(agent) -> None:
         # Parse the response.
         insight_data = _parse_subconscious_response(text)
         if insight_data is None:
+            return
+
+        # Confidence filtering — drop insights below threshold.
+        threshold = getattr(
+            agent._config, "subconscious_confidence_threshold",
+            _DEFAULT_CONFIDENCE_THRESHOLD,
+        )
+        confidence = insight_data.get("confidence", 0.5)
+        if confidence < threshold:
+            agent._log(
+                "subconscious_insight_filtered",
+                confidence=confidence,
+                threshold=threshold,
+                insight=insight_data["insight"][:100],
+            )
             return
 
         # Append to the agent's in-memory insights list.

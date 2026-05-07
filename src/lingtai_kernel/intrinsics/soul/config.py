@@ -38,7 +38,8 @@ def _handle_config(agent, args: dict) -> dict:
     _SUBCONSCIOUS_FIELDS = {
         "subconscious_enabled", "subconscious_provider",
         "subconscious_model", "subconscious_base_url",
-        "subconscious_context_window",
+        "subconscious_context_window", "subconscious_confidence_threshold",
+        "subconscious_sample_n",
     }
     provided: dict = {}
     if "delay_seconds" in args:
@@ -53,7 +54,8 @@ def _handle_config(agent, args: dict) -> dict:
             "error": (
                 "config requires at least one of: delay_seconds, "
                 "consultation_past_count, subconscious_enabled, "
-                "subconscious_provider, subconscious_model."
+                "subconscious_provider, subconscious_model, "
+                "subconscious_confidence_threshold, subconscious_sample_n."
             ),
         }
 
@@ -158,6 +160,30 @@ def _handle_config(agent, args: dict) -> dict:
         old_values["subconscious_context_window"] = getattr(agent._config, "subconscious_context_window", 128000)
         agent._config.subconscious_context_window = v
         new_values["subconscious_context_window"] = v
+
+    if "subconscious_confidence_threshold" in provided:
+        raw = provided["subconscious_confidence_threshold"]
+        try:
+            v = float(raw)
+        except (TypeError, ValueError):
+            return {"error": f"subconscious_confidence_threshold must be a number, got {type(raw).__name__}."}
+        if v < 0.0 or v > 1.0:
+            return {"error": f"subconscious_confidence_threshold must be in [0.0, 1.0], got {v}."}
+        old_values["subconscious_confidence_threshold"] = getattr(agent._config, "subconscious_confidence_threshold", 0.6)
+        agent._config.subconscious_confidence_threshold = v
+        new_values["subconscious_confidence_threshold"] = v
+
+    if "subconscious_sample_n" in provided:
+        raw = provided["subconscious_sample_n"]
+        try:
+            v = int(raw)
+        except (TypeError, ValueError):
+            return {"error": f"subconscious_sample_n must be an integer, got {type(raw).__name__}."}
+        if v < 1 or v > 5:
+            return {"error": f"subconscious_sample_n must be in [1, 5], got {v}."}
+        old_values["subconscious_sample_n"] = getattr(agent._config, "subconscious_sample_n", 2)
+        agent._config.subconscious_sample_n = v
+        new_values["subconscious_sample_n"] = v
 
     # Restart the wall-clock timer if delay changed (or if any change
     # happened — restarting on every config call keeps the cadence in
@@ -302,6 +328,8 @@ def _persist_soul_config(agent, new_values: dict) -> str | None:
       - subconscious_model       -> manifest.soul.subconscious.model
       - subconscious_base_url    -> manifest.soul.subconscious.base_url
       - subconscious_context_window -> manifest.soul.subconscious.context_window
+      - subconscious_confidence_threshold -> manifest.soul.subconscious.confidence_threshold
+      - subconscious_sample_n    -> manifest.soul.subconscious.sample_n
 
     Atomic via temp-file-then-rename. Returns ``None`` on success, or a
     short error string on failure (caller logs it; runtime state is
@@ -342,6 +370,8 @@ def _persist_soul_config(agent, new_values: dict) -> str | None:
         "subconscious_model": "model",
         "subconscious_base_url": "base_url",
         "subconscious_context_window": "context_window",
+        "subconscious_confidence_threshold": "confidence_threshold",
+        "subconscious_sample_n": "sample_n",
     }
     sub_updates = {k: v for k, v in new_values.items() if k in _SUBCONSCIOUS_KEY_MAP}
     if sub_updates:

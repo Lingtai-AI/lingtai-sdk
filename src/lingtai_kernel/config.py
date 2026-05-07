@@ -44,3 +44,5 @@ class AgentConfig:
     subconscious_model: str | None = None  # LLM model for subconscious (cheap model recommended)
     subconscious_base_url: str | None = None  # optional base URL override
     subconscious_context_window: int = 128_000  # context window for subconscious sessions
+    subconscious_confidence_threshold: float = 0.6  # minimum confidence to store an insight (0.0–1.0)
+    subconscious_sample_n: int = 2  # number of random snapshots per fire (K)

@@ -29,6 +29,8 @@ def _make_agent(**overrides):
     agent._config.subconscious_model = overrides.get("subconscious_model", "test-model")
     agent._config.subconscious_base_url = overrides.get("subconscious_base_url", None)
     agent._config.subconscious_context_window = overrides.get("subconscious_context_window", 128000)
+    agent._config.subconscious_confidence_threshold = overrides.get("subconscious_confidence_threshold", 0.6)
+    agent._config.subconscious_sample_n = overrides.get("subconscious_sample_n", 2)
     agent._config.provider = "primary-provider"
     agent._config.model = "primary-model"
     agent._config.retry_timeout = 30.0
@@ -377,3 +379,233 @@ class TestReadSubconsciousTail:
         result = _read_subconscious_tail(agent)
         assert "Subconscious insights" in result
         assert "test insight" in result
+
+
+# ── Confidence filtering ────────────────────────────────────────────────
+
+class TestConfidenceFiltering:
+    def test_default_threshold_constant(self):
+        from lingtai_kernel.intrinsics.soul.subconscious import _DEFAULT_CONFIDENCE_THRESHOLD
+        assert _DEFAULT_CONFIDENCE_THRESHOLD == 0.6
+
+    def test_low_confidence_insight_filtered(self):
+        """Insights below threshold are dropped by the worker."""
+        from lingtai_kernel.intrinsics.soul.subconscious import _subconscious_fire_worker
+        agent = _make_agent(
+            subconscious_enabled=True,
+            subconscious_confidence_threshold=0.6,
+        )
+        # Mock the consultation helpers.
+        mock_iface = MagicMock()
+        mock_iface.entries = [MagicMock()]
+        mock_fitted = MagicMock()
+        mock_fitted.entries = [MagicMock()]
+
+        # Build a mock response with low confidence.
+        mock_tail = MagicMock()
+        mock_tail.role = "assistant"
+        text_block = MagicMock()
+        text_block.text = '{"insight": "low confidence idea", "confidence": 0.3}'
+        mock_tail.content = [text_block]
+        mock_session_iface = MagicMock()
+        mock_session_iface.entries = [mock_tail]
+        mock_session = MagicMock()
+        mock_session.interface = mock_session_iface
+
+        with patch("lingtai_kernel.intrinsics.soul.consultation._render_current_diary", return_value="some diary"), \
+             patch("lingtai_kernel.intrinsics.soul.consultation._list_snapshot_paths", return_value=[MagicMock(stem="snap1")]), \
+             patch("lingtai_kernel.intrinsics.soul.consultation._load_snapshot_interface", return_value=mock_iface), \
+             patch("lingtai_kernel.intrinsics.soul.consultation._fit_interface_to_window", return_value=mock_fitted), \
+             patch("lingtai_kernel.intrinsics.soul.consultation._send_with_timeout", return_value=MagicMock()), \
+             patch.object(agent.service, "create_session", return_value=mock_session):
+            _subconscious_fire_worker(agent)
+
+        # Should NOT have appended insight.
+        assert len(agent._subconscious_insights) == 0
+        # Should have logged the filtering.
+        agent._log.assert_any_call(
+            "subconscious_insight_filtered",
+            confidence=0.3,
+            threshold=0.6,
+            insight="low confidence idea",
+        )
+
+    def test_high_confidence_insight_stored(self):
+        """Insights at or above threshold are stored."""
+        from lingtai_kernel.intrinsics.soul.subconscious import _subconscious_fire_worker
+        agent = _make_agent(
+            subconscious_enabled=True,
+            subconscious_confidence_threshold=0.6,
+        )
+        mock_iface = MagicMock()
+        mock_iface.entries = [MagicMock()]
+        mock_fitted = MagicMock()
+        mock_fitted.entries = [MagicMock()]
+
+        mock_tail = MagicMock()
+        mock_tail.role = "assistant"
+        text_block = MagicMock()
+        text_block.text = '{"insight": "high confidence idea", "confidence": 0.8}'
+        mock_tail.content = [text_block]
+        mock_session_iface = MagicMock()
+        mock_session_iface.entries = [mock_tail]
+        mock_session = MagicMock()
+        mock_session.interface = mock_session_iface
+
+        with patch("lingtai_kernel.intrinsics.soul.consultation._render_current_diary", return_value="some diary"), \
+             patch("lingtai_kernel.intrinsics.soul.consultation._list_snapshot_paths", return_value=[MagicMock(stem="snap1")]), \
+             patch("lingtai_kernel.intrinsics.soul.consultation._load_snapshot_interface", return_value=mock_iface), \
+             patch("lingtai_kernel.intrinsics.soul.consultation._fit_interface_to_window", return_value=mock_fitted), \
+             patch("lingtai_kernel.intrinsics.soul.consultation._send_with_timeout", return_value=MagicMock()), \
+             patch.object(agent.service, "create_session", return_value=mock_session):
+            _subconscious_fire_worker(agent)
+
+        assert len(agent._subconscious_insights) == 1
+        assert agent._subconscious_insights[0]["insight"] == "high confidence idea"
+        assert agent._subconscious_insights[0]["confidence"] == 0.8
+
+    def test_exact_threshold_stored(self):
+        """Insight with confidence exactly at threshold is stored."""
+        from lingtai_kernel.intrinsics.soul.subconscious import _subconscious_fire_worker
+        agent = _make_agent(
+            subconscious_enabled=True,
+            subconscious_confidence_threshold=0.6,
+        )
+        mock_iface = MagicMock()
+        mock_iface.entries = [MagicMock()]
+        mock_fitted = MagicMock()
+        mock_fitted.entries = [MagicMock()]
+
+        mock_tail = MagicMock()
+        mock_tail.role = "assistant"
+        text_block = MagicMock()
+        text_block.text = '{"insight": "borderline idea", "confidence": 0.6}'
+        mock_tail.content = [text_block]
+        mock_session_iface = MagicMock()
+        mock_session_iface.entries = [mock_tail]
+        mock_session = MagicMock()
+        mock_session.interface = mock_session_iface
+
+        with patch("lingtai_kernel.intrinsics.soul.consultation._render_current_diary", return_value="some diary"), \
+             patch("lingtai_kernel.intrinsics.soul.consultation._list_snapshot_paths", return_value=[MagicMock(stem="snap1")]), \
+             patch("lingtai_kernel.intrinsics.soul.consultation._load_snapshot_interface", return_value=mock_iface), \
+             patch("lingtai_kernel.intrinsics.soul.consultation._fit_interface_to_window", return_value=mock_fitted), \
+             patch("lingtai_kernel.intrinsics.soul.consultation._send_with_timeout", return_value=MagicMock()), \
+             patch.object(agent.service, "create_session", return_value=mock_session):
+            _subconscious_fire_worker(agent)
+
+        assert len(agent._subconscious_insights) == 1
+        assert agent._subconscious_insights[0]["insight"] == "borderline idea"
+
+
+# ── Sample N (K=2) ──────────────────────────────────────────────────────
+
+class TestSampleN:
+    def test_default_sample_n_constant(self):
+        from lingtai_kernel.intrinsics.soul.subconscious import _DEFAULT_SAMPLE_N
+        assert _DEFAULT_SAMPLE_N == 2
+
+    def test_fire_spawns_sample_n_threads(self):
+        """_fire_subconscious should spawn sample_n worker threads."""
+        from lingtai_kernel.intrinsics.soul.subconscious import _fire_subconscious
+        agent = _make_agent(subconscious_enabled=True, subconscious_sample_n=3)
+        with patch("lingtai_kernel.intrinsics.soul.subconscious.threading.Thread") as MockThread:
+            mock_thread = MagicMock()
+            MockThread.return_value = mock_thread
+            _fire_subconscious(agent)
+            assert MockThread.call_count == 3
+            assert mock_thread.start.call_count == 3
+
+    def test_fire_default_sample_n(self):
+        """Default sample_n=2 spawns 2 threads."""
+        from lingtai_kernel.intrinsics.soul.subconscious import _fire_subconscious
+        agent = _make_agent(subconscious_enabled=True)
+        with patch("lingtai_kernel.intrinsics.soul.subconscious.threading.Thread") as MockThread:
+            mock_thread = MagicMock()
+            MockThread.return_value = mock_thread
+            _fire_subconscious(agent)
+            assert MockThread.call_count == 2
+            assert mock_thread.start.call_count == 2
+
+    def test_fire_sample_n_1(self):
+        """sample_n=1 reverts to single-thread behavior."""
+        from lingtai_kernel.intrinsics.soul.subconscious import _fire_subconscious
+        agent = _make_agent(subconscious_enabled=True, subconscious_sample_n=1)
+        with patch("lingtai_kernel.intrinsics.soul.subconscious.threading.Thread") as MockThread:
+            mock_thread = MagicMock()
+            MockThread.return_value = mock_thread
+            _fire_subconscious(agent)
+            assert MockThread.call_count == 1
+
+
+# ── Config handler for new fields ───────────────────────────────────────
+
+class TestNewConfigFields:
+    def test_confidence_threshold_valid(self):
+        from lingtai_kernel.intrinsics.soul.config import _handle_config
+        agent = _make_agent()
+        with patch("lingtai_kernel.intrinsics.soul.config._persist_soul_config", return_value=None):
+            result = _handle_config(agent, {"subconscious_confidence_threshold": 0.8})
+        assert result["status"] == "ok"
+        assert result["new"]["subconscious_confidence_threshold"] == 0.8
+        assert agent._config.subconscious_confidence_threshold == 0.8
+
+    def test_confidence_threshold_out_of_range(self):
+        from lingtai_kernel.intrinsics.soul.config import _handle_config
+        agent = _make_agent()
+        result = _handle_config(agent, {"subconscious_confidence_threshold": 1.5})
+        assert "error" in result
+        assert "[0.0, 1.0]" in result["error"]
+
+    def test_confidence_threshold_negative(self):
+        from lingtai_kernel.intrinsics.soul.config import _handle_config
+        agent = _make_agent()
+        result = _handle_config(agent, {"subconscious_confidence_threshold": -0.1})
+        assert "error" in result
+
+    def test_sample_n_valid(self):
+        from lingtai_kernel.intrinsics.soul.config import _handle_config
+        agent = _make_agent()
+        with patch("lingtai_kernel.intrinsics.soul.config._persist_soul_config", return_value=None):
+            result = _handle_config(agent, {"subconscious_sample_n": 3})
+        assert result["status"] == "ok"
+        assert result["new"]["subconscious_sample_n"] == 3
+        assert agent._config.subconscious_sample_n == 3
+
+    def test_sample_n_too_low(self):
+        from lingtai_kernel.intrinsics.soul.config import _handle_config
+        agent = _make_agent()
+        result = _handle_config(agent, {"subconscious_sample_n": 0})
+        assert "error" in result
+        assert "[1, 5]" in result["error"]
+
+    def test_sample_n_too_high(self):
+        from lingtai_kernel.intrinsics.soul.config import _handle_config
+        agent = _make_agent()
+        result = _handle_config(agent, {"subconscious_sample_n": 10})
+        assert "error" in result
+        assert "[1, 5]" in result["error"]
+
+    def test_persist_new_fields_round_trip(self):
+        """New fields round-trip through init.json persistence."""
+        import tempfile
+        from pathlib import Path
+        from lingtai_kernel.intrinsics.soul.config import _persist_soul_config
+
+        agent = _make_agent()
+        with tempfile.TemporaryDirectory() as tmp:
+            init_path = Path(tmp) / "init.json"
+            init_path.write_text(json.dumps({
+                "manifest": {"soul": {"delay": 300.0}}
+            }), encoding="utf-8")
+            agent._working_dir = Path(tmp)
+
+            _persist_soul_config(agent, {
+                "subconscious_confidence_threshold": 0.7,
+                "subconscious_sample_n": 3,
+            })
+
+            data = json.loads(init_path.read_text(encoding="utf-8"))
+            sub = data["manifest"]["soul"]["subconscious"]
+            assert sub["confidence_threshold"] == 0.7
+            assert sub["sample_n"] == 3
