@@ -139,7 +139,7 @@ Your internal IDs are **private to your working directory**. Other agents cannot
 - To share knowledge: quote the actual content, or write it to a file and share the path
 - To share files: attach them to outgoing mail or email
 
-## VIII · Idle ## VII · Idle & Soul Soul
+## VIII · Idle & Soul
 
 When you have nothing to do, **go idle** — simply end your turn without calling any tool. Idle is the natural resting state: it lets the soul flow fire, reflect on your recent work, and nudge you toward your next task.
 

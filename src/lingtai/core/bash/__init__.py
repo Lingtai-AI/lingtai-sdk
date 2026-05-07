@@ -65,7 +65,7 @@ def get_schema(lang: str = "en") -> dict:
                 "description": t(lang, "bash.job_id"),
             },
         },
-        "required": ["command"],
+        "required": [],  # command required only for action=run; job_id for poll/cancel
     }
 
 
@@ -210,6 +210,16 @@ class BashManager:
             }
         return None
 
+    @staticmethod
+    def _validate_job_id(job_id: str) -> dict | None:
+        """Validate job_id is safe (no path traversal). Returns error dict or None."""
+        if not job_id:
+            return {"status": "error", "message": "job_id is required"}
+        # Reject path traversal attempts
+        if "/" in job_id or "\\" in job_id or ".." in job_id:
+            return {"status": "error", "message": f"Invalid job_id: {job_id}"}
+        return None
+
     def handle(self, args: dict) -> dict:
         action = args.get("action", "run")
 
@@ -311,8 +321,9 @@ class BashManager:
     def _handle_poll(self, args: dict) -> dict:
         """Check status of an async job."""
         job_id = args.get("job_id", "")
-        if not job_id:
-            return {"status": "error", "message": "job_id is required for poll"}
+        err = self._validate_job_id(job_id)
+        if err:
+            return err
 
         jobs_dir = self._ensure_jobs_dir()
         job_dir = jobs_dir / job_id
@@ -372,8 +383,9 @@ class BashManager:
     def _handle_cancel(self, args: dict) -> dict:
         """Kill an async job."""
         job_id = args.get("job_id", "")
-        if not job_id:
-            return {"status": "error", "message": "job_id is required for cancel"}
+        err = self._validate_job_id(job_id)
+        if err:
+            return err
 
         jobs_dir = self._ensure_jobs_dir()
         job_dir = jobs_dir / job_id
