@@ -1106,18 +1106,15 @@ class BaseAgent:
         return True
 
     def _inject_notification_meta(self, message):
-        """ACTIVE-state: prepend notification JSON to a recent str ToolResultBlock.
+        """ACTIVE-state: prepend notification JSON to a recent ToolResultBlock.
 
         Called from ``SessionManager.send()`` before the API call.  Walks
-        the wire backwards looking for a ``ToolResultBlock`` whose
-        ``.content`` is a string (dict-content blocks come from MCP
-        structured results — those are skipped to avoid corrupting their
-        schema).  Prepends the
-        ``notifications:\\n<json>\\n\\n`` prefix to the most recent
-        string-content result, stripping any stale prefix from older
-        results.
+        the wire backwards looking for the most recent ``ToolResultBlock``.
+        Dict-content blocks are serialized to JSON before prepending.
+        Prepends the ``notifications:\\n<json>\\n\\n`` prefix to the
+        target result, stripping any stale prefix from older results.
 
-        If no string-content ``ToolResultBlock`` exists, leaves
+        If no ``ToolResultBlock`` exists at all, leaves
         ``_pending_notification_meta`` set and the next ``send()``
         retries.
 
@@ -1136,17 +1133,14 @@ class BaseAgent:
         )
 
         # Walk backwards to find the most recent user entry whose content
-        # contains a *string-content* ToolResultBlock.
+        # contains a ToolResultBlock (str or dict content).
         target_entry = None
         target_block = None
         for entry in reversed(iface.entries):
             if entry.role != "user":
                 continue
             for block in entry.content:
-                if (
-                    isinstance(block, ToolResultBlock)
-                    and isinstance(block.content, str)
-                ):
+                if isinstance(block, ToolResultBlock):
                     target_entry = entry
                     target_block = block
                     break
@@ -1154,14 +1148,18 @@ class BaseAgent:
                 break
 
         if target_block is None:
-            # All recent results are dict-typed (or there are none).
-            # Keep the pending meta; the next send() with a string
-            # result will carry it.
+            # No ToolResultBlocks at all.
             self._log(
                 "notification_meta_deferred",
-                reason="no_str_tool_result",
+                reason="no_tool_result",
             )
             return message
+
+        # If the target block has dict content, serialize to JSON string.
+        if isinstance(target_block.content, dict):
+            target_block.content = json.dumps(
+                target_block.content, ensure_ascii=False
+            )
 
         # Strip notification prefix from ALL OTHER user ToolResultBlocks.
         for entry in iface.entries:
