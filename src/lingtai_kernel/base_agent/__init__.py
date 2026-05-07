@@ -552,10 +552,11 @@ class BaseAgent:
     def _set_state(self, new_state: AgentState, reason: str = "") -> None:
         """Transition to a new state.
 
-        Drives the soul cadence timer: the timer runs only when the agent
-        is in a fire-eligible state (ACTIVE / IDLE). Entering STUCK,
-        ASLEEP, or SUSPENDED cancels it outright; returning to ACTIVE or
-        IDLE starts a fresh ``soul_delay``-second timer.
+        Drives the soul cadence timer: the timer runs only while the
+        agent is IDLE.  Entering IDLE starts a fresh ``soul_delay``-second
+        timer; leaving IDLE (to ACTIVE, STUCK, ASLEEP, or SUSPENDED)
+        cancels it.  The timer does NOT reschedule itself after firing —
+        the next IDLE transition starts a fresh countdown.
         """
         from ..intrinsics.soul.flow import _start_soul_timer, _cancel_soul_timer
 
@@ -568,13 +569,11 @@ class BaseAgent:
         else:
             self._idle.set()
 
-        fire_eligible = {AgentState.ACTIVE, AgentState.IDLE}
-        was_eligible = old in fire_eligible
-        is_eligible = new_state in fire_eligible
-        if was_eligible and not is_eligible:
-            _cancel_soul_timer(self)
-        elif is_eligible and not was_eligible:
+        # Soul timer: IDLE-only.  Start on entering IDLE, cancel on leaving.
+        if new_state == AgentState.IDLE:
             _start_soul_timer(self)
+        elif old == AgentState.IDLE:
+            _cancel_soul_timer(self)
 
         self._log("agent_state", old=old.value, new=new_state.value, reason=reason)
         self._workdir.write_manifest(self._build_manifest())

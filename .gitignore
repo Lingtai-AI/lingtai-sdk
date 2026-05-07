@@ -34,3 +34,4 @@ MagicMock/
 # Specific discussion drafts kept local (others under discussions/ are
 # committed by convention; ignore individual files rather than the whole dir)
 discussions/voluntary-compression-patch.md
+uv.lock
