@@ -17,7 +17,7 @@ def _write_init(tmp_path: Path) -> None:
             "agent_name": "integration-test",
             "language": "en",
             "llm": {
-                "provider": "gemini",
+                "provider": "openai",
                 "model": "test-model",
                 "api_key": "fake-key",
                 "base_url": None,
@@ -43,7 +43,7 @@ def _write_init(tmp_path: Path) -> None:
 def _make_mock_service():
     """Build a mock LLMService that satisfies BaseAgent's contract."""
     svc = MagicMock()
-    svc.provider = "gemini"
+    svc.provider = "openai"
     svc.model = "test-model"
     svc.get_adapter.return_value = MagicMock()
     return svc

@@ -37,7 +37,7 @@ def test_provider_dependent_capabilities():
     result = get_all_providers()
     assert result["vision"]["default"] is None
     assert "minimax" in result["vision"]["providers"]
-    assert "gemini" in result["vision"]["providers"]
+    # Gemini removed — server-side state management unreliable
     # "local" is intentionally NOT advertised in PROVIDERS yet — it works
     # via explicit opt-in (add_capability(..., provider="local")) but
     # should not appear in check-caps output. See capabilities/vision.py.
