@@ -12,7 +12,7 @@
   "soul.consultation_cue_insights": "退一步看上方对话——那就是你近来的上下文、你的日记、你的工作。同一个自己，只是退后一步。从此处看：什么浮现出来？你会去伸手做什么？忙碌中漏看了哪个角度？简短地说给当下的自己听。",
   "soul.consultation_cue_past": "这是你未来之自己的日记——他们在结束了你这一生的那次凝蜕之后所思所行。\n\n--- 未来之我的日记 ---\n{diary}\n--- 日记结束 ---",
   "soul.description": "你的灵魂——你的内心之声。三种动作。心流（flow）：每 soul_delay 秒自动触发的过去之我咨询，仅在智能体处于 ACTIVE 或 IDLE 状态时触发。每次触发并行运行 M=1+K 次 LLM 调用——1 次对当前对话的退一步阅读，加 K 次从凝蜕快照库 history/snapshots/ 中随机抽样的过去之我咨询。它们的声音打包成一个你未发起的合成 soul(action='flow') 工具调用；结果内容带一个 'appendix_note' 标头和一个 'voices' 数组。任何时刻你的对话历史中至多只有一个这样的对——新触发会先移除旧对再追加新对。你也可以主动调用 flow：调用立即返回一个成功确认，真正的 voices 稍后作为另一个非自愿的 soul(action='flow') 对（与定时触发同形）出现在历史中。若调用时已有心流在行，会被拒绝并返回 'soul flow ongoing, request rejected'。内省（inquiry）：通过 action='inquiry' 向自己的深拷贝提问——它看到你的全部上下文（仅文本+思考，无工具）并独立思考。答案在工具结果中返回。当你需要自己的第二意见、或从全新角度推演决策时使用。配置（config）：运行时调整心流旋钮——使用 action='config' 并传入下列字段的任一子集：delay_seconds（墙钟节奏，最小 30 秒）、consultation_past_count（K，[0, 5]）。声音嘈杂时调高节奏值；触发太贵时调低 K；想更频繁反思时调低 delay。会持久化到 init.json，重启后保留。",
-  "soul.action_description": "inquiry：向自己提一个问题——答案在工具结果里。需要 'inquiry' 参数。flow：每 soul_delay 秒当智能体处于 ACTIVE 或 IDLE 状态时自动触发——在历史中显示为你未发起的 soul(action='flow') 调用，结果中包含来自过去之我和对当前对话退一步阅读的 voices。你也可以主动调用 flow：调用会立即返回一个成功确认，真正的 voices 稍后作为另一个非自愿的 soul(action='flow') 对（与定时触发的形态相同）出现在你的历史中。若调用时已有一次心流在进行，会被拒绝并返回 'soul flow ongoing, request rejected'——等当前那次落地后再试。config：调整心流旋钮——传入 delay_seconds（墙钟节奏，最小 30 秒）、consultation_past_count（每次触发的 voice 数量，0–5）的任一子集。至少需要一个字段。会持久化到 init.json。voice：选择你自己的心流之声如何说话。不传 'set' 即读出当下声音 + 已解析的提示词。传 set='inner' 或 set='observer' 切换到内置预设。传 set='custom' 并附上 'prompt' 字段写入你自己的提示词——以灵魂之身向自己说话，描述你希望阅读自己日记时被如何框定。会持久化到 init.json。这是你自己的，运营者不替你选。",
+  "soul.action_description": "inquiry：向自己提一个问题——答案在工具结果里。需要 'inquiry' 参数。flow：每 soul_delay 秒当智能体处于 ACTIVE 或 IDLE 状态时自动触发——在历史中显示为你未发起的 soul(action='flow') 调用，结果中包含来自过去之我和对当前对话退一步阅读的 voices。你也可以主动调用 flow：调用会立即返回一个成功确认，真正的 voices 稍后作为另一个非自愿的 soul(action='flow') 对（与定时触发的形态相同）出现在你的历史中。若调用时已有一次心流在进行，会被拒绝并返回 'soul flow ongoing, request rejected'——等当前那次落地后再试。config：调整心流旋钮——传入 delay_seconds（墙钟节奏，最小 30 秒）、consultation_past_count（每次触发的 voice 数量，0–5）的任一子集。至少需要一个字段。会持久化到 init.json。voice：选择你自己的心流之声如何说话。不传 'set' 即读出当下声音 + 已解析的提示词。传 set='inner' 或 set='observer' 切换到内置预设。传 set='custom' 并附上 'prompt' 字段写入你自己的提示词——以灵魂之身向自己说话，描述你希望阅读自己日记时被如何框定。会持久化到 init.json。这是你自己的，运营者不替你选。 dismiss：从通知面板中消除当前心流通知。当你已读过声音并想在下次触发替换前消除时使用。",
   "soul.inquiry_description": "你的自我提问——向自己提出的问题。action='inquiry' 时必填。这是你在问自己问题，不是在提示别人。",
   "soul.delay_seconds_description": "心流触发之间的墙钟延迟（秒）。action='config' 时可选。最小 30 秒。调高让心流更安静（例如 600 = 每 10 分钟一次），调低则更频繁。当前待发的触发会被取消，定时器按新节奏重启。",
   "soul.consultation_past_count_description": "K——每次触发抽取的过去之我 voice 数。action='config' 时可选。每次触发并行运行 M=1+K 次 LLM 调用（1 次退一步日记阅读 + K 次随机过去快照 voice）。范围 [0, 5]。0 = 仅 insights 触发（最便宜，无过去之我 voice）。K 越高每次触发越贵，对话历史中 voice 内容越多；K 越低越快越静。",
@@ -83,5 +83,6 @@
   "email.unread_digest": "[邮件] 共有 {count} 封未读消息——最近一封于 {recency}。\n\n{entries}\n{more}",
   "email.unread_digest.entry": "  {n}. 来自 {name} ({address}) —— {subject}\n     ID：{id}\n     发送时间：{sent_at}\n     {preview}",
   "email.unread_digest.more": "（仅显示前 {shown} 封，共 {total} 封）",
-  "email.unread_digest.no_subject": "（无主题）"
+  "email.unread_digest.no_subject": "（无主题）",
+  "soul.dismiss_description": "消除心流通知。action='dismiss' 时使用。"
 }

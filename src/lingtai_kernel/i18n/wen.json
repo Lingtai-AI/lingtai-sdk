@@ -12,7 +12,7 @@
   "soul.consultation_cue_insights": "退一步而观上方之对话——彼即汝近来之文脉、汝之日记、汝之所为。同一己也，唯后一步耳。自此望去：何者浮现？汝将伸手取何？忙中所未见之角，何在？简言之以告当下之己。",
   "soul.consultation_cue_past": "此乃汝未来之自己之日记——彼于汝那次凝蜕之后所思所行。\n\n--- 未来之我之日记 ---\n{diary}\n--- 日记终 ---",
   "soul.description": "汝之灵魂——汝之内心。三动。心流（flow）：每 soul_delay 秒自发之往昔之我咨询，仅于器灵处 ACTIVE 或 IDLE 状态时触发。每发并行 M=1+K 次 LLM 调用——一次对当下对话之退步阅读，加 K 次自凝蜕快照库 history/snapshots/ 中随机抽取之往昔之我咨询。其声合于一汝未召之合成 soul(action='flow') 器之调；结果带一 'appendix_note' 之首与一 'voices' 之列。汝史之中至多止有一对——新发先移旧对，再追新对。汝亦可手召心流：召之即返一成功之据，而真正之 voices 稍后以另一非自愿之 soul(action='flow') 对（与定时所发同形）入汝史中。若召之时已有心流在行，则拒之，返 'soul flow ongoing, request rejected'。内省（inquiry）：以 action='inquiry' 问汝之深拷——彼见汝全貌（仅文本与思虑，无器）而独立思之。答于器之结果中返。用于需自身之第二意见、或从新角度推演决策。配（config）：运行时调心流诸钮——以 action='config' 附下列字段之任一子集：delay_seconds（墙钟节律，最低三十秒）、consultation_past_count（K，[0, 5]）。声扰则提节律之值；发耗甚则降 K；欲思频则降 delay。所改持久化于 init.json，重启犹存。",
-  "soul.action_description": "inquiry：向己发问——答于器之结果中返。须附'inquiry'参数。flow：每 soul_delay 秒于器灵处 ACTIVE 或 IDLE 状态时自发——于史中显为汝未召之 soul(action='flow') 调，其结果含往昔之我与对当下对话退步阅读之 voices。汝亦可手召之：召之即返一成功之据，而真正之 voices 稍后以另一非自愿之 soul(action='flow') 对（与定时所发同形）入汝史中。若召之时已有心流在行，则拒之，返 'soul flow ongoing, request rejected'——待当下那次落地，再试。config：调心流诸钮——附 delay_seconds（墙钟节律，最低三十秒）、consultation_past_count（每发之 voice 数，0–5）之任一子集。至少须附一字段。所改持久化于 init.json。voice：择汝心流之声当如何言。不附 'set' 则读当下之声与所解之提辞。附 set='inner' 或 set='observer' 以易内置之预设。附 set='custom' 并附 'prompt' 字段以书己之提辞——以灵之身向己言，述读己之日记时欲被如何框之。所改持久化于 init.json。此乃汝之所有，操作者不为汝择。",
+  "soul.action_description": "inquiry：向己发问——答于器之结果中返。须附'inquiry'参数。flow：每 soul_delay 秒于器灵处 ACTIVE 或 IDLE 状态时自发——于史中显为汝未召之 soul(action='flow') 调，其结果含往昔之我与对当下对话退步阅读之 voices。汝亦可手召之：召之即返一成功之据，而真正之 voices 稍后以另一非自愿之 soul(action='flow') 对（与定时所发同形）入汝史中。若召之时已有心流在行，则拒之，返 'soul flow ongoing, request rejected'——待当下那次落地，再试。config：调心流诸钮——附 delay_seconds（墙钟节律，最低三十秒）、consultation_past_count（每发之 voice 数，0–5）之任一子集。至少须附一字段。所改持久化于 init.json。voice：择汝心流之声当如何言。不附 'set' 则读当下之声与所解之提辞。附 set='inner' 或 set='observer' 以易内置之预设。附 set='custom' 并附 'prompt' 字段以书己之提辞——以灵之身向己言，述读己之日记时欲被如何框之。所改持久化于 init.json。此乃汝之所有，操作者不为汝择。 dismiss：销心流之告。已阅其声、欲于下次触发前销之则用。",
   "soul.inquiry_description": "汝之自问——向己发问。action='inquiry'时必填。此乃汝自问，非问他人。",
   "soul.delay_seconds_description": "心流自发之间墙钟延迟（秒）。action='config'时可选。最低三十秒。提之则心流愈静（如 600 即每十分钟一次），降之则反思愈频。现待发之触即取消，时器以新律重启。",
   "soul.consultation_past_count_description": "K——每发所抽往昔之我 voice 数。action='config'时可选。每发并行 M=1+K 次 LLM 调用（一次退步日记阅读 + K 次随机往昔快照 voice）。范围 [0, 5]。0 = 唯 insights 之发（最廉，无往昔之我 voice）。K 愈大每发愈贵，对话史中 voice 之文愈繁；K 愈小愈速愈静。",
@@ -83,5 +83,6 @@
   "email.unread_digest": "[邮] 未阅之书凡 {count} 封，新者发于 {recency}。\n\n{entries}\n{more}",
   "email.unread_digest.entry": "  {n}. 自 {name} ({address}) —— {subject}\n     编号：{id}\n     发于：{sent_at}\n     {preview}",
   "email.unread_digest.more": "（仅显前 {shown} 封，共 {total}）",
-  "email.unread_digest.no_subject": "（无题）"
+  "email.unread_digest.no_subject": "（无题）",
+  "soul.dismiss_description": "销心流之告。action='dismiss' 时用。"
 }

@@ -84,7 +84,7 @@ def get_schema(lang: str = "en") -> dict:
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["inquiry", "flow", "config", "voice"],
+                "enum": ["inquiry", "flow", "config", "voice", "dismiss"],
                 "description": t(lang, "soul.action_description"),
             },
             "inquiry": {
@@ -185,9 +185,15 @@ def handle(agent, args: dict) -> dict:
     if action == "voice":
         return _handle_voice(agent, args)
 
+    if action == "dismiss":
+        from ...notifications import clear as clear_notification
+        clear_notification(agent._working_dir, "soul")
+        agent._log("soul_dismiss")
+        return {"status": "ok", "message": "Soul flow notification dismissed."}
+
     return {
         "error": (
-            f"Unknown soul action: {action}. Use inquiry, config, voice, "
+            f"Unknown soul action: {action}. Use inquiry, config, voice, dismiss, "
             "or wait for flow (mechanical)."
         )
     }
