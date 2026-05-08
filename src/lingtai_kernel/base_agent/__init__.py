@@ -388,6 +388,7 @@ class BaseAgent:
         # while the agent is mid-tool-chain; consumed (and reset to None)
         # by _inject_notification_meta inside SessionManager.send().
         self._pending_notification_meta: str | None = None
+        self._pending_notification_fp: str | None = None
 
         # Lifecycle
         self._shutdown = threading.Event()
@@ -911,11 +912,15 @@ class BaseAgent:
             # Stash for injection at request-send time (meta on latest
             # ToolResultBlock).  Same envelope shape as IDLE pair so the
             # agent sees one signal regardless of delivery path.
+            # Do NOT set inject_ok — fingerprint is committed only when
+            # _inject_notification_meta() actually delivers the stash,
+            # preventing a pressure-drop clear from silently dropping
+            # the warning before delivery.
             body = {"_synthesized": True, "notifications": notifications}
             self._pending_notification_meta = json.dumps(
                 body, indent=2, ensure_ascii=False
             )
-            inject_ok = True
+            self._pending_notification_fp = fp
             self._log(
                 "notification_stashed_active",
                 sources=list(notifications.keys()),
@@ -925,8 +930,10 @@ class BaseAgent:
         # observed; we just can't act on it until state recovers.
 
         # --- Commit fingerprint only if injection succeeded ---
-        if inject_ok or self._state not in (
-            AgentState.IDLE, AgentState.ASLEEP
+        # ACTIVE defers FP commit to _inject_notification_meta(); only
+        # STUCK/SUSPENDED commit here (they can't inject at all).
+        if inject_ok or self._state in (
+            AgentState.STUCK, AgentState.SUSPENDED
         ):
             self._notification_fp = fp
 
@@ -1147,11 +1154,28 @@ class BaseAgent:
                 break
 
         if target_block is None:
-            # No ToolResultBlocks at all.
+            # No ToolResultBlock to prepend to.  Fall back to pair
+            # injection (same path as IDLE) so the warning isn't stuck
+            # in _pending_notification_meta indefinitely.
             self._log(
-                "notification_meta_deferred",
+                "notification_meta_fallback_to_pair",
                 reason="no_tool_result",
             )
+            injected = False
+            try:
+                body = json.loads(self._pending_notification_meta)
+                notifications = body.get("notifications", {})
+                if notifications:
+                    injected = self._inject_notification_pair(notifications)
+            except (json.JSONDecodeError, TypeError):
+                pass
+            if injected:
+                self._pending_notification_meta = None
+                # Commit the fingerprint now that delivery succeeded.
+                if self._pending_notification_fp is not None:
+                    self._notification_fp = self._pending_notification_fp
+                    self._pending_notification_fp = None
+            # If not injected, leave pending state for next send() retry.
             return message
 
         # If the target block has dict content, serialize to JSON string.
@@ -1177,6 +1201,10 @@ class BaseAgent:
         target_block.content = notif_prefix + cleaned
 
         self._pending_notification_meta = None
+        # Commit the fingerprint now that delivery succeeded.
+        if self._pending_notification_fp is not None:
+            self._notification_fp = self._pending_notification_fp
+            self._pending_notification_fp = None
         self._log(
             "notification_meta_injected",
             entry_id=target_entry.id,

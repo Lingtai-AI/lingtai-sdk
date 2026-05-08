@@ -544,15 +544,6 @@ class DaemonManager:
                             if not v["future"].done()}
         self._pools = [(p, c) for p, c in self._pools if not c.is_set()]
 
-        # Capacity check against pruned registry
-        running = len(self._emanations)
-        if running + len(tasks) > self._max_emanations:
-            lang = self._agent._config.language
-            return {"status": "error",
-                    "message": t(lang, "daemon.limit_reached",
-                                 running=running, requested=len(tasks),
-                                 max=self._max_emanations)}
-
         # Pre-flight: resolve any per-task presets BEFORE scheduling.
         # If any preset is invalid, refuse the whole batch. Presets are
         # identified by path (~/foo.json, ./foo.json, or absolute).

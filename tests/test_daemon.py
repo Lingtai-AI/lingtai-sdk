@@ -234,17 +234,18 @@ def test_handle_emanate_dispatches_and_returns_ids(tmp_path):
     assert len(messages) == 2
 
 
-def test_handle_emanate_rejects_over_limit(tmp_path):
-    """emanate rejects when max_emanations would be exceeded."""
-    agent = _make_agent(tmp_path, {"daemon": {"max_emanations": 1}})
+def test_handle_emanate_allows_concurrent(tmp_path):
+    """emanate succeeds even with existing emanations (no limit)."""
+    agent = _make_agent(tmp_path, ["file", "daemon"])
     mgr = agent.get_capability("daemon")
 
     mgr._emanations["em-0"] = {"future": MagicMock(done=MagicMock(return_value=False)), "run_dir": None}
     result = mgr.handle({"action": "emanate", "tasks": [
         {"task": "x", "tools": ["file"]},
     ]})
-    assert result["status"] == "error"
-    assert "Too many" in result["message"] or "running" in result["message"]
+    # No limit enforced — should succeed
+    assert result["status"] == "dispatched"
+    assert len(result["ids"]) == 1
 
 
 def test_handle_list_shows_status(tmp_path):

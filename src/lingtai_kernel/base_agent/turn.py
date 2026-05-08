@@ -469,62 +469,33 @@ def _handle_message(agent, msg: Message) -> None:
         logger.warning(f"[{agent.agent_name}] Unknown message type: {msg.type}")
 
 
-def _handle_request(agent, msg: Message) -> None:
-    """Send request to LLM, process response with tool calls."""
-    from ..llm import LLMResponse
+def _check_molt_pressure(agent) -> None:
+    """Check context pressure and publish/clear molt warnings.
 
-    # Splice any queued involuntary tool-call pairs
-    agent._drain_tc_inbox()
+    Extracted from ``_handle_request`` so it can be called from the tool
+    loop (``_process_response``) and notification-wake path
+    (``_handle_tc_wake``) as well — not just at turn start.
 
-    max_calls, dup_free, dup_hard = _get_guard_limits(agent)
-    guard = LoopGuard(
-        max_total_calls=max_calls,
-        dup_free_passes=dup_free,
-        dup_hard_block=dup_hard,
-    )
-    agent._executor = ToolExecutor(
-        dispatch_fn=agent._dispatch_tool,
-        make_tool_result_fn=lambda name, result, **kw: agent.service.make_tool_result(
-            name, result, provider=agent._config.provider, **kw
-        ),
-        guard=guard,
-        known_tools=set(agent._intrinsics) | set(agent._tool_handlers),
-        parallel_safe_tools=agent._PARALLEL_SAFE_TOOLS,
-        logger_fn=agent._log,
-        meta_fn=lambda: build_meta(agent),
-    )
-    content = agent._pre_request(msg)
-    meta = build_meta(agent)
-
-    # Molt pressure — warn agent when context is getting full.
-    #
-    # Hard ceiling (>= 95%): publishes a critical notification on every
-    # hit.  No force-wipe — if the agent ignores the warning, the LLM
-    # call will overflow and the adapter-level recovery
-    # (ChatSession._run_with_overflow_recovery) will trim the oldest
-    # entries and retry.
-    #
-    # Graduated warnings (level 1/2/3 below the hard ceiling) are routed
-    # through the .notification/molt.json channel instead of being baked
-    # into user message content. Each level fully replaces the prior file
-    # — same single-slot pattern as soul/email — so the wire only carries
-    # the freshest pressure level. When pressure drops below the warn
-    # threshold the file is cleared so the warning stops re-injecting.
+    Uses ``_molt_warning_counted`` (set at turn boundaries) to prevent
+    incrementing the warning counter more than once per turn — mid-loop
+    calls from ``_process_response`` publish updated notifications but
+    don't double-count.
+    """
     has_molt = "psyche" in agent._intrinsics
+    if not has_molt:
+        return
+
     pressure = agent._session.get_context_pressure()
 
-    if pressure >= agent._config.molt_hard_ceiling and has_molt:
-        # Hard ceiling — publish urgent notification so the agent sees
-        # the warning and can molt voluntarily.  No force-wipe: if the
-        # agent ignores the warning, the LLM call will overflow and the
-        # adapter-level recovery (ChatSession._run_with_overflow_recovery)
-        # will trim the oldest entries and retry.
-        agent._session._compaction_warnings += 1
+    if pressure >= agent._config.molt_hard_ceiling:
+        if not getattr(agent, "_molt_warning_counted", False):
+            agent._session._compaction_warnings += 1
+            agent._molt_warning_counted = True
         warnings = agent._session._compaction_warnings
         max_warnings = agent._config.molt_warnings
         remaining = max(0, max_warnings - warnings)
         lang = agent._config.language
-        level = 3  # highest urgency
+        level = 3
         level_prompt = _t(
             lang,
             "system.molt_warning_level3",
@@ -551,20 +522,14 @@ def _handle_request(agent, msg: Message) -> None:
             },
         )
         agent._log("molt_hard_ceiling_warning", pressure=pressure, ceiling=agent._config.molt_hard_ceiling)
-    elif pressure >= agent._config.molt_pressure and has_molt:
+    elif pressure >= agent._config.molt_pressure:
         max_warnings = agent._config.molt_warnings
-        agent._session._compaction_warnings += 1
+        if not getattr(agent, "_molt_warning_counted", False):
+            agent._session._compaction_warnings += 1
+            agent._molt_warning_counted = True
         warnings = agent._session._compaction_warnings
         remaining = max(0, max_warnings - warnings)
         lang = agent._config.language
-        # Graduated warning — publish to .notification/molt.json.
-        # Each call fully replaces the file, so the wire carries
-        # only the current level. _sync_notifications picks up the
-        # fingerprint change on the next heartbeat tick and routes
-        # it through the synthetic-pair injection (same path as
-        # email/soul). The warning thus appears on the *next* turn,
-        # not this one — acceptable tradeoff: the agent has 3+
-        # turns of buffer before forced wipe.
         from ..intrinsics.system import publish_notification
         level = min(warnings, 3)
         level_prompt = _t(
@@ -594,10 +559,56 @@ def _handle_request(agent, msg: Message) -> None:
         )
     else:
         # Pressure dropped below threshold — clear any stale molt notice
-        # so the wire stops carrying it.
-        if has_molt:
-            from ..intrinsics.system import clear_notification
-            clear_notification(agent._working_dir, "molt")
+        # and reset the warning counter so it doesn't escalate faster
+        # than it should across pressure oscillations.
+        from ..intrinsics.system import clear_notification
+        clear_notification(agent._working_dir, "molt")
+        if agent._session._compaction_warnings > 0:
+            agent._session._compaction_warnings = 0
+
+
+def _handle_request(agent, msg: Message) -> None:
+    """Send request to LLM, process response with tool calls."""
+    from ..llm import LLMResponse
+
+    # Reset per-turn molt warning flag so the counter increments at most
+    # once per turn (mid-loop _check_molt_pressure calls update the
+    # notification but don't double-count).
+    agent._molt_warning_counted = False
+
+    # Splice any queued involuntary tool-call pairs
+    agent._drain_tc_inbox()
+
+    max_calls, dup_free, dup_hard = _get_guard_limits(agent)
+    guard = LoopGuard(
+        max_total_calls=max_calls,
+        dup_free_passes=dup_free,
+        dup_hard_block=dup_hard,
+    )
+    agent._executor = ToolExecutor(
+        dispatch_fn=agent._dispatch_tool,
+        make_tool_result_fn=lambda name, result, **kw: agent.service.make_tool_result(
+            name, result, provider=agent._config.provider, **kw
+        ),
+        guard=guard,
+        known_tools=set(agent._intrinsics) | set(agent._tool_handlers),
+        parallel_safe_tools=agent._PARALLEL_SAFE_TOOLS,
+        logger_fn=agent._log,
+        meta_fn=lambda: build_meta(agent),
+    )
+    content = agent._pre_request(msg)
+    meta = build_meta(agent)
+
+    # Molt pressure — warn agent when context is getting full.
+    _check_molt_pressure(agent)
+
+    # Synchronous notification sync — ensure any just-published molt
+    # warning reaches _pending_notification_meta before session.send()
+    # so the heartbeat race is eliminated for same-turn publishes.
+    try:
+        agent._sync_notifications()
+    except Exception:
+        pass
 
     prefix = render_meta(agent, meta)
     if prefix:
@@ -630,6 +641,9 @@ def _handle_tc_wake(agent, msg: Message) -> None:
     no-op was the bug that left spliced notification pairs unread.
     """
     from ..llm import LLMResponse
+
+    # Reset per-turn molt warning flag (same as _handle_request).
+    agent._molt_warning_counted = False
 
     if agent._chat is None:
         try:
@@ -738,6 +752,9 @@ def _handle_tc_wake(agent, msg: Message) -> None:
         agent._last_usage = response.usage
         agent._save_chat_history(ledger_source="tc_wake")
         _process_response(agent, response, ledger_source="tc_wake")
+        # Notification-driven turns should also check pressure so
+        # warnings fire even when the agent is woken by mail/soul.
+        _check_molt_pressure(agent)
     except Exception as e:
         if iface.has_pending_tool_calls():
             # tool_completed=True: the wire-drive path only fires when the
@@ -880,6 +897,18 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         response = _send_with_watchdog(agent, tool_results)
         agent._last_usage = response.usage
         agent._save_chat_history(ledger_source=ledger_source)
+
+        # Mid-loop pressure check — fire warnings during extended tool
+        # chains so the agent doesn't go from below-threshold to hard
+        # ceiling in a single turn with zero warnings.
+        _check_molt_pressure(agent)
+        # Synchronous notification sync — same pattern as _handle_request:
+        # ensure any just-published molt warning reaches
+        # _pending_notification_meta before the next session.send().
+        try:
+            agent._sync_notifications()
+        except Exception:
+            pass
 
     final_text = "\n".join(collected_text_parts)
     has_errors = bool(collected_errors)

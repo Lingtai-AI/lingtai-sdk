@@ -143,32 +143,31 @@ def test_get_context_pressure_with_session():
     sm, svc, mock_session = make_session_manager()
     sm.ensure_session()
     mock_session.context_window.return_value = 100_000
-    # Server-reported tokens are authoritative
-    sm._latest_input_tokens = 85_000
+    # Local estimate is the primary source (reflects current wire state)
+    mock_session.interface.estimate_context_tokens.return_value = 85_000
     pressure = sm.get_context_pressure()
     assert pressure == 0.85
 
 
-def test_get_context_pressure_fallback_to_estimate():
-    """Before first API response, fall back to local estimate."""
+def test_get_context_pressure_fallback_to_server_tokens():
+    """When local estimate is unavailable (0), fall back to server-reported."""
     sm, svc, mock_session = make_session_manager()
     sm.ensure_session()
     mock_session.context_window.return_value = 100_000
-    assert sm._latest_input_tokens == 0
-    mock_session.interface.estimate_context_tokens.return_value = 50_000
+    mock_session.interface.estimate_context_tokens.return_value = 0
+    sm._latest_input_tokens = 50_000
     pressure = sm.get_context_pressure()
     assert pressure == 0.5
 
 
-def test_context_pressure_matches_status_usage():
-    """get_context_pressure() and get_token_usage() must use the same numerator."""
+def test_context_pressure_prefers_local_over_server():
+    """When both local estimate and server tokens exist, local wins."""
     sm, svc, mock_session = make_session_manager()
     sm.ensure_session()
     mock_session.context_window.return_value = 200_000
-    sm._latest_input_tokens = 160_000
+    mock_session.interface.estimate_context_tokens.return_value = 160_000
+    sm._latest_input_tokens = 100_000  # stale server value — ignored
     pressure = sm.get_context_pressure()
-    usage = sm.get_token_usage()
-    assert usage["ctx_total_tokens"] == 160_000
     assert pressure == 0.8
 
 

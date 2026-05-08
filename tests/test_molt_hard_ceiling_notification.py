@@ -177,7 +177,8 @@ class TestHardCeilingTwoPhase:
 
     def test_pressure_drop_below_threshold_clears_notification(self, tmp_path):
         """If pressure drops below molt_pressure, the notification file
-        is cleared — but the counter stays so a future spike wipes."""
+        is cleared and the counter resets so warnings don't escalate
+        faster than they should across pressure oscillations."""
         agent = _make_agent_with_psyche(tmp_path)
         agent.start()
         try:
@@ -196,8 +197,8 @@ class TestHardCeilingTwoPhase:
             _send_request(agent, "turn 2")
             # Notification cleared by the else branch
             assert not notif_path.is_file()
-            # Counter stays at 1 (not cleared by pressure drop)
-            assert agent._session._compaction_warnings == 1
+            # Counter resets when pressure drops below threshold
+            assert agent._session._compaction_warnings == 0
 
         finally:
             agent.stop()

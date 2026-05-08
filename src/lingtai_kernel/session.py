@@ -303,11 +303,13 @@ class SessionManager:
         ctx_window = self._config.context_limit or self._chat.context_window()
         if ctx_window <= 0:
             return 0.0
-        # Prefer server-reported input tokens (authoritative).
-        # Fall back to local estimate only before the first API response.
-        tokens = self._latest_input_tokens
+        # Use local estimate (reflects current wire state including the
+        # message about to be sent) as the primary source.  Fall back to
+        # server-reported input tokens from the last response only when
+        # the local estimate is unavailable (e.g. empty interface).
+        tokens = self._chat.interface.estimate_context_tokens()
         if tokens <= 0:
-            tokens = self._chat.interface.estimate_context_tokens()
+            tokens = self._latest_input_tokens
         return tokens / ctx_window if tokens > 0 else 0.0
 
     # ------------------------------------------------------------------
