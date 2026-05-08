@@ -84,6 +84,64 @@ class TestSoulHandle:
         assert "error" in result
         assert "ongoing" in result["error"]
 
+    def test_flow_voluntary_waits_for_idle(self, monkeypatch):
+        """Voluntary flow daemon thread waits for _idle event before
+        calling _run_consultation_fire (race condition fix)."""
+        agent = _make_mock_agent()
+        agent._soul_fire_lock = threading.Lock()
+        agent._soul_delay = 5.0
+        idle_event = threading.Event()
+        # Simulate ACTIVE — _idle is cleared
+        idle_event.clear()
+        agent._idle = idle_event
+
+        fire_called = threading.Event()
+        original_fire = soul._run_consultation_fire
+
+        def tracking_fire(a):
+            fire_called.set()
+
+        monkeypatch.setattr(
+            "lingtai_kernel.intrinsics.soul.flow._run_consultation_fire",
+            tracking_fire,
+        )
+
+        result = soul.handle(agent, {"action": "flow"})
+        assert result.get("status") == "ok"
+
+        # Fire should NOT have been called yet — still ACTIVE
+        assert not fire_called.wait(timeout=0.2)
+
+        # Simulate transition to IDLE
+        idle_event.set()
+        assert fire_called.wait(timeout=2.0)
+
+    def test_flow_voluntary_timeout_when_never_idle(self, monkeypatch):
+        """Voluntary flow gives up if IDLE never arrives within timeout."""
+        agent = _make_mock_agent()
+        agent._soul_fire_lock = threading.Lock()
+        agent._soul_delay = 0.3  # Short timeout for test speed
+        idle_event = threading.Event()
+        idle_event.clear()
+        agent._idle = idle_event
+
+        fire_called = threading.Event()
+
+        def tracking_fire(a):
+            fire_called.set()
+
+        monkeypatch.setattr(
+            "lingtai_kernel.intrinsics.soul.flow._run_consultation_fire",
+            tracking_fire,
+        )
+
+        result = soul.handle(agent, {"action": "flow"})
+        assert result.get("status") == "ok"
+
+        # Wait longer than the timeout — fire should never be called
+        time.sleep(0.6)
+        assert not fire_called.is_set()
+
     def test_unknown_action_returns_error(self):
         agent = _make_mock_agent()
         result = soul.handle(agent, {"action": "on"})
@@ -154,9 +212,12 @@ class TestSoulTimer:
         assert agent._soul_delay == 300.0
         assert agent._soul_timer is None
 
-    def test_soul_timer_runs_perpetual_regardless_of_state(self, tmp_path):
-        """Timer is not state-gated — runs from boot, perpetually rescheduling
-        in _soul_whisper finally. State transitions don't kick the timer."""
+    def test_soul_timer_lifecycle_follows_idle_state(self, tmp_path):
+        """Timer starts on IDLE entry and cancels on IDLE exit.
+
+        _set_state starts a soul timer when entering IDLE and cancels it
+        when leaving IDLE (to ACTIVE, STUCK, etc.).
+        """
         from lingtai_kernel import AgentState, BaseAgent
         agent = BaseAgent(
             service=_make_mock_service(),
@@ -165,22 +226,18 @@ class TestSoulTimer:
         )
         agent._soul_delay = 300.0
 
-        # State transitions must NOT touch the timer.
+        # Going ACTIVE from initial IDLE cancels the timer (if any).
         agent._set_state(AgentState.ACTIVE, reason="test")
         assert agent._soul_timer is None
-        agent._set_state(AgentState.IDLE, reason="done")
-        assert agent._soul_timer is None
 
-        # Explicit start (the path normally taken by start() at boot).
-        agent._start_soul_timer()
+        # Entering IDLE starts a fresh timer.
+        agent._set_state(AgentState.IDLE, reason="done")
         assert agent._soul_timer is not None
         assert agent._soul_timer.is_alive()
 
-        # Going active does NOT cancel the timer — cadence persists.
+        # Leaving IDLE cancels it.
         agent._set_state(AgentState.ACTIVE, reason="new mail")
-        assert agent._soul_timer is not None
-
-        agent._cancel_soul_timer()
+        assert agent._soul_timer is None
 
     def test_soul_timer_not_started_when_shutdown(self, tmp_path):
         """_start_soul_timer is a no-op when _shutdown is set."""
@@ -231,16 +288,62 @@ class TestSoulTimer:
         assert agent._soul_timer is None
 
 
+class TestSoulFireAllowed:
+    """_soul_fire_allowed compares by string value, not enum identity."""
+
+    def test_allows_idle_state(self):
+        from lingtai_kernel.intrinsics.soul.flow import _soul_fire_allowed
+        from lingtai_kernel.state import AgentState
+        agent = MagicMock()
+        agent._state = AgentState.IDLE
+        assert _soul_fire_allowed(agent) is True
+
+    def test_rejects_active_state(self):
+        from lingtai_kernel.intrinsics.soul.flow import _soul_fire_allowed
+        from lingtai_kernel.state import AgentState
+        agent = MagicMock()
+        agent._state = AgentState.ACTIVE
+        assert _soul_fire_allowed(agent) is False
+
+    def test_allows_foreign_enum_with_idle_value(self):
+        """Simulates stale-enum mismatch: a different Enum class whose
+        .value is 'idle' should still be accepted."""
+        import enum
+        from lingtai_kernel.intrinsics.soul.flow import _soul_fire_allowed
+
+        class ForeignState(enum.Enum):
+            IDLE = "idle"
+
+        agent = MagicMock()
+        agent._state = ForeignState.IDLE
+        assert _soul_fire_allowed(agent) is True
+
+    def test_rejects_foreign_enum_with_active_value(self):
+        import enum
+        from lingtai_kernel.intrinsics.soul.flow import _soul_fire_allowed
+
+        class ForeignState(enum.Enum):
+            ACTIVE = "active"
+
+        agent = MagicMock()
+        agent._state = ForeignState.ACTIVE
+        assert _soul_fire_allowed(agent) is False
+
+
 def test_consultation_fire_discards_late_result_after_state_change(monkeypatch):
     """If the agent becomes STUCK while consultation is running, the late
     result must not enqueue a TC wake into an unsafe interface window.
+
+    The fire starts while IDLE (passes the gate), but the batch callback
+    transitions the agent to STUCK mid-flight — the post-batch state
+    check must discard the result.
     """
     from lingtai_kernel.intrinsics.soul import flow
     from lingtai_kernel.llm.interface import TextBlock
     from lingtai_kernel.state import AgentState
 
     agent = MagicMock()
-    agent._state = AgentState.ACTIVE
+    agent._state = AgentState.IDLE  # Must start IDLE to pass the gate
     agent._logs = []
     agent._tc_inbox.enqueue = MagicMock()
 
