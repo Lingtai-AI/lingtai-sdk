@@ -115,7 +115,24 @@ def get_schema(lang: str = "en") -> dict:
                 "description": t(lang, "avatar.confirm"),
             },
         },
-        "required": ["name"],
+        "allOf": [
+            {
+                "if": {
+                    "not": {
+                        "properties": {"action": {"const": "rules"}},
+                        "required": ["action"],
+                    },
+                },
+                "then": {"required": ["name"]},
+            },
+            {
+                "if": {
+                    "properties": {"action": {"const": "rules"}},
+                    "required": ["action"],
+                },
+                "then": {"required": ["rules_content"]},
+            },
+        ],
     }
 
 

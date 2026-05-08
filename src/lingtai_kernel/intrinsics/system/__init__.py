@@ -12,11 +12,11 @@ Actions (voluntary, agent-callable):
     presets   — list available presets in the agent's library
     dismiss   — dismiss one or more system notifications by notif_id
 
-Action (involuntary, kernel-synthesized only — NOT callable by the agent):
-    notification — synthesized by the kernel for mail arrival, bounce, and
-                   future MCP listener events. Spliced into the wire chat
-                   via tc_inbox. The public ``handle()`` dispatch rejects
-                   this action with an error message.
+Action (kernel-synthesized by default — also callable voluntarily by the agent):
+    notification — returns the current state of all notification channels
+                   by reading ``.notification/*.json``. The kernel also
+                   synthesizes this call on the agent's behalf when changes
+                   arrive during IDLE/ASLEEP states.
 
 Identity, runtime, and stamina state surface via other channels:
     - identity prompt section — every turn, cached prefix
