@@ -15,7 +15,7 @@ class GeminiVisionService(VisionService):
         self,
         *,
         api_key: str,
-        model: str = "gemini-2.5-flash",
+        model: str = "gemini-3-flash-preview",
     ) -> None:
         from google import genai
         from google.genai import types
