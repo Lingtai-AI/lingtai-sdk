@@ -224,23 +224,26 @@ def _parse_interaction_response(interaction) -> LLMResponse:
     tool_calls: list[ToolCall] = []
     thoughts: list[str] = []
 
-    for output in interaction.outputs or []:
-        otype = getattr(output, "type", None)
-        if otype == "text":
-            t = getattr(output, "text", None)
-            if t:
-                text_parts.append(t)
+    for step in interaction.steps or []:
+        otype = getattr(step, "type", None)
+        if otype == "model_output":
+            # ModelOutputStep.content is Optional[List[Content]]
+            for content_item in getattr(step, "content", None) or []:
+                if getattr(content_item, "type", None) == "text":
+                    t = getattr(content_item, "text", None)
+                    if t:
+                        text_parts.append(t)
         elif otype == "function_call":
             tool_calls.append(
                 ToolCall(
-                    name=output.name.removeprefix("default_api:"),
-                    args=dict(output.arguments) if output.arguments else {},
-                    id=output.id,
+                    name=step.name.removeprefix("default_api:"),
+                    args=dict(step.arguments) if step.arguments else {},
+                    id=step.id,
                 )
             )
         elif otype == "thought":
-            # ThoughtContent.summary is a list of TextContent/ImageContent
-            for summary_item in getattr(output, "summary", None) or []:
+            # ThoughtStep.summary is a list of TextContent/ImageContent
+            for summary_item in getattr(step, "summary", None) or []:
                 if getattr(summary_item, "type", None) == "text":
                     t = getattr(summary_item, "text", None)
                     if t:
@@ -422,7 +425,7 @@ class InteractionsChatSession(ChatSession):
         self._interaction_id = interaction.id
         response = _parse_interaction_response(interaction)
 
-        # Record model turn from response outputs
+        # Record model turn from response steps
         self._record_model_turn(interaction)
 
         return response
@@ -468,12 +471,38 @@ class InteractionsChatSession(ChatSession):
         for event in self._client.interactions.create(**kwargs):
             etype = getattr(event, "event_type", None)
 
-            if etype == "interaction.start":
+            if etype == "interaction.created":
                 interaction_id = getattr(
                     getattr(event, "interaction", event), "id", None
                 )
 
-            elif etype == "content.delta":
+            elif etype == "step.start":
+                # Function calls and thoughts arrive fully formed here
+                step = getattr(event, "step", event)
+                stype = getattr(step, "type", None)
+                if stype == "function_call":
+                    acc.add_tool(ToolCall(
+                        name=step.name.removeprefix("default_api:"),
+                        args=dict(step.arguments) if step.arguments else {},
+                        id=getattr(step, "id", None),
+                    ))
+                elif stype == "thought":
+                    for summary_item in getattr(step, "summary", None) or []:
+                        if getattr(summary_item, "type", None) == "text":
+                            t = getattr(summary_item, "text", None)
+                            if t:
+                                acc.add_thought(t)
+                elif stype == "model_output":
+                    # Initial text from step.content
+                    for content_item in getattr(step, "content", None) or []:
+                        if getattr(content_item, "type", None) == "text":
+                            t = getattr(content_item, "text", None)
+                            if t:
+                                acc.add_text(t)
+                                if on_chunk:
+                                    on_chunk(t)
+
+            elif etype == "step.delta":
                 delta = getattr(event, "delta", None)
                 if delta is None:
                     continue
@@ -484,18 +513,8 @@ class InteractionsChatSession(ChatSession):
                         acc.add_text(t)
                         if on_chunk:
                             on_chunk(t)
-                elif dtype == "function_call":
-                    acc.add_tool(ToolCall(
-                        name=delta.name.removeprefix("default_api:"),
-                        args=dict(delta.arguments) if delta.arguments else {},
-                        id=getattr(delta, "id", None),
-                    ))
-                elif dtype == "thought":
-                    t = getattr(delta, "thought", None)
-                    if t:
-                        acc.add_thought(t)
 
-            elif etype == "interaction.complete":
+            elif etype == "interaction.completed":
                 interaction_obj = getattr(event, "interaction", event)
                 interaction_id = getattr(interaction_obj, "id", interaction_id)
                 usage_obj = getattr(interaction_obj, "usage", None)
@@ -513,7 +532,7 @@ class InteractionsChatSession(ChatSession):
 
         result = acc.finalize(usage=usage)
 
-        # Record model turn from accumulated outputs
+        # Record model turn from accumulated steps
         model_content = []
         if result.thoughts:
             model_content.append(
@@ -579,25 +598,27 @@ class InteractionsChatSession(ChatSession):
         return self._interaction_id
 
     def _record_model_turn(self, interaction) -> None:
-        """Record the model's response outputs as a client-side history turn."""
+        """Record the model's response steps as a client-side history turn."""
         content_blocks = []
-        for output in interaction.outputs or []:
-            otype = getattr(output, "type", None)
-            if otype == "text":
-                t = getattr(output, "text", None)
-                if t:
-                    content_blocks.append({"type": "text", "text": t})
+        for step in interaction.steps or []:
+            otype = getattr(step, "type", None)
+            if otype == "model_output":
+                for content_item in getattr(step, "content", None) or []:
+                    if getattr(content_item, "type", None) == "text":
+                        t = getattr(content_item, "text", None)
+                        if t:
+                            content_blocks.append({"type": "text", "text": t})
             elif otype == "function_call":
                 content_blocks.append(
                     {
                         "type": "function_call",
-                        "id": output.id,
-                        "name": output.name.removeprefix("default_api:"),
-                        "arguments": dict(output.arguments) if output.arguments else {},
+                        "id": step.id,
+                        "name": step.name.removeprefix("default_api:"),
+                        "arguments": dict(step.arguments) if step.arguments else {},
                     }
                 )
             elif otype == "thought":
-                for summary_item in getattr(output, "summary", None) or []:
+                for summary_item in getattr(step, "summary", None) or []:
                     if getattr(summary_item, "type", None) == "text":
                         t = getattr(summary_item, "text", None)
                         if t:
