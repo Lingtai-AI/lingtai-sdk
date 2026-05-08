@@ -221,11 +221,6 @@ def _run_consultation_fire(agent) -> None:
         diary = _render_current_diary(agent)
         voices = _run_consultation_batch(agent)
 
-        if not _soul_fire_allowed(agent):
-            agent._log("consultation_discarded_state",
-                       fire_id=fire_id, state=agent._state.value)
-            return
-
         sources = [v.get("source", "unknown") for v in voices]
         outcome = "ok" if voices else "empty"
 
