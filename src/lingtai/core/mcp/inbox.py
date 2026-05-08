@@ -65,7 +65,9 @@ _MAX_SUBJECT_LEN = 200
 # upstream MCP construction (usernames, email addresses) and subject is
 # already validated <= _MAX_SUBJECT_LEN by validate_event. One preview entry
 # per consumed event — list length is naturally bounded by MAX_EVENTS_PER_CYCLE.
-_PREVIEW_FIELD_CAP = 200   # chars of body to inline as the snippet
+# 10000 chars ≈ 2500 tokens — generous cap for IM conversations (telegram, etc.)
+# that need to show recent message history inline in the notification.
+_PREVIEW_FIELD_CAP = 10000  # chars of body to inline as the snippet (raised for IM conversations)
 
 
 # ---------------------------------------------------------------------------
