@@ -148,10 +148,14 @@ def _soul_fire_allowed(agent) -> bool:
     """True when soul-flow may inject results into the live agent.
 
     Soul flow only fires while IDLE — not during ACTIVE work.
-    """
-    from ...state import AgentState
 
-    return agent._state == AgentState.IDLE
+    Compares by string value (``agent._state.value == "idle"``) rather
+    than enum identity to guard against stale-enum-mismatch scenarios
+    (e.g. installed package AgentState vs hot-reloaded runtime copy).
+    """
+    state = agent._state
+    state_val = state.value if hasattr(state, "value") else str(state)
+    return state_val == "idle"
 
 
 def _shape_soul_voices(voices_for_pair: list[dict]) -> list[dict]:
@@ -190,8 +194,12 @@ def _run_consultation_fire(agent) -> None:
     import secrets as _secrets
     from ...message import _make_message, MSG_TC_WAKE
 
+    state = agent._state
+    state_val = state.value if hasattr(state, "value") else str(state)
+    agent._log("soul_fire_gate_check", state=state_val,
+               state_type=type(state).__qualname__)
     if not _soul_fire_allowed(agent):
-        agent._log("consultation_skipped_state", state=agent._state.value)
+        agent._log("consultation_skipped_state", state=state_val)
         return
 
     lock = getattr(agent, "_soul_fire_lock", None)
