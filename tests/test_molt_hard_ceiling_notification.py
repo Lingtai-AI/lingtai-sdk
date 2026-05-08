@@ -101,9 +101,10 @@ class TestHardCeilingTwoPhase:
         finally:
             agent.stop()
 
-    def test_second_hard_ceiling_hit_force_wipes(self, tmp_path):
+    def test_second_hard_ceiling_hit_no_force_wipe(self, tmp_path):
         """When pressure is at hard ceiling AND warnings > 0,
-        context_forget IS called (force-wipe)."""
+        context_forget is NOT called (force-wipe removed).
+        Warnings accumulate instead."""
         agent = _make_agent_with_psyche(tmp_path)
         agent.start()
         try:
@@ -122,19 +123,19 @@ class TestHardCeilingTwoPhase:
             ) as mock_forget:
                 _send_request(agent)
 
-                # Force-wipe MUST fire
-                mock_forget.assert_called_once()
+                # Force-wipe must NOT fire (removed in PR #32)
+                mock_forget.assert_not_called()
 
-            # Counter reset after wipe
-            assert agent._session._compaction_warnings == 0
+            # Counter increments (warnings accumulate, not reset)
+            assert agent._session._compaction_warnings == 2
 
         finally:
             agent.stop()
 
     def test_pressure_drop_between_turns_preserves_counter(self, tmp_path):
         """If pressure drops below hard ceiling after the first warning,
-        the counter stays non-zero. When pressure climbs back up, the
-        next hard-ceiling hit force-wipes immediately."""
+        the counter stays non-zero. When pressure climbs back up,
+        warnings continue to accumulate (no force-wipe)."""
         agent = _make_agent_with_psyche(tmp_path)
         agent.start()
         try:
@@ -160,15 +161,16 @@ class TestHardCeilingTwoPhase:
             assert agent._session._compaction_warnings == 2
 
             # Turn 3: pressure spikes back to hard ceiling.
-            # Counter is > 0 → force-wipe.
+            # Counter is > 0, but force-wipe is removed (PR #32).
+            # Warnings accumulate instead.
             agent._session.get_context_pressure = lambda: 0.97
 
             with patch(
                 "lingtai_kernel.intrinsics.psyche.context_forget"
             ) as mock_forget:
                 _send_request(agent, "turn 3")
-                mock_forget.assert_called_once()
-            assert agent._session._compaction_warnings == 0
+                mock_forget.assert_not_called()
+            assert agent._session._compaction_warnings == 3
 
         finally:
             agent.stop()
