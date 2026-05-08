@@ -500,7 +500,7 @@ def _run_consultation_batch(agent) -> list[dict]:
     import random
     import threading
 
-    K = max(0, int(getattr(agent._config, "consultation_past_count", 2)))
+    K = max(0, int(getattr(agent._config, "consultation_past_count", 4)))
 
     # Build work items.
     work: list[tuple[str, "ChatInterface"]] = []
@@ -515,10 +515,17 @@ def _run_consultation_batch(agent) -> list[dict]:
     if insights_iface is not None and insights_iface.entries:
         work.append(("insights", insights_iface))
 
-    # Sample K snapshot paths; load each.
+    # Sample K snapshot paths: half from recent, half from old.
+    # When K=4, picks 2 most-recent + 2 oldest for a tactical mix.
     paths = _list_snapshot_paths(agent)
     if paths and K > 0:
-        sampled = random.sample(paths, min(K, len(paths)))
+        n = min(K, len(paths))
+        half = n // 2
+        remainder = n - half
+        recent = paths[-half:] if half else []
+        old = paths[:remainder] if remainder else []
+        sampled = recent + old
+        random.shuffle(sampled)
         for path in sampled:
             iface = _load_snapshot_interface(path)
             if iface is None or not iface.entries:
