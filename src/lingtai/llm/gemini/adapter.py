@@ -695,8 +695,7 @@ class GeminiAdapter(LLMAdapter):
         interaction_id: str | None = None,
         context_window: int = 0,
     ) -> ChatSession:
-        # Check if Interactions API is enabled
-        use_interactions = True
+        use_interactions = True  # Interactions API is the primary path
 
         # Convert interface to seed turns for history seeding
         seed_turns: list[dict] | None = None
@@ -725,17 +724,8 @@ class GeminiAdapter(LLMAdapter):
         config_kwargs["system_instruction"] = system_prompt
 
         # Only send thinking_config for Gemini 3+ models.
-        # Per-call `thinking` param indicates the tier: "high" = smart model
-        # (orchestrator), "low" = sub-agent. Config overrides per tier.
         if _supports_thinking(model):
-            GEMINI_THINKING_MODEL = "high"
-            GEMINI_THINKING_SUB_AGENT = "high"
-
-            if thinking in ("high", "default"):
-                effective = GEMINI_THINKING_MODEL
-            else:
-                effective = GEMINI_THINKING_SUB_AGENT
-            tc = _thinking_config(effective)
+            tc = _thinking_config("high")
             if tc is not None:
                 config_kwargs["thinking_config"] = tc
 
@@ -798,16 +788,7 @@ class GeminiAdapter(LLMAdapter):
         # Generation config (thinking + tool_choice)
         gen_config: dict[str, Any] = {}
         if _supports_thinking(model):
-            GEMINI_THINKING_MODEL = "high"
-            GEMINI_THINKING_SUB_AGENT = "high"
-
-            if thinking in ("high", "default"):
-                effective = GEMINI_THINKING_MODEL
-            else:
-                effective = GEMINI_THINKING_SUB_AGENT
-            if effective != "off":
-                level_upper = effective.upper() if effective != "default" else "LOW"
-                gen_config["thinking_level"] = level_upper.lower()
+            gen_config["thinking_level"] = "high"
 
         if force_tool_call and tools:
             gen_config["tool_choice"] = "any"

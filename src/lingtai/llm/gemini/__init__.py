@@ -1,3 +1,3 @@
-from .adapter import GeminiAdapter, GeminiChatSession
+from .adapter import GeminiAdapter, GeminiChatSession, InteractionsChatSession
 
-__all__ = ["GeminiAdapter", "GeminiChatSession"]
+__all__ = ["GeminiAdapter", "GeminiChatSession", "InteractionsChatSession"]
