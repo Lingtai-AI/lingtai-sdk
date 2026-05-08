@@ -21,10 +21,10 @@ Provider-agnostic LLM protocol layer. This folder defines the canonical chat log
 
 ## Connections
 
-- `base_agent.py` imports kernel LLM types for service injection, tool execution, and synthetic history repair (`base_agent.py:31-35`, `base_agent.py:752`, `base_agent.py:1012`, `base_agent.py:1208`).
+- `base_agent.py` imports kernel LLM types for service injection, tool execution, and synthetic history repair (`base_agent/__init__.py:29-35`, `base_agent/__init__.py:754`, `base_agent/__init__.py:1003`, `base_agent/__init__.py:1208`).
 - `session.py` imports `ChatSession`, `FunctionSchema`, `LLMResponse`, and `LLMService` to own session lifecycle and token/context bookkeeping (`session.py:12-17`).
 - `tool_executor.py` consumes `ToolCall` (`tool_executor.py:8`); `tc_inbox.py` (legacy, dormant — preserved for back-compat until Phase 3) consumes `ToolCallBlock`/`ToolResultBlock` for synthetic pairs (`tc_inbox.py:33`). The same canonical block types are now used by `BaseAgent._inject_notification_pair` to splice synthesized `system(action="notification")` `(call, result)` pairs into the wire, replacing the legacy queue path.
-- `intrinsics/psyche.py` and `intrinsics/soul/` use canonical blocks/interfaces for molt replay and soul-flow consultation (`intrinsics/psyche.py:37`, `intrinsics/soul/inquiry.py:15`, `intrinsics/soul/consultation.py:196`, `intrinsics/soul/consultation.py:359`, `intrinsics/soul/consultation.py:499`).
+- `intrinsics/psyche.py` and `intrinsics/soul/` use canonical blocks/interfaces for molt replay and soul-flow consultation (`intrinsics/psyche/_molt.py:13`, `intrinsics/soul/inquiry.py:15`, `intrinsics/soul/consultation.py:196`, `intrinsics/soul/consultation.py:359`, `intrinsics/soul/consultation.py:499`).
 - Outbound from this folder is minimal: `ChatInterface.estimate_context_tokens()` lazy-imports `token_counter.count_tokens` (`llm/interface.py:764`).
 - Wrapper boundary: `src/lingtai/llm/service.py` provides the concrete `LLMService` subclass (`src/lingtai/llm/service.py:25`); wrapper adapters import kernel types, but the kernel does not import the wrapper.
 

@@ -20,9 +20,9 @@ Kernel-side service ABCs and implementations. Services back cross-cutting kernel
 
 ## Connections
 
-- `BaseAgent.__init__` always creates `JSONLLoggingService` and stores it as `_log_service` (`base_agent.py:215-221`).
-- `BaseAgent` receives a `MailService | None` constructor argument (`base_agent.py:231`); missing mail service disables the email intrinsic (`base_agent.py:160`).
-- Email boot wires `FilesystemMailService.listen(on_message=agent._on_mail)` through the email intrinsic (`base_agent.py:437-438`).
+- `BaseAgent.__init__` always creates `JSONLLoggingService` and stores it as `_log_service` (`base_agent/__init__.py:214-221`).
+- `BaseAgent` receives a `MailService | None` constructor argument (`base_agent/__init__.py:230`); missing mail service disables the email intrinsic (`base_agent/__init__.py:158`).
+- Email boot wires `FilesystemMailService.listen(on_message=agent._on_mail)` through the email intrinsic (`base_agent/__init__.py:441-442`).
 - `services/mail.py` imports `handshake.{is_agent,is_alive,resolve_address}` for routing/liveness (`services/mail.py:24`) and late-imports `_new_mailbox_id` from `intrinsics.email` inside `send()` to avoid a module-level cycle (`services/mail.py:165`).
 
 ## Composition

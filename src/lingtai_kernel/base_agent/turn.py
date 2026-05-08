@@ -524,7 +524,7 @@ def _handle_request(agent, msg: Message) -> None:
             _psyche.context_forget(agent)
             agent._session._compaction_warnings = 0
             clear_notification(agent._working_dir, "molt")
-            content = f"{_t(lang, 'system.molt_wiped')}\n\n{content}"
+            content = f"{_t(lang, 'system.molt_wiped')}\n[Pressure: {pressure:.0%}, hard ceiling: {agent._config.molt_hard_ceiling:.0%}]\n\n{content}"
         else:
             # Hard ceiling, first hit — publish urgent notification so
             # the agent gets one turn to see the warning and molt
@@ -575,7 +575,7 @@ def _handle_request(agent, msg: Message) -> None:
             _psyche.context_forget(agent)
             agent._session._compaction_warnings = 0
             clear_notification(agent._working_dir, "molt")
-            content = f"{_t(lang, 'system.molt_wiped')}\n\n{content}"
+            content = f"{_t(lang, 'system.molt_wiped')}\n[Pressure: {pressure:.0%}, hard ceiling: {agent._config.molt_hard_ceiling:.0%}]\n\n{content}"
         else:
             # Graduated warning — publish to .notification/molt.json.
             # Each call fully replaces the file, so the wire carries

@@ -7,10 +7,10 @@ Agent identity, working notes, and context lifecycle — the "bare essentials of
 ## Components
 
 - `__init__.py` — Package surface. Re-exports all public API for backward compatibility. Contains:
-  - `get_description` / `get_schema` (`__init__.py:53-103`) — tool registration.
-  - `_VALID_ACTIONS` / `_DISPATCH` (`__init__.py:112-129`) — action→handler dispatch table replacing the former `globals().get()` pattern.
-  - `handle()` (`__init__.py:132-155`) — main dispatcher.
-  - `boot()` (`__init__.py:162-172`) — boot-time hook: loads lingtai + pad, registers post-molt reload callback.
+  - `get_description` / `get_schema` (`__init__.py:41-93`) — tool registration.
+  - `_VALID_ACTIONS` / `_DISPATCH` (`__init__.py:97-112`) — action→handler dispatch table replacing the former `globals().get()` pattern.
+  - `handle()` (`__init__.py:114-140`) — main dispatcher.
+  - `boot()` (`__init__.py:142-151`) — boot-time hook: loads lingtai + pad, registers post-molt reload callback.
 
 - `_snapshots.py` — Snapshot and summary persistence for the molt machinery.
   - `SNAPSHOT_SCHEMA_VERSION` (`_snapshots.py:16`) — schema version tag for snapshots.
@@ -28,10 +28,10 @@ Agent identity, working notes, and context lifecycle — the "bare essentials of
   - `_lingtai_load()` (`_lingtai.py:23-54`) — merge `system/covenant.md` + `system/lingtai.md` and write to the protected `covenant` prompt section.
 
 - `_molt.py` — Context molt core, name handlers, and system-initiated molt.
-  - `_context_molt()` (`_molt.py:21-223`) — agent-initiated molt: validates summary & keep_tool_calls, snapshots, archives history, wipes wire session, replays the molt's own ToolCallBlock + kept pairs into the fresh interface. The core of the psyche. **Post-redesign:** also `rmtree`s `.notification/` and resets `agent._notification_fp` / `_notification_block_id` / `_pending_notification_meta` so the next sync sees a fresh empty state. Memory loss includes notification state (the empty window post-molt is intentional). Still calls `agent._tc_inbox.drain()` defensively for pre-redesign items that survived a restart.
+  - `_context_molt()` (`_molt.py:21-223`) — agent-initiated molt: validates summary & keep_tool_calls, snapshots, archives history, wipes wire session, replays the molt's own ToolCallBlock + kept pairs into the fresh interface. The core of the psyche. Resets wire-level tracking (`_notification_block_id` / `_pending_notification_meta`) but preserves `.notification/` files and `_notification_fp` — notifications are system state, not conversation memory. Still calls `agent._tc_inbox.drain()` defensively for pre-redesign items that survived a restart.
   - `_name_set()` (`_molt.py:230-239`) — set the agent's true (immutable) name.
   - `_name_nickname()` (`_molt.py:242-245`) — set or clear the agent's mutable nickname.
-  - `context_forget()` (`_molt.py:252-362`) — system-initiated forced molt: synthesizes a complete ToolCallBlock+ToolResultBlock pair, wipes context, replays them into the fresh interface. Called by `base_agent` when the warning ladder is exhausted or an external `.forget` signal arrives. Same `.notification/` clearing as `_context_molt`.
+  - `context_forget()` (`_molt.py:252-362`) — system-initiated forced molt: synthesizes a complete ToolCallBlock+ToolResultBlock pair, wipes context, replays them into the fresh interface. Called by `base_agent` when the warning ladder is exhausted or an external `.forget` signal arrives. Same notification tracking reset as `_context_molt` (wire-level only; `.notification/` files survive).
 
 ## Connections
 

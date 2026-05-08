@@ -405,14 +405,15 @@ def test_submit_via_system_alias(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_molt_clears_notification_dir(tmp_path: Path) -> None:
-    """After molt, the .notification/ dir is gone and the agent's
-    fingerprint state is reset."""
+def test_molt_preserves_notification_dir(tmp_path: Path) -> None:
+    """After molt, the .notification/ dir and its files survive — they are
+    system state, not conversation memory.  In-memory tracking is reset
+    (block_id, pending_meta) but the on-disk files and fingerprint persist."""
     publish(tmp_path, "email", {"count": 3})
     publish(tmp_path, "soul", {"voices": []})
     assert (tmp_path / ".notification").is_dir()
 
-    # Stub agent with the bare minimum the molt clear logic needs.
+    # Stub agent with the bare minimum the molt reset logic needs.
     @dataclass
     class _MoltStub:
         _working_dir: Path = tmp_path
@@ -421,20 +422,18 @@ def test_molt_clears_notification_dir(tmp_path: Path) -> None:
         _pending_notification_meta: str | None = "stale"
         _appendix_ids_by_source: dict = field(default_factory=dict)
 
-    # We exercise the rmtree+reset block directly, since the rest of
-    # _context_molt builds a session and runs hooks we don't care
-    # about for this test.
     agent = _MoltStub()
-    import shutil
-    notif_dir = agent._working_dir / ".notification"
-    if notif_dir.is_dir():
-        shutil.rmtree(notif_dir)
-    agent._notification_fp = ()
+    # Only reset in-memory tracking; notification files survive molt.
     agent._notification_block_id = None
     agent._pending_notification_meta = None
 
-    assert not (tmp_path / ".notification").exists()
-    assert agent._notification_fp == ()
+    # .notification/ directory and files should still exist
+    assert (tmp_path / ".notification").is_dir()
+    assert (tmp_path / ".notification" / "email.json").is_file()
+    assert (tmp_path / ".notification" / "soul.json").is_file()
+    # _notification_fp keeps its value (files still on disk)
+    assert agent._notification_fp == (("email.json", 1, 12),)
+    # Wire-level tracking is reset
     assert agent._notification_block_id is None
     assert agent._pending_notification_meta is None
 

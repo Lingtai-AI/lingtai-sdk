@@ -23,10 +23,10 @@ The kernel's message catalog — a flat key-value string table covering tool des
 | Caller | Citation | Typical keys |
 |---|---|---|
 | `meta_block.py` | `meta_block.py:151-176` | `system.current_time`, context fragments |
-| `intrinsics/system.py` | `intrinsics/system.py:36-49` | `system_tool.*` descriptions/schema text |
-| `intrinsics/psyche.py` | `intrinsics/psyche.py:173-186` | `psyche.*` descriptions/schema text |
+| `intrinsics/system.py` | `intrinsics/system/__init__.py:43,87` | `system_tool.*` descriptions/schema text |
+| `intrinsics/psyche.py` | `intrinsics/psyche/__init__.py:41,46` | `psyche.*` descriptions/schema text |
 | `intrinsics/soul/` | `intrinsics/soul/__init__.py:65-72` | `soul.*` descriptions/schema text |
-| `intrinsics/email.py` | `intrinsics/email.py:35-41` | `email.*` descriptions/schema text |
+| `intrinsics/email.py` | `intrinsics/email/__init__.py:55,66` | `email.*` descriptions/schema text |
 
 **Inbound — wrapper bridge.** The wrapper `src/lingtai/i18n/__init__.py` extracts keys with `_KERNEL_PREFIXES` (`src/lingtai/i18n/__init__.py:23-28`) and calls `register_strings()` (`src/lingtai/i18n/__init__.py:44-54`). The kernel side is only the additive merge hook (`i18n/__init__.py:33-41`).
 
