@@ -5,14 +5,12 @@ Contains:
     _name_set        — set true name (immutable)
     _name_nickname   — set/change nickname (mutable)
     context_forget   — system-initiated forced molt
-    _extract_task_snapshot — extract recent task context from conversation
-    _persist_task_snapshot — write task snapshot to pad.md before forced molt
 """
 from __future__ import annotations
 
 import uuid
 
-from ...llm.interface import TextBlock, ToolCallBlock, ToolResultBlock
+from ...llm.interface import ToolCallBlock, ToolResultBlock
 
 
 # ---------------------------------------------------------------------------
@@ -56,12 +54,6 @@ def _context_molt(agent, args: dict) -> dict:
 
     if agent._chat is None:
         return {"error": "No active chat session to molt."}
-
-    # Non-blocking warning: check if pad.md has content. If empty, the
-    # post-molt self will have no task context. We still allow the molt
-    # but flag it in the result so the agent can decide to abort.
-    pad_path = agent._working_dir / "system" / "pad.md"
-    pad_empty = not pad_path.is_file() or not pad_path.read_text().strip()
 
     tc_id = args.get("_tc_id")
     if not tc_id:
@@ -154,7 +146,35 @@ def _context_molt(agent, args: dict) -> dict:
             pid = provider_id_for_lingtai[lt_id]
             keep_pairs.append((call_for_provider_id[pid], result_for_provider_id[pid]))
 
+    # Parse keep_last — number of trailing entries to preserve across the molt.
+    keep_last_raw = args.get("keep_last")
+    keep_last: int | None = None
+    if keep_last_raw is not None:
+        try:
+            keep_last = int(keep_last_raw)
+        except (TypeError, ValueError):
+            return {"error": "keep_last must be an integer."}
+        if keep_last < 0:
+            return {"error": "keep_last must be non-negative."}
+        if keep_last == 0:
+            keep_last = None  # 0 is the same as not specifying it
+
     before_tokens = iface_pre.estimate_context_tokens()
+
+    # Capture keep_last entries from the pre-molt interface BEFORE the
+    # snapshot (which mutates iface_pre by closing orphan tool calls) and
+    # BEFORE the wipe. These are the last N non-system entries that will
+    # be replayed into the fresh session so the post-molt self retains
+    # recent conversational context.
+    # Exclude the molt call's own entry — it is replayed separately.
+    keep_last_entries: list = []
+    if keep_last is not None:
+        non_system = [
+            e for e in iface_pre.entries
+            if e.role != "system"
+            and not any(isinstance(b, ToolCallBlock) and b.id == tc_id for b in e.content)
+        ]
+        keep_last_entries = non_system[-keep_last:] if keep_last <= len(non_system) else non_system[:]
 
     # Snapshot the pre-molt interface to a discrete file so future
     # past-self consultation can load it as cached substrate. Best-effort.
@@ -225,7 +245,21 @@ def _context_molt(agent, args: dict) -> dict:
 
     iface = agent._session._chat.interface
 
-    # Replay kept tool-call pairs first (older than the molt itself).
+    # Replay keep_last entries first (oldest context).
+    for entry in keep_last_entries:
+        if entry.role == "assistant":
+            iface.add_assistant_message(content=entry.content)
+        elif entry.role == "user":
+            # User entries may contain ToolResultBlocks (tool results are
+            # user-role). Use add_tool_results for those, add_user_blocks
+            # for everything else.
+            tool_results = [b for b in entry.content if isinstance(b, ToolResultBlock)]
+            if tool_results and all(isinstance(b, ToolResultBlock) for b in entry.content):
+                iface.add_tool_results(tool_results)
+            else:
+                iface.add_user_blocks(entry.content)
+
+    # Replay kept tool-call pairs next (older than the molt itself).
     for call_block, result_block in keep_pairs:
         iface.add_assistant_message(content=[call_block])
         iface.add_tool_results([result_block])
@@ -242,6 +276,7 @@ def _context_molt(agent, args: dict) -> dict:
         after_tokens=after_tokens,
         molt_count=agent._molt_count,
         kept_tool_calls=len(keep_pairs),
+        kept_last=len(keep_last_entries),
     )
 
     # Persist the agent's retrospective to system/summaries/. Best-effort —
@@ -259,7 +294,7 @@ def _context_molt(agent, args: dict) -> dict:
     # The faint-memory result.
     from ...i18n import t
     lang = agent._config.language
-    result = {
+    return {
         "status": "ok",
         "note": t(lang, "psyche.molt_result_note"),
         "molt_count": agent._molt_count,
@@ -267,14 +302,12 @@ def _context_molt(agent, args: dict) -> dict:
         "tokens_after": after_tokens,
         "tokens_shed": max(0, before_tokens - after_tokens),
         "kept_tool_calls": len(keep_pairs),
+        "kept_last": len(keep_last_entries),
         "archive_path": str(archive_path.relative_to(agent._working_dir))
             if archive_path.exists() else None,
         "summary_path": str(summary_path.relative_to(agent._working_dir))
             if summary_path is not None else None,
     }
-    if pad_empty:
-        result["warning"] = t(lang, "psyche.molt_pad_empty_warning")
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -302,96 +335,12 @@ def _name_nickname(agent, args: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Pre-molt task snapshot (for forced molts)
-# ---------------------------------------------------------------------------
-
-
-def _extract_task_snapshot(agent, *, max_chars: int = 2000) -> str:
-    """Extract a brief task snapshot from the live conversation.
-
-    Walks the interface entries in reverse, collecting recent user messages
-    and assistant text blocks until ``max_chars`` is reached.  Returns a
-    plain-text summary the post-molt self can read from pad.md.
-
-    Pure text extraction — no LLM call, no side effects.
-    """
-    if agent._chat is None:
-        return ""
-
-    iface = agent._chat.interface
-    if not iface.entries:
-        return ""
-
-    parts: list[str] = []
-    total = 0
-    for entry in reversed(iface.entries):
-        if entry.role == "system":
-            continue
-        for block in entry.content:
-            if isinstance(block, TextBlock) and block.text.strip():
-                prefix = "human" if entry.role == "user" else "agent"
-                line = f"[{prefix}] {block.text.strip()}"
-                if total + len(line) > max_chars:
-                    # Truncate this line to fit
-                    remaining = max_chars - total
-                    if remaining > 20:
-                        parts.append(line[:remaining] + "…")
-                    total = max_chars
-                    break
-                parts.append(line)
-                total += len(line)
-        if total >= max_chars:
-            break
-
-    # Reverse to restore chronological order
-    parts.reverse()
-    return "\n".join(parts)
-
-
-def _persist_task_snapshot(agent, *, source: str) -> bool:
-    """Write a task snapshot to pad.md before a forced molt.
-
-    Reads the existing pad.md content, prepends a ``[auto-saved task context]``
-    section with the recent conversation extract, and writes the combined
-    content back to disk.  The post-molt hook reloads pad.md into the system
-    prompt, so the post-molt self sees it automatically.
-
-    Returns True if a snapshot was written, False if there was nothing to save.
-    """
-    snapshot = _extract_task_snapshot(agent)
-    if not snapshot:
-        return False
-
-    from ...i18n import t
-    lang = agent._config.language
-    header = t(lang, "psyche.task_snapshot_header", source=source)
-
-    system_dir = agent._working_dir / "system"
-    system_dir.mkdir(exist_ok=True)
-    pad_path = system_dir / "pad.md"
-
-    existing = ""
-    if pad_path.is_file():
-        existing = pad_path.read_text()
-
-    # Prepend the auto-saved section so the post-molt self sees it first
-    auto_section = f"{header}\n{snapshot}\n"
-    if existing.strip():
-        combined = auto_section + "\n---\n\n" + existing
-    else:
-        combined = auto_section
-
-    pad_path.write_text(combined)
-    agent._log("psyche_task_snapshot", source=source, length=len(snapshot))
-    return True
-
-
-# ---------------------------------------------------------------------------
 # System-initiated molt
 # ---------------------------------------------------------------------------
 
 
-def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0) -> dict:
+def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0,
+                    keep_last: int | None = None) -> dict:
     """Forced molt with a system-authored summary.
 
     Called by base_agent from three paths:
@@ -408,6 +357,10 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0) 
     of its own past tool calls — surface honesty about the molt being
     system-initiated lives in the args (``_initiator: "system"``) and the
     result note.
+
+    Optional ``keep_last`` preserves the last N non-system entries from
+    the pre-molt interface into the fresh session, giving the post-molt
+    self recent conversational context without relying on pad.md.
     """
     from ...i18n import t
 
@@ -439,10 +392,11 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0) 
     iface_pre = agent._chat.interface
     before_tokens = iface_pre.estimate_context_tokens()
 
-    # Auto-persist task context to pad.md BEFORE wiping. The agent had no
-    # chance to save its own notes, so we extract the recent conversation
-    # and prepend it so the post-molt self can see what was happening.
-    task_snapshot_saved = _persist_task_snapshot(agent, source=source)
+    # Capture keep_last entries from the pre-molt interface BEFORE wiping.
+    keep_last_entries: list = []
+    if keep_last is not None and keep_last > 0:
+        non_system = [e for e in iface_pre.entries if e.role != "system"]
+        keep_last_entries = non_system[-keep_last:] if keep_last <= len(non_system) else non_system[:]
 
     from . import _write_molt_snapshot
     _write_molt_snapshot(
@@ -499,6 +453,17 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0) 
     agent._session.ensure_session()
     iface = agent._session._chat.interface
 
+    # Replay keep_last entries first (oldest context).
+    for entry in keep_last_entries:
+        if entry.role == "assistant":
+            iface.add_assistant_message(content=entry.content)
+        elif entry.role == "user":
+            tool_results = [b for b in entry.content if isinstance(b, ToolResultBlock)]
+            if tool_results and all(isinstance(b, ToolResultBlock) for b in entry.content):
+                iface.add_tool_results(tool_results)
+            else:
+                iface.add_user_blocks(entry.content)
+
     iface.add_assistant_message(content=[synth_call])
 
     after_tokens = iface.estimate_context_tokens()
@@ -524,11 +489,11 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0) 
         "tokens_after": after_tokens,
         "tokens_shed": max(0, before_tokens - after_tokens),
         "kept_tool_calls": 0,
+        "kept_last": len(keep_last_entries),
         "archive_path": str(archive_path.relative_to(agent._working_dir))
             if archive_path.exists() else None,
         "summary_path": str(summary_path.relative_to(agent._working_dir))
             if summary_path is not None else None,
-        "task_snapshot_saved": task_snapshot_saved,
         "_initiator": "system",
         "_source": source,
     }
@@ -542,6 +507,7 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0) 
         after_tokens=after_tokens,
         molt_count=agent._molt_count,
         kept_tool_calls=0,
+        kept_last=len(keep_last_entries),
         initiator="system",
         source=source,
     )

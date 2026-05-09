@@ -1,10 +1,11 @@
-"""Tests for pre-molt task persistence (issue #55).
+"""Tests for keep_last parameter on molt (issue #55 revision).
 
 Covers:
-    - _extract_task_snapshot: extracts recent conversation text
-    - _persist_task_snapshot: writes snapshot to pad.md
-    - context_forget integration: auto-saves before forced molt
-    - _context_molt pad-empty warning: warns when pad.md is empty
+    - _context_molt with keep_last=None (default, archive all)
+    - _context_molt with keep_last=N (preserve last N entries)
+    - _context_molt with keep_last > total entries (preserve all)
+    - _context_molt with keep_last=0 (same as None)
+    - context_forget with keep_last (system-initiated)
 """
 from __future__ import annotations
 
@@ -69,371 +70,359 @@ def _populate_conversation(agent, messages: list[tuple[str, str]]):
             iface.add_assistant_message([TextBlock(text=text)])
 
 
-# ---------------------------------------------------------------------------
-# _extract_task_snapshot tests
-# ---------------------------------------------------------------------------
+def _add_molt_call(agent, summary="Test summary"):
+    """Add a molt ToolCallBlock to the interface, return its id."""
+    tc_id = "toolu_test_molt"
+    iface = agent._chat.interface
+    molt_block = ToolCallBlock(
+        id=tc_id,
+        name="psyche",
+        args={
+            "object": "context",
+            "action": "molt",
+            "summary": summary,
+        },
+    )
+    iface.add_assistant_message(content=[molt_block])
+    return tc_id
 
 
-class TestExtractTaskSnapshot:
-    """Unit tests for _extract_task_snapshot."""
-
-    def test_empty_interface(self, tmp_path):
-        """Returns empty string when there is no conversation (only system)."""
-        from lingtai_kernel.intrinsics.psyche._molt import _extract_task_snapshot
-
-        agent = _make_agent(tmp_path)
-        agent.start()
-        try:
-            _ensure_session(agent)
-            result = _extract_task_snapshot(agent)
-            assert result == ""
-        finally:
-            agent.stop()
-
-    def test_no_chat_session(self, tmp_path):
-        """Returns empty string when _chat is None."""
-        from lingtai_kernel.intrinsics.psyche._molt import _extract_task_snapshot
-
-        agent = _make_agent(tmp_path)
-        agent.start()
-        try:
-            # _chat is None before ensure_session
-            result = _extract_task_snapshot(agent)
-            assert result == ""
-        finally:
-            agent.stop()
-
-    def test_extracts_recent_messages(self, tmp_path):
-        """Extracts user and assistant text in chronological order."""
-        from lingtai_kernel.intrinsics.psyche._molt import _extract_task_snapshot
-
-        agent = _make_agent(tmp_path)
-        agent.start()
-        try:
-            _ensure_session(agent)
-            _populate_conversation(agent, [
-                ("user", "Please create a PR for the auth fix"),
-                ("assistant", "I'll create the PR now"),
-                ("user", "Make sure to include the test changes"),
-                ("assistant", "Done, PR #42 is ready"),
-            ])
-            result = _extract_task_snapshot(agent)
-            assert "[human] Please create a PR" in result
-            assert "[agent] I'll create the PR" in result
-            assert "[human] Make sure to include" in result
-            assert "[agent] Done, PR #42" in result
-            # Chronological order
-            human_pos = result.index("[human] Please create")
-            agent_pos = result.index("[agent] Done, PR")
-            assert human_pos < agent_pos
-        finally:
-            agent.stop()
-
-    def test_respects_max_chars(self, tmp_path):
-        """Truncates to max_chars limit."""
-        from lingtai_kernel.intrinsics.psyche._molt import _extract_task_snapshot
-
-        agent = _make_agent(tmp_path)
-        agent.start()
-        try:
-            _ensure_session(agent)
-            _populate_conversation(agent, [
-                ("user", "A" * 500),
-                ("assistant", "B" * 500),
-                ("user", "C" * 500),
-                ("assistant", "D" * 500),
-            ])
-            result = _extract_task_snapshot(agent, max_chars=200)
-            # Result should be bounded — some lines may be truncated
-            assert len(result) <= 300  # generous overhead for prefixes + truncation
-            # The most recent messages should be present (collected from tail)
-            assert "[agent]" in result or "[human]" in result
-        finally:
-            agent.stop()
-
-    def test_skips_system_entries(self, tmp_path):
-        """System entries are not included in the snapshot."""
-        from lingtai_kernel.intrinsics.psyche._molt import _extract_task_snapshot
-
-        agent = _make_agent(tmp_path)
-        agent.start()
-        try:
-            _ensure_session(agent)
-            _populate_conversation(agent, [
-                ("user", "Do the thing"),
-                ("assistant", "Doing it"),
-            ])
-            result = _extract_task_snapshot(agent)
-            assert "[human] Do the thing" in result
-            assert "[agent] Doing it" in result
-            # No system prompt text leaked through
-            assert "You are helpful" not in result
-        finally:
-            agent.stop()
+def _count_non_system_entries(iface):
+    """Count non-system entries in the interface."""
+    return sum(1 for e in iface.entries if e.role != "system")
 
 
 # ---------------------------------------------------------------------------
-# _persist_task_snapshot tests
+# _context_molt keep_last tests
 # ---------------------------------------------------------------------------
 
 
-class TestPersistTaskSnapshot:
-    """Unit tests for _persist_task_snapshot."""
+class TestContextMoltKeepLast:
+    """Test keep_last parameter on agent-initiated molt."""
 
-    def test_creates_pad_with_snapshot(self, tmp_path):
-        """Writes task snapshot to pad.md when pad doesn't exist."""
-        from lingtai_kernel.intrinsics.psyche._molt import _persist_task_snapshot
-
-        agent = _make_agent(tmp_path)
-        agent.start()
-        try:
-            _ensure_session(agent)
-            _populate_conversation(agent, [
-                ("user", "Create a PR for the auth fix"),
-                ("assistant", "Working on it"),
-            ])
-            result = _persist_task_snapshot(agent, source="admin")
-            assert result is True
-
-            pad_path = agent._working_dir / "system" / "pad.md"
-            assert pad_path.is_file()
-            content = pad_path.read_text()
-            assert "[auto-saved task context" in content
-            assert "[human] Create a PR" in content
-            assert "[agent] Working on it" in content
-        finally:
-            agent.stop()
-
-    def test_prepends_to_existing_pad(self, tmp_path):
-        """Prepends snapshot before existing pad content."""
-        from lingtai_kernel.intrinsics.psyche._molt import _persist_task_snapshot
-
-        agent = _make_agent(tmp_path)
-        agent.start()
-        try:
-            _ensure_session(agent)
-            # Write existing pad content
-            system_dir = agent._working_dir / "system"
-            system_dir.mkdir(parents=True, exist_ok=True)
-            pad_path = system_dir / "pad.md"
-            pad_path.write_text("## Existing notes\n\nSome important context here.")
-
-            _populate_conversation(agent, [
-                ("user", "Now fix the login bug"),
-            ])
-            result = _persist_task_snapshot(agent, source="warning_ladder")
-            assert result is True
-
-            content = pad_path.read_text()
-            # Auto-saved section comes first
-            auto_pos = content.index("[auto-saved task context")
-            existing_pos = content.index("Existing notes")
-            assert auto_pos < existing_pos
-            # Separator between auto-saved and existing
-            assert "---" in content
-        finally:
-            agent.stop()
-
-    def test_returns_false_when_no_conversation(self, tmp_path):
-        """Returns False when there's nothing to extract."""
-        from lingtai_kernel.intrinsics.psyche._molt import _persist_task_snapshot
-
-        agent = _make_agent(tmp_path)
-        agent.start()
-        try:
-            _ensure_session(agent)
-            result = _persist_task_snapshot(agent, source="admin")
-            assert result is False
-        finally:
-            agent.stop()
-
-    def test_source_appears_in_header(self, tmp_path):
-        """The source of the forced molt appears in the snapshot header."""
-        from lingtai_kernel.intrinsics.psyche._molt import _persist_task_snapshot
-
-        agent = _make_agent(tmp_path)
-        agent.start()
-        try:
-            _ensure_session(agent)
-            _populate_conversation(agent, [
-                ("user", "Hello"),
-            ])
-            _persist_task_snapshot(agent, source="jason")
-
-            pad_path = agent._working_dir / "system" / "pad.md"
-            content = pad_path.read_text()
-            assert "jason" in content
-        finally:
-            agent.stop()
-
-
-# ---------------------------------------------------------------------------
-# context_forget integration tests
-# ---------------------------------------------------------------------------
-
-
-class TestContextForgetTaskPersistence:
-    """Integration: context_forget auto-saves task snapshot to pad.md."""
-
-    def test_context_forget_saves_snapshot_to_pad(self, tmp_path):
-        """context_forget writes task context to pad.md before wiping."""
-        from lingtai_kernel.intrinsics.psyche._molt import context_forget
-
-        agent = _make_agent(tmp_path)
-        agent.start()
-        try:
-            _ensure_session(agent)
-            _populate_conversation(agent, [
-                ("user", "Create PRs for all the auth changes"),
-                ("assistant", "I'll start with the login module"),
-            ])
-            result = context_forget(agent, source="admin")
-
-            assert result["status"] == "ok"
-            assert result["task_snapshot_saved"] is True
-
-            # pad.md should contain the auto-saved context
-            pad_path = agent._working_dir / "system" / "pad.md"
-            assert pad_path.is_file()
-            content = pad_path.read_text()
-            assert "[auto-saved task context" in content
-            assert "Create PRs" in content
-        finally:
-            agent.stop()
-
-    def test_context_forget_preserves_existing_pad(self, tmp_path):
-        """context_forget prepends snapshot; existing pad content survives."""
-        from lingtai_kernel.intrinsics.psyche._molt import context_forget
-
-        agent = _make_agent(tmp_path)
-        agent.start()
-        try:
-            _ensure_session(agent)
-            # Write existing pad
-            system_dir = agent._working_dir / "system"
-            system_dir.mkdir(parents=True, exist_ok=True)
-            (system_dir / "pad.md").write_text("## My important notes\n\nDon't forget X.")
-
-            _populate_conversation(agent, [
-                ("user", "Fix the deploy script"),
-            ])
-            context_forget(agent, source="warning_ladder")
-
-            content = (system_dir / "pad.md").read_text()
-            assert "My important notes" in content
-            assert "Don't forget X" in content
-            assert "[auto-saved task context" in content
-        finally:
-            agent.stop()
-
-    def test_context_forget_with_empty_conversation(self, tmp_path):
-        """context_forget handles empty conversation gracefully."""
-        from lingtai_kernel.intrinsics.psyche._molt import context_forget
-
-        agent = _make_agent(tmp_path)
-        agent.start()
-        try:
-            _ensure_session(agent)
-            result = context_forget(agent, source="aed", attempts=3)
-            assert result["status"] == "ok"
-            assert result["task_snapshot_saved"] is False
-        finally:
-            agent.stop()
-
-    def test_context_forget_result_mentions_snapshot(self, tmp_path):
-        """The result dict includes task_snapshot_saved flag."""
-        from lingtai_kernel.intrinsics.psyche._molt import context_forget
-
-        agent = _make_agent(tmp_path)
-        agent.start()
-        try:
-            _ensure_session(agent)
-            _populate_conversation(agent, [
-                ("user", "Do something"),
-            ])
-            result = context_forget(agent, source="admin")
-            assert "task_snapshot_saved" in result
-            assert result["task_snapshot_saved"] is True
-        finally:
-            agent.stop()
-
-
-# ---------------------------------------------------------------------------
-# _context_molt pad-empty warning tests
-# ---------------------------------------------------------------------------
-
-
-class TestContextMoltPadWarning:
-    """Deliberate molt warns when pad.md is empty."""
-
-    def test_molt_with_empty_pad_returns_warning(self, tmp_path):
-        """Agent-initiated molt includes warning when pad.md is empty."""
+    def test_keep_last_none_archives_all(self, tmp_path):
+        """Default (no keep_last): all entries archived, fresh session is clean."""
         from lingtai_kernel.intrinsics.psyche._molt import _context_molt
 
         agent = _make_agent(tmp_path)
         agent.start()
         try:
             _ensure_session(agent)
-            # Ensure pad.md doesn't exist or is empty
-            pad_path = agent._working_dir / "system" / "pad.md"
-            if pad_path.exists():
-                pad_path.write_text("")
-
-            # Add a molt call to the interface so _tc_id can be found
-            tc_id = "toolu_test_123"
-            iface = agent._chat.interface
-            molt_block = ToolCallBlock(
-                id=tc_id,
-                name="psyche",
-                args={
-                    "object": "context",
-                    "action": "molt",
-                    "summary": "Test summary for molt",
-                },
-            )
-            iface.add_assistant_message(content=[molt_block])
+            _populate_conversation(agent, [
+                ("user", "Message 1"),
+                ("assistant", "Reply 1"),
+                ("user", "Message 2"),
+                ("assistant", "Reply 2"),
+            ])
+            tc_id = _add_molt_call(agent)
 
             result = _context_molt(agent, {
-                "summary": "Test summary for molt",
+                "summary": "Test summary",
                 "_tc_id": tc_id,
             })
+
             assert result["status"] == "ok"
-            assert "warning" in result
-            assert "pad.md" in result["warning"]
+            assert result["kept_last"] == 0
+
+            # Fresh interface should only have system + molt call (no old entries)
+            iface = agent._chat.interface
+            non_system = [e for e in iface.entries if e.role != "system"]
+            # Only the replayed molt call
+            assert len(non_system) == 1
+            assert any(
+                isinstance(b, ToolCallBlock) and b.name == "psyche"
+                for b in non_system[0].content
+            )
         finally:
             agent.stop()
 
-    def test_molt_with_nonempty_pad_no_warning(self, tmp_path):
-        """Agent-initiated molt has no warning when pad.md has content."""
+    def test_keep_last_preserves_entries(self, tmp_path):
+        """keep_last=2 preserves the last 2 conversation entries."""
         from lingtai_kernel.intrinsics.psyche._molt import _context_molt
 
         agent = _make_agent(tmp_path)
         agent.start()
         try:
             _ensure_session(agent)
-            # Write content to pad.md
-            system_dir = agent._working_dir / "system"
-            system_dir.mkdir(parents=True, exist_ok=True)
-            (system_dir / "pad.md").write_text("## Current task\n\nWorking on auth.")
-
-            tc_id = "toolu_test_456"
-            iface = agent._chat.interface
-            molt_block = ToolCallBlock(
-                id=tc_id,
-                name="psyche",
-                args={
-                    "object": "context",
-                    "action": "molt",
-                    "summary": "Test summary with pad content",
-                },
-            )
-            iface.add_assistant_message(content=[molt_block])
+            _populate_conversation(agent, [
+                ("user", "Old message"),
+                ("assistant", "Old reply"),
+                ("user", "Recent message"),
+                ("assistant", "Recent reply"),
+            ])
+            tc_id = _add_molt_call(agent)
 
             result = _context_molt(agent, {
-                "summary": "Test summary with pad content",
+                "summary": "Test summary",
                 "_tc_id": tc_id,
+                "keep_last": 2,
             })
+
             assert result["status"] == "ok"
-            assert "warning" not in result
+            assert result["kept_last"] == 2
+
+            # Fresh interface: system + 2 kept entries + molt call
+            iface = agent._chat.interface
+            non_system = [e for e in iface.entries if e.role != "system"]
+            # 2 kept + 1 molt call
+            assert len(non_system) == 3
+
+            # The kept entries should contain the recent messages
+            kept_texts = []
+            for entry in non_system[:-1]:  # exclude the molt call
+                for block in entry.content:
+                    if isinstance(block, TextBlock):
+                        kept_texts.append(block.text)
+
+            assert "Recent message" in kept_texts
+            assert "Recent reply" in kept_texts
+            # Old messages should NOT be in the kept entries
+            assert "Old message" not in kept_texts
+            assert "Old reply" not in kept_texts
+        finally:
+            agent.stop()
+
+    def test_keep_last_larger_than_total(self, tmp_path):
+        """keep_last > total entries: preserves all non-system entries (excluding molt call)."""
+        from lingtai_kernel.intrinsics.psyche._molt import _context_molt
+
+        agent = _make_agent(tmp_path)
+        agent.start()
+        try:
+            _ensure_session(agent)
+            _populate_conversation(agent, [
+                ("user", "Only message"),
+                ("assistant", "Only reply"),
+            ])
+            tc_id = _add_molt_call(agent)
+
+            # 3 non-system entries (user, assistant, molt-call), but molt-call
+            # is excluded from keep_last (replayed separately), so keep all 2
+            result = _context_molt(agent, {
+                "summary": "Test summary",
+                "_tc_id": tc_id,
+                "keep_last": 100,
+            })
+
+            assert result["status"] == "ok"
+            # Should keep all non-system entries except the molt call itself
+            assert result["kept_last"] == 2
+
+            iface = agent._chat.interface
+            non_system = [e for e in iface.entries if e.role != "system"]
+            # 2 kept + 1 molt call replayed = 3
+            assert len(non_system) == 3
+
+            # Verify the original messages survived
+            all_texts = []
+            for entry in non_system:
+                for block in entry.content:
+                    if isinstance(block, TextBlock):
+                        all_texts.append(block.text)
+            assert "Only message" in all_texts
+            assert "Only reply" in all_texts
+        finally:
+            agent.stop()
+
+    def test_keep_last_zero_same_as_none(self, tmp_path):
+        """keep_last=0 is treated the same as not specifying it."""
+        from lingtai_kernel.intrinsics.psyche._molt import _context_molt
+
+        agent = _make_agent(tmp_path)
+        agent.start()
+        try:
+            _ensure_session(agent)
+            _populate_conversation(agent, [
+                ("user", "Message"),
+                ("assistant", "Reply"),
+            ])
+            tc_id = _add_molt_call(agent)
+
+            result = _context_molt(agent, {
+                "summary": "Test summary",
+                "_tc_id": tc_id,
+                "keep_last": 0,
+            })
+
+            assert result["status"] == "ok"
+            assert result["kept_last"] == 0
+
+            iface = agent._chat.interface
+            non_system = [e for e in iface.entries if e.role != "system"]
+            # Only the molt call, no kept entries
+            assert len(non_system) == 1
+        finally:
+            agent.stop()
+
+    def test_keep_last_invalid_type_rejected(self, tmp_path):
+        """Non-integer keep_last is rejected."""
+        from lingtai_kernel.intrinsics.psyche._molt import _context_molt
+
+        agent = _make_agent(tmp_path)
+        agent.start()
+        try:
+            _ensure_session(agent)
+            _populate_conversation(agent, [("user", "Hi")])
+            tc_id = _add_molt_call(agent)
+
+            result = _context_molt(agent, {
+                "summary": "Test summary",
+                "_tc_id": tc_id,
+                "keep_last": "twenty",
+            })
+
+            assert "error" in result
+            assert "integer" in result["error"]
+        finally:
+            agent.stop()
+
+    def test_keep_last_negative_rejected(self, tmp_path):
+        """Negative keep_last is rejected."""
+        from lingtai_kernel.intrinsics.psyche._molt import _context_molt
+
+        agent = _make_agent(tmp_path)
+        agent.start()
+        try:
+            _ensure_session(agent)
+            _populate_conversation(agent, [("user", "Hi")])
+            tc_id = _add_molt_call(agent)
+
+            result = _context_molt(agent, {
+                "summary": "Test summary",
+                "_tc_id": tc_id,
+                "keep_last": -5,
+            })
+
+            assert "error" in result
+            assert "non-negative" in result["error"]
+        finally:
+            agent.stop()
+
+    def test_keep_last_with_keep_tool_calls(self, tmp_path):
+        """keep_last and keep_tool_calls can be used together."""
+        from lingtai_kernel.intrinsics.psyche._molt import _context_molt
+        from lingtai_kernel.llm.interface import ToolResultBlock
+
+        agent = _make_agent(tmp_path)
+        agent.start()
+        try:
+            _ensure_session(agent)
+            iface = agent._chat.interface
+
+            # Add a user message
+            iface.add_user_message("Do something")
+
+            # Add a tool call + result pair with a LingTai id
+            tool_tc_id = "toolu_tool_123"
+            lt_id = "tc_12345_abc"
+            iface.add_assistant_message(content=[
+                ToolCallBlock(id=tool_tc_id, name="file_read", args={"path": "x.py"})
+            ])
+            iface.add_tool_results([
+                ToolResultBlock(
+                    id=tool_tc_id, name="file_read",
+                    content={"text": "file contents", "_tool_call_id": lt_id}
+                )
+            ])
+
+            # Add more conversation
+            iface.add_assistant_message([TextBlock(text="Here's what I found")])
+            iface.add_user_message("Now do another thing")
+            iface.add_assistant_message([TextBlock(text="Working on it")])
+
+            tc_id = _add_molt_call(agent)
+
+            result = _context_molt(agent, {
+                "summary": "Test summary",
+                "_tc_id": tc_id,
+                "keep_last": 2,  # keep last 2 entries
+                "keep_tool_calls": [lt_id],  # also keep the tool pair
+            })
+
+            assert result["status"] == "ok"
+            assert result["kept_last"] == 2
+            assert result["kept_tool_calls"] == 1
+        finally:
+            agent.stop()
+
+
+# ---------------------------------------------------------------------------
+# context_forget keep_last tests
+# ---------------------------------------------------------------------------
+
+
+class TestContextForgetKeepLast:
+    """Test keep_last parameter on system-initiated forced molt."""
+
+    def test_context_forget_default_no_keep(self, tmp_path):
+        """Default context_forget archives everything (no keep_last)."""
+        from lingtai_kernel.intrinsics.psyche._molt import context_forget
+
+        agent = _make_agent(tmp_path)
+        agent.start()
+        try:
+            _ensure_session(agent)
+            _populate_conversation(agent, [
+                ("user", "Message 1"),
+                ("assistant", "Reply 1"),
+            ])
+            result = context_forget(agent, source="admin")
+
+            assert result["status"] == "ok"
+            assert result["kept_last"] == 0
+        finally:
+            agent.stop()
+
+    def test_context_forget_with_keep_last(self, tmp_path):
+        """context_forget with keep_last preserves recent entries."""
+        from lingtai_kernel.intrinsics.psyche._molt import context_forget
+
+        agent = _make_agent(tmp_path)
+        agent.start()
+        try:
+            _ensure_session(agent)
+            _populate_conversation(agent, [
+                ("user", "Old question"),
+                ("assistant", "Old answer"),
+                ("user", "Recent question"),
+                ("assistant", "Recent answer"),
+            ])
+
+            result = context_forget(agent, source="admin", keep_last=2)
+
+            assert result["status"] == "ok"
+            assert result["kept_last"] == 2
+
+            # Check the fresh interface has the kept entries
+            iface = agent._chat.interface
+            non_system = [e for e in iface.entries if e.role != "system"]
+
+            # Find text content in the kept entries
+            all_texts = []
+            for entry in non_system:
+                for block in entry.content:
+                    if isinstance(block, TextBlock):
+                        all_texts.append(block.text)
+
+            assert "Recent question" in all_texts
+            assert "Recent answer" in all_texts
+            assert "Old question" not in all_texts
+            assert "Old answer" not in all_texts
+        finally:
+            agent.stop()
+
+    def test_context_forget_no_task_snapshot_saved_field(self, tmp_path):
+        """context_forget no longer includes task_snapshot_saved in result."""
+        from lingtai_kernel.intrinsics.psyche._molt import context_forget
+
+        agent = _make_agent(tmp_path)
+        agent.start()
+        try:
+            _ensure_session(agent)
+            _populate_conversation(agent, [
+                ("user", "Something"),
+            ])
+            result = context_forget(agent, source="admin")
+            assert "task_snapshot_saved" not in result
         finally:
             agent.stop()

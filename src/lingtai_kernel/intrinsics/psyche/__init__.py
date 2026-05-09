@@ -75,6 +75,10 @@ def get_schema(lang: str = "en") -> dict:
                 "items": {"type": "string"},
                 "description": t(lang, "psyche.keep_tool_calls_description"),
             },
+            "keep_last": {
+                "type": "integer",
+                "description": t(lang, "psyche.keep_last_description"),
+            },
         },
         "required": ["object", "action"],
         "allOf": [
