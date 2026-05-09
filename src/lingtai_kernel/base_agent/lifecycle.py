@@ -171,26 +171,10 @@ def _heartbeat_loop(agent) -> None:
         # .refresh = self-initiated restart (handshake: rename to .refresh.taken)
         refresh_file = agent._working_dir / ".refresh"
         if refresh_file.is_file():
-            taken_file = agent._working_dir / ".refresh.taken"
-            try:
-                refresh_file.rename(taken_file)
-            except OSError:
-                pass
-            # Recovery path: an externally-signalled refresh exists to unstick
-            # error states. Drop the .llm_hang sentinel so the relaunched
-            # process doesn't wake into the LLM-hang refusal loop. See
-            # issue #35.
-            hang_file = agent._working_dir / ".llm_hang"
-            if hang_file.is_file():
-                try:
-                    hang_file.unlink(missing_ok=True)
-                    agent._log("llm_hang_cleared", reason="refresh_signal")
-                except OSError:
-                    pass
-            agent._cancel_event.set()
-            agent._set_state(AgentState.SUSPENDED, reason="refresh")
-            agent._shutdown.set()
-            agent._log("refresh_taken", source="signal_file")
+            # Delegate to _perform_refresh which handles the full flow:
+            # .llm_hang clear, save chat history, spawn watcher process,
+            # and deferred relaunch — identical to system(action='refresh').
+            _perform_refresh(agent)
 
         # .suspend = SUSPENDED (full process death, external only)
         suspend_file = agent._working_dir / ".suspend"
