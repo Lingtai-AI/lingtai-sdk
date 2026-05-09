@@ -112,7 +112,7 @@ Three pieces of state on `BaseAgent` (`base_agent/__init__.py:366-372`):
 - `_pending_notification_meta: str | None` — JSON body stashed during ACTIVE state for the next `SessionManager.send()` to prepend onto the latest tool result.
 
 The sync loop runs from **two trigger points**:
-1. **Heartbeat tick** (`base_agent/lifecycle.py:298`) — `agent._sync_notifications()` after `_check_rules_file`. Default cadence is the heartbeat interval (~1s); the producer's `_wake_nap` calls also nudge the heartbeat for sub-second latency.
+1. **Heartbeat tick** (`base_agent/lifecycle.py:334`) — `agent._sync_notifications()` after `_check_rules_file`. Default cadence is the heartbeat interval (~1s); the producer's `_wake_nap` calls also nudge the heartbeat for sub-second latency.
 2. **Voluntary calls** — `system(action="notification")` (`intrinsics/system/__init__.py:97`) returns `collect_notifications(workdir)` directly. Reading is always free; the agent can poll its own notification state any time without touching the wire.
 
 `_sync_notifications` (`base_agent/__init__.py:761`):

@@ -82,11 +82,18 @@ def _reset_uptime(agent) -> None:
 
 
 def _stop(agent, timeout: float = 5.0) -> None:
-    """Signal shutdown and wait for the agent thread to exit."""
+    """Signal shutdown and wait for the agent thread to exit.
+
+    Heartbeat is stopped LAST (just before `release_lock`) so external
+    observers — TUI launcher, `lingtai-tui list`, `lingtai-tui purge` — see
+    `.agent.heartbeat` as fresh and present for the entire teardown window.
+    Otherwise the file vanishes seconds before the Python process actually
+    exits, and a quick relaunch races a still-living interpreter into the
+    same workdir. See workdir-race investigation 2026-05-09.
+    """
     from ..intrinsics.soul.flow import _cancel_soul_timer
 
     agent._log("agent_stop")
-    _stop_heartbeat(agent)
     _cancel_soul_timer(agent)
     agent._shutdown.set()
     if agent._thread:
@@ -107,8 +114,10 @@ def _stop(agent, timeout: float = 5.0) -> None:
         except Exception:
             pass
 
-    # Persist final state and release lock
+    # Persist final state, stop heartbeat, release lock — order matters.
+    # See docstring above; heartbeat must remain fresh until this point.
     agent._workdir.write_manifest(agent._build_manifest())
+    _stop_heartbeat(agent)
     agent._workdir.release_lock()
 
 
@@ -141,11 +150,20 @@ def _stop_heartbeat(agent) -> None:
 
 
 def _heartbeat_loop(agent) -> None:
-    """Beat every 1 second. AED if agent is STUCK."""
+    """Beat every 1 second. AED if agent is STUCK.
+
+    Loop exit is governed solely by `agent._heartbeat_thread is None`, which
+    `_stop_heartbeat` flips at the very end of `_stop`. The loop deliberately
+    keeps writing fresh timestamps even after `agent._shutdown.is_set()` so
+    the heartbeat file remains a faithful "this Python process is alive"
+    signal across the entire teardown — preventing duplicate-launch races
+    in the TUI. Signal-file detection IS gated on `_shutdown` below so we
+    don't reprocess `.suspend`/`.refresh` mid-teardown.
+    """
     from ..state import AgentState
     from ..intrinsics.soul.inquiry import _run_inquiry
 
-    while agent._heartbeat_thread is not None and not agent._shutdown.is_set():
+    while agent._heartbeat_thread is not None:
         # time.time() (wall clock), not time.monotonic(). Deliberate:
         # heartbeat is written to a file and read by handshake.is_alive()
         # in a DIFFERENT process.
@@ -157,6 +175,13 @@ def _heartbeat_loop(agent) -> None:
             hb_file.write_text(str(agent._heartbeat), encoding="utf-8")
         except OSError:
             pass
+
+        # Once shutdown is signalled, keep beating the file (above) but stop
+        # consuming signal files — the run loop is exiting and reprocessing
+        # `.suspend`/`.refresh` here would emit spurious state-change events.
+        if agent._shutdown.is_set():
+            time.sleep(1.0)
+            continue
 
         # --- signal file detection ---
         interrupt_file = agent._working_dir / ".interrupt"
