@@ -156,15 +156,18 @@ class EmailManager:
         """Build a summary dict from a raw email dict."""
         if read_set is None:
             read_set = _read_ids(self._agent)
+        recipient_id = getattr(self._agent, "_agent_id", "")
         if e.get("_folder") == "inbox":
-            summary = _message_summary(e, read_set, truncate=truncate)
+            summary = _message_summary(e, read_set, truncate=truncate,
+                                       recipient_agent_id=recipient_id)
             summary["folder"] = "inbox"
             if e.get("cc"):
                 summary["cc"] = e["cc"]
             self._inject_identity(summary, e)
             return summary
         if e.get("_folder") == "archive":
-            summary = _message_summary(e, read_set, truncate=truncate)
+            summary = _message_summary(e, read_set, truncate=truncate,
+                                       recipient_agent_id=recipient_id)
             summary["folder"] = "archive"
             if e.get("cc"):
                 summary["cc"] = e["cc"]

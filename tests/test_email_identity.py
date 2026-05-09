@@ -202,3 +202,156 @@ def test_read_no_identity_backwards_compat(tmp_path):
     assert "is_human" not in entry
 
     agent.stop(timeout=1.0)
+
+
+# ---------------------------------------------------------------------------
+# Sender disambiguation — same name, different agent_id (issue #57)
+# ---------------------------------------------------------------------------
+
+
+def test_check_disambiguates_same_name_different_agent_id(tmp_path):
+    """When sender shares recipient's agent_name but has a different agent_id,
+    check should disambiguate with the sender's agent_id."""
+    agent = _make_agent(tmp_path, agent_name="mimo-1")
+    sender_id = "20260506-000525-ab84"
+    _seed_inbox(agent.working_dir, "msg1", {
+        "from": "mimo-1",
+        "subject": "cross-project",
+        "message": "hello from the other mimo-1",
+        "identity": {
+            "agent_id": sender_id,
+            "agent_name": "mimo-1",
+            "admin": {},
+        },
+    })
+    result = agent._email_manager.handle({"action": "check"})
+    msg = result["emails"][0]
+    # Should include agent_id to disambiguate
+    assert f"agent:{sender_id}" in msg["from"]
+    assert "mimo-1" in msg["from"]
+
+    agent.stop(timeout=1.0)
+
+
+def test_check_no_disambiguation_for_different_names(tmp_path):
+    """When sender has a different agent_name from recipient, no
+    disambiguation is needed — the name alone suffices."""
+    agent = _make_agent(tmp_path, agent_name="alice")
+    _seed_inbox(agent.working_dir, "msg1", {
+        "from": "bob-addr",
+        "subject": "normal",
+        "message": "hi",
+        "identity": {
+            "agent_id": "20260506-111111-cccc",
+            "agent_name": "bob",
+            "admin": {},
+        },
+    })
+    result = agent._email_manager.handle({"action": "check"})
+    msg = result["emails"][0]
+    # No agent_id disambiguation needed
+    assert msg["from"] == "bob (bob-addr)"
+    assert "agent:" not in msg["from"]
+
+    agent.stop(timeout=1.0)
+
+
+def test_check_no_disambiguation_for_self_send(tmp_path):
+    """When sender is truly the same agent (same agent_id), no
+    disambiguation should occur."""
+    agent = _make_agent(tmp_path, agent_name="mimo-1")
+    own_id = agent._agent_id
+    _seed_inbox(agent.working_dir, "msg1", {
+        "from": "mimo-1",
+        "subject": "self-note",
+        "message": "note to self",
+        "identity": {
+            "agent_id": own_id,
+            "agent_name": "mimo-1",
+            "admin": {},
+        },
+    })
+    result = agent._email_manager.handle({"action": "check"})
+    msg = result["emails"][0]
+    # Same agent_id — no disambiguation
+    assert msg["from"] == "mimo-1 (mimo-1)"
+    assert "agent:" not in msg["from"]
+
+    agent.stop(timeout=1.0)
+
+
+def test_check_no_disambiguation_without_identity(tmp_path):
+    """Messages without identity should not be affected by disambiguation."""
+    agent = _make_agent(tmp_path, agent_name="mimo-1")
+    _seed_inbox(agent.working_dir, "msg1", {
+        "from": "mimo-1",
+        "subject": "old-style",
+        "message": "no identity card",
+    })
+    result = agent._email_manager.handle({"action": "check"})
+    msg = result["emails"][0]
+    # No identity → plain address, no disambiguation
+    assert msg["from"] == "mimo-1"
+    assert "agent:" not in msg["from"]
+
+    agent.stop(timeout=1.0)
+
+
+# ---------------------------------------------------------------------------
+# Disambiguation in _message_summary (unit-level)
+# ---------------------------------------------------------------------------
+
+from lingtai_kernel.intrinsics.email.primitives import _message_summary
+
+
+def test_message_summary_disambiguates_with_recipient_id():
+    """_message_summary adds agent_id when names match but IDs differ."""
+    msg = {
+        "_mailbox_id": "test-id",
+        "from": "mimo-1",
+        "subject": "test",
+        "message": "body",
+        "received_at": "2026-05-01T10:00:00Z",
+        "identity": {
+            "agent_id": "sender-id-1234",
+            "agent_name": "mimo-1",
+        },
+    }
+    result = _message_summary(msg, set(), recipient_agent_id="recipient-id-5678")
+    assert "agent:sender-id-1234" in result["from"]
+
+
+def test_message_summary_no_disambiguation_same_id():
+    """_message_summary does not disambiguate when agent_ids match."""
+    msg = {
+        "_mailbox_id": "test-id",
+        "from": "mimo-1",
+        "subject": "test",
+        "message": "body",
+        "received_at": "2026-05-01T10:00:00Z",
+        "identity": {
+            "agent_id": "same-id",
+            "agent_name": "mimo-1",
+        },
+    }
+    result = _message_summary(msg, set(), recipient_agent_id="same-id")
+    assert result["from"] == "mimo-1 (mimo-1)"
+    assert "agent:" not in result["from"]
+
+
+def test_message_summary_no_disambiguation_without_recipient_id():
+    """_message_summary is backward-compatible — no recipient_agent_id means no disambiguation."""
+    msg = {
+        "_mailbox_id": "test-id",
+        "from": "mimo-1",
+        "subject": "test",
+        "message": "body",
+        "received_at": "2026-05-01T10:00:00Z",
+        "identity": {
+            "agent_id": "sender-id-1234",
+            "agent_name": "mimo-1",
+        },
+    }
+    result = _message_summary(msg, set())
+    assert result["from"] == "mimo-1 (mimo-1)"
+    assert "agent:" not in result["from"]
