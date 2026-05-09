@@ -168,12 +168,17 @@ def _heartbeat_loop(agent) -> None:
             agent._cancel_event.set()
             agent._log("interrupt_received", source="signal_file")
 
-        # .refresh = self-initiated restart (handshake: rename to .refresh.taken)
+        # .refresh = full refresh with relaunch (identical to system(action='refresh'))
         refresh_file = agent._working_dir / ".refresh"
         if refresh_file.is_file():
+            taken_file = agent._working_dir / ".refresh.taken"
+            try:
+                refresh_file.rename(taken_file)
+            except OSError:
+                pass
             # Delegate to _perform_refresh which handles the full flow:
             # .llm_hang clear, save chat history, spawn watcher process,
-            # and deferred relaunch — identical to system(action='refresh').
+            # and deferred relaunch.
             _perform_refresh(agent)
 
         # .suspend = SUSPENDED (full process death, external only)
