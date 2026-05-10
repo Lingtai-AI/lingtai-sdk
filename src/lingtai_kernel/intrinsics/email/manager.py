@@ -637,6 +637,7 @@ class EmailManager:
             "subject": subject,
             "message": message_text,
             "type": mail_type,
+            "mode": mode,
             "identity": self._agent._build_manifest(),
         }
         if cc:
