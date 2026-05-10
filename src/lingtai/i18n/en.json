@@ -19,7 +19,7 @@
   "grep.path": "File or directory to search in",
   "grep.glob": "File glob filter (e.g., '*.py')",
   "grep.max_matches": "Maximum matches to return",
-  "bash.description": "Execute a shell command and return stdout/stderr. Any system program — scripts, git, curl, pip, data pipelines. Returns exit code, stdout, and stderr. For noisy, context-heavy work, prefer daemon. Supports async mode for long-running commands: set async=true to get a job_id, then poll/cancel.",
+  "bash.description": "Execute a shell command and return stdout/stderr. Any system program — scripts, git, curl, pip, data pipelines. Returns exit code, stdout, stderr. Supports async mode (async=true → job_id, then poll/cancel). See bash-manual skill for cron setup and advanced usage.",
   "bash.action": "Action to perform: 'run' (default) executes a command, 'poll' checks async job status, 'cancel' kills an async job",
   "bash.command": "The shell command to execute",
   "bash.timeout": "Timeout in seconds (default: 30, only for sync execution)",

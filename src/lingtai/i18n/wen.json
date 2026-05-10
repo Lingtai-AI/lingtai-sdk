@@ -19,7 +19,7 @@
   "grep.path": "欲搜之文卷或目录",
   "grep.glob": "文卷 glob 过滤器（如'*.py'）",
   "grep.max_matches": "至多返回之匹配数",
-  "bash.description": "执行指令，返 stdout/stderr。可运行系统上一切可用之程——脚本、git、curl、pip、数据管道等。返退出码、stdout 与 stderr。嘈杂、占上下文之事优先用 daemon。支持异步：设 async=true 取 job_id，后以 poll/cancel 查之。",
+  "bash.description": "执行指令，返 stdout/stderr。可运行系统上一切可用之程——脚本、git、curl、pip、数据管道等。支持异步：设 async=true 取 job_id，后以 poll/cancel 查之。详见 bash-manual 技（定时之设与进阶之用）。",
   "bash.action": "所行之事：'run'（默认）执行指令，'poll' 查异步任务之状，'cancel' 斩异步任务",
   "bash.command": "欲执行之指令",
   "bash.timeout": "超时秒数（默认：30，唯同步执行时生效）",
