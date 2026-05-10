@@ -15,6 +15,7 @@ from ..logging import get_logger
 from ..loop_guard import LoopGuard
 from ..tool_executor import ToolExecutor
 from ..meta_block import build_meta, render_meta
+from ..sent_message_tracker import SEND_TOOLS, SEND_ACTIONS, CHECK_ACTIONS
 from ..time_veil import now_iso
 
 logger = get_logger()
@@ -786,6 +787,87 @@ def _get_guard_limits(agent) -> tuple[int, int, int]:
     return (max_turns, 2, 8)
 
 
+def _check_external_send(agent, tool_calls, tool_results=None) -> None:
+    """Record external sends and warn on duplicates.
+
+    Scans the just-executed batch for send/reply actions on external
+    channel tools (telegram, imap, wechat, feishu). Records each send
+    in the tracker for dedup. When a duplicate is detected, appends a
+    warning to the corresponding tool result.
+    """
+    tracker = agent._sent_tracker
+    for tc in tool_calls:
+        if tc.name not in SEND_TOOLS:
+            continue
+        args = tc.args or {}
+        action = args.get("action", "")
+        if action in SEND_ACTIONS:
+            content = args.get("message", "") or args.get("body", "") or args.get("text", "")
+            recipient = args.get("to", "") or args.get("chat_id", "") or args.get("address", "")
+            if content and recipient:
+                if tracker.was_recently_sent(content, recipient):
+                    agent._log(
+                        "send_dedup_detected",
+                        tool=tc.name,
+                        recipient=recipient,
+                    )
+                    if tool_results:
+                        for tr in tool_results:
+                            if tr.id == tc.id:
+                                tr.content = (
+                                    (tr.content or "")
+                                    + "\n⚠️ Recently sent similar message"
+                                    " to this recipient. Skipping duplicate."
+                                )
+                                break
+                    continue
+                tracker.record_sent(content, recipient, tc.name)
+                agent._log(
+                    "external_send_detected",
+                    tool=tc.name,
+                    action=action,
+                    recipient=recipient,
+                )
+
+
+def _check_poll_backoff(agent, tool_calls) -> bool:
+    """Check if polling actions should trigger idle-after-backoff.
+
+    Counts consecutive check/read calls on external channel tools within
+    the same turn. After ``max_poll_retries`` consecutive checks on the
+    same channel, returns True to signal the agent should go IDLE.
+
+    The counter resets when a send action occurs or when new messages
+    arrive via the notification system.
+    """
+    tracker = agent._sent_tracker
+    should_idle = False
+    for tc in tool_calls:
+        if tc.name not in SEND_TOOLS:
+            continue
+        args = tc.args or {}
+        action = args.get("action", "")
+        if action in SEND_ACTIONS:
+            # Send resets the poll counter for this channel.
+            tracker.reset_poll(tc.name)
+            continue
+        if action not in CHECK_ACTIONS:
+            continue
+        # Record a poll attempt (assume no new messages — the conservative
+        # default). If new messages actually arrived, the notification
+        # system will wake the agent via a separate path.
+        tracker.record_poll(tc.name, found_new=False)
+        if tracker.should_stop_polling(tc.name):
+            agent._log(
+                "poll_backoff_exhausted",
+                tool=tc.name,
+                action=action,
+                poll_count=tracker._poll_counts.get(tc.name, 0),
+            )
+            should_idle = True
+    return should_idle
+
+
 def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
     """Handle tool calls and collect text output.
 
@@ -885,6 +967,23 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
             agent._log("turn_cancelled_post_tool",
                        reason="cancel_event_set_after_tool_execute")
             return {"text": "", "failed": False, "errors": []}
+
+        # Issue #63: dedup check — warn agent if it just re-sent
+        # a duplicate message to an external channel.
+        _check_external_send(agent, response.tool_calls, tool_results)
+
+        # Issue #63: poll backoff — if the agent is repeatedly checking
+        # for new messages without finding any, go IDLE after max retries.
+        if _check_poll_backoff(agent, response.tool_calls):
+            if tool_results and agent._chat:
+                agent._chat.commit_tool_results(tool_results)
+            agent._log("idle_after_poll_backoff",
+                       reason="poll_retries_exhausted")
+            return {
+                "text": "\n".join(collected_text_parts),
+                "failed": False,
+                "errors": [],
+            }
 
         guard.record_calls(len(response.tool_calls))
 

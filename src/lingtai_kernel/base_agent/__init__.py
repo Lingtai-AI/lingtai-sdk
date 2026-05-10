@@ -425,6 +425,10 @@ class BaseAgent:
         # Auto-fallback state
         self._preset_fallback_attempted = False
 
+        # Sent message tracker — dedup + idle-after-send for external channels
+        from ..sent_message_tracker import SentMessageTracker
+        self._sent_tracker = SentMessageTracker()
+
         # Session manager — LLM session, token tracking, compaction
         self._session = SessionManager(
             llm_service=service,
