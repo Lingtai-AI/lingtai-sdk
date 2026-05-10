@@ -783,9 +783,21 @@ class DaemonManager:
 
         # Pre-flight: resolve any per-task presets BEFORE scheduling.
         # If any preset is invalid, refuse the whole batch. Presets are
-        # identified by path (~/foo.json, ./foo.json, or absolute).
-        from lingtai.presets import load_preset
+        # identified by path (~/foo.json, ./foo.json, or absolute) or
+        # by shorthand name (stem of an allowed preset, case-insensitive).
+        from lingtai.presets import load_preset, resolve_allowed_presets
         from lingtai.preset_connectivity import check_connectivity
+        import json as _json
+
+        # Pre-load allowed presets for shorthand resolution
+        _init_path = self._agent._working_dir / "init.json"
+        try:
+            _init_data = _json.loads(_init_path.read_text(encoding="utf-8"))
+            _allowed_paths = resolve_allowed_presets(
+                _init_data.get("manifest", {}), self._agent._working_dir
+            )
+        except Exception:
+            _allowed_paths = []
 
         resolved_presets: list[dict | None] = []  # one entry per task — None means inherit
         for spec in tasks:
@@ -793,6 +805,23 @@ class DaemonManager:
             if not preset_name:
                 resolved_presets.append(None)
                 continue
+            # Resolve shorthand names (no .json/.jsonc extension) against allowed presets
+            if not preset_name.endswith((".json", ".jsonc")):
+                matches = [
+                    p for p in _allowed_paths
+                    if p.stem.lower() == preset_name.lower()
+                ]
+                if len(matches) == 1:
+                    preset_name = str(matches[0])
+                elif len(matches) > 1:
+                    return {"status": "error",
+                            "message": f"ambiguous preset name {spec.get('preset')!r}: "
+                                       f"matches {[str(m) for m in matches]}"}
+                else:
+                    available = [p.stem for p in _allowed_paths]
+                    return {"status": "error",
+                            "message": f"no preset matching {spec.get('preset')!r}; "
+                                       f"available: {available}"}
             # Validate preset exists and is loadable
             try:
                 preset = load_preset(preset_name, working_dir=self._agent._working_dir)
