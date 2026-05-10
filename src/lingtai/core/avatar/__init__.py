@@ -707,23 +707,46 @@ class AvatarManager:
 
     @staticmethod
     def _launch_claude_code(working_dir: Path, mission: str) -> tuple[subprocess.Popen, Path]:
-        """Launch `claude -p <mission>` in a Claude Code node directory.
+        """Launch the lingtai-node watcher for a Claude Code node.
 
-        This is the simplest possible launch — runs Claude Code in non-interactive
-        mode with the mission as the initial prompt. For ongoing communication,
-        a watcher should be used instead (future enhancement).
+        The watcher maintains heartbeat, watches for .prompt files,
+        dispatches to Claude Code via ClaudeCodeSessionManager, and
+        writes responses to .response files. This gives the node
+        ongoing communication capability (not just a one-shot prompt).
+
+        The mission is written to .prompt by the caller; the watcher
+        picks it up on its first poll cycle.
         """
+        from lingtai.venv_resolve import resolve_venv, venv_python
+
+        # Resolve Python — try init.json venv, then global runtime, then PATH
+        init_path = working_dir / "init.json"
+        init_data = None
+        if init_path.is_file():
+            try:
+                init_data = json.loads(init_path.read_text())
+            except (ValueError, OSError):
+                pass
+        venv_dir = resolve_venv(init_data)
+        python = venv_python(venv_dir)
+
+        # The watcher script — starts heartbeat, watches .prompt, dispatches to claude
+        watcher_script = (
+            "from lingtai_node.runtimes.claude_code.watcher import Watcher; "
+            "from pathlib import Path; "
+            f"Watcher(Path('{working_dir}')).run_forever()"
+        )
+
         logs_dir = working_dir / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
         stderr_path = logs_dir / "spawn.stderr"
         stderr_fh = stderr_path.open("wb")
         try:
             proc = subprocess.Popen(
-                ["claude", "-p", mission, "--dangerously-skip-permissions"],
+                [python, "-c", watcher_script],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=stderr_fh,
-                cwd=str(working_dir),
                 start_new_session=True,
             )
         finally:
