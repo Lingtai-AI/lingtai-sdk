@@ -161,7 +161,7 @@ Molt is not defeat — it is renewal. When context pressure rises, do not cling 
 
 ### Soul flow — your inner voice
 
-The soul flow fires periodically when you are idle (after `soul_delay` seconds, default 3600s = 1 hour), or you can trigger it manually with `soul(action='flow')`. Each fire runs M=1+K parallel LLM calls:
+The soul flow fires periodically when you are idle (after `soul_delay` seconds, default 7200s = 2 hours), or you can trigger it manually with `soul(action='flow')`. Each fire runs M=1+K parallel LLM calls:
 
 - **1 insights voice**: A stepped-back read of your current chat — fresh reflection on what's happening right now.
 - **K snapshot voices** (K=2 by default): Random past selves sampled from your molt snapshot library. These are frozen versions of you from before each context molt, offering perspective you may have lost.
