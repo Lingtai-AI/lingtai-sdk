@@ -124,6 +124,22 @@ That's a healthy pattern: the LLM is between tool calls, has good progress narra
 
 `list` reports only currently-active emanations (in-memory registry). It includes `run_id` and `path` so you know where to read on disk. Historical (completed/failed/cancelled) emanations don't appear in `list` — find them with `bash("ls daemons/")` instead.
 
+## CLI backends
+
+The `backend` parameter selects the execution engine for emanations. Default is `lingtai` (the built-in ChatSession loop). Two external CLI backends are also available:
+
+| Backend | CLI command | Session resume | Notes |
+|---------|------------|----------------|-------|
+| `lingtai` | (built-in) | N/A — in-process `ask` | Default. Uses preset resolution, tool surface curation, model routing. |
+| `claude-code` | `claude --print --dangerously-skip-permissions --name <em_id> <task>` | `claude --resume <session-id>` via `ask` | Discovers session ID from JSONL files after run. `ask` resumes that session. |
+| `codex` | `codex exec <task>` | Not supported | One-shot execution. No session ID, no `--resume`. `ask` is not available for codex emanations. |
+
+**When to use CLI backends:** When the task benefits from a different agent runtime's tool surface (e.g., Claude Code's built-in file editing, Codex's sandboxed execution) rather than the lingtai emanation's curated tool set.
+
+**CLI backends skip preset resolution** — the external CLI manages its own model, tools, and permissions. The `tools` field in the task spec is ignored for CLI backends.
+
+**Working directory:** Both CLI backends run in the parent agent's working directory (`_working_dir`), not in the emanation's `daemons/em-N-*/` folder. The `daemons/` folder is used only for tracking state (`daemon.json`, logs).
+
 ## What the manual does NOT cover
 
 - Provider routing / LLM presets — deferred to a separate spec.
