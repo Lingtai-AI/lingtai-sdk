@@ -107,58 +107,6 @@ def _build_responses_tools(schemas: list[FunctionSchema] | None) -> list[dict] |
     return tools
 
 
-def _merge_consecutive_same_role(messages: list[dict]) -> list[dict]:
-    """Merge consecutive messages with the same role.
-
-    Some providers (e.g. Zhipu GLM, error 1214) reject requests that
-    contain consecutive messages with the same role.  This function
-    merges adjacent same-role messages by concatenating their text
-    content.
-
-    Rules:
-    - system messages are never merged (should be singular anyway).
-    - tool messages are never merged (each has a distinct tool_call_id).
-    - assistant messages: text content concatenated; tool_calls taken
-      from the last message in the run that carries them.
-    - user messages: text content concatenated.
-
-    Idempotent — returns the list unchanged if no consecutive duplicates.
-    """
-    if len(messages) <= 1:
-        return messages
-
-    result: list[dict] = []
-    for msg in messages:
-        role = msg.get("role")
-        # Never merge system or tool messages.
-        if role in ("system", "tool") or not result:
-            result.append(msg)
-            continue
-        prev = result[-1]
-        if prev.get("role") != role:
-            result.append(msg)
-            continue
-
-        # --- merge into prev ---
-        logger.warning(
-            "[wire-sanitize] merging consecutive %s messages — "
-            "some providers reject same-role runs (GLM error 1214)",
-            role,
-        )
-        prev_content = prev.get("content") or ""
-        cur_content = msg.get("content") or ""
-        # Concatenate text (skip empty halves).
-        parts = [p for p in (prev_content, cur_content) if p]
-        prev["content"] = "\n".join(parts) if parts else ""
-
-        if role == "assistant":
-            # Preserve tool_calls from the *last* message that has them.
-            if msg.get("tool_calls"):
-                prev["tool_calls"] = msg["tool_calls"]
-
-    return result
-
-
 def _parse_tool_calls(raw_tool_calls) -> list[ToolCall]:
     """Parse OpenAI tool calls into our ToolCall dataclass."""
     if not raw_tool_calls:
@@ -469,9 +417,6 @@ class OpenAIChatSession(ChatSession):
             # any orphan assistant[tool_calls] that aren't immediately followed
             # by matching role=tool entries. Canonical interface untouched.
             candidate = self._pair_orphan_tool_calls(candidate)
-            # Merge consecutive same-role messages.  Some providers (e.g.
-            # GLM error 1214) reject runs of the same role.
-            candidate = _merge_consecutive_same_role(candidate)
             kw: dict[str, Any] = {
                 "model": self._model,
                 "messages": candidate,
@@ -641,8 +586,6 @@ class OpenAIChatSession(ChatSession):
             candidate = self._build_messages()
             # Final wire-layer guard — same as non-streaming send().
             candidate = self._pair_orphan_tool_calls(candidate)
-            # Merge consecutive same-role messages (GLM error 1214).
-            candidate = _merge_consecutive_same_role(candidate)
             kw: dict[str, Any] = {
                 "model": self._model,
                 "messages": candidate,

@@ -88,6 +88,14 @@ def register_all_adapters() -> None:
 
     LLMService.register_adapter("deepseek", _deepseek)
 
+    def _zhipu(*, model=None, defaults=None, **kw):
+        from .zhipu.adapter import ZhipuAdapter
+        kw.pop("model", None)
+        return ZhipuAdapter(**{k: v for k, v in kw.items() if v is not None})
+
+    for name in ("glm", "zhipu"):
+        LLMService.register_adapter(name, _zhipu)
+
     # Providers routed through the generic custom adapter
-    for name in ("grok", "qwen", "glm", "zhipu", "kimi", "mimo"):
+    for name in ("grok", "qwen", "kimi", "mimo"):
         LLMService.register_adapter(name, _custom)

@@ -1,15 +1,14 @@
-"""Tests for _merge_consecutive_same_role in the OpenAI adapter.
+"""Tests for _merge_consecutive_same_role in the Zhipu adapter.
 
 Validates the wire-layer sanitization that merges consecutive messages
-with the same role, preventing GLM error 1214 and similar provider
-rejections.
+with the same role, preventing GLM error 1214.
 """
 
 from __future__ import annotations
 
 import logging
 
-from lingtai.llm.openai.adapter import _merge_consecutive_same_role
+from lingtai.llm.zhipu.adapter import _merge_consecutive_same_role
 
 
 # ---------------------------------------------------------------------------
