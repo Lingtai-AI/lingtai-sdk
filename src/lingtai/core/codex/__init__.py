@@ -71,7 +71,7 @@ def get_schema(lang: str = "en") -> dict:
 class CodexManager:
     """Durable self-memory — submit, view, consolidate, delete."""
 
-    DEFAULT_MAX_ENTRIES = 20
+    DEFAULT_MAX_ENTRIES = 50
 
     def __init__(self, agent: "BaseAgent", *, codex_limit: int | None = None):
         self._agent = agent
