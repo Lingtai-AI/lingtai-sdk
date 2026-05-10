@@ -203,6 +203,7 @@ def _context_molt(agent, args: dict) -> dict:
             e for e in keep_last_entries if not _entry_overlaps_keep_pairs(e)
         ]
 
+
     # Snapshot the pre-molt interface to a discrete file so future
     # past-self consultation can load it as cached substrate. Best-effort.
     # Orphan tool_calls (including the molt's own) are closed with

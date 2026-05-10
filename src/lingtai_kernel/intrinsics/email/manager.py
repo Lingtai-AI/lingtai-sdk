@@ -156,15 +156,18 @@ class EmailManager:
         """Build a summary dict from a raw email dict."""
         if read_set is None:
             read_set = _read_ids(self._agent)
+        recipient_id = getattr(self._agent, "_agent_id", "")
         if e.get("_folder") == "inbox":
-            summary = _message_summary(e, read_set, truncate=truncate)
+            summary = _message_summary(e, read_set, truncate=truncate,
+                                       recipient_agent_id=recipient_id)
             summary["folder"] = "inbox"
             if e.get("cc"):
                 summary["cc"] = e["cc"]
             self._inject_identity(summary, e)
             return summary
         if e.get("_folder") == "archive":
-            summary = _message_summary(e, read_set, truncate=truncate)
+            summary = _message_summary(e, read_set, truncate=truncate,
+                                       recipient_agent_id=recipient_id)
             summary["folder"] = "archive"
             if e.get("cc"):
                 summary["cc"] = e["cc"]
@@ -634,6 +637,7 @@ class EmailManager:
             "subject": subject,
             "message": message_text,
             "type": mail_type,
+            "mode": mode,
             "identity": self._agent._build_manifest(),
         }
         if cc:
@@ -645,10 +649,16 @@ class EmailManager:
         deliver_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
         all_recipients = to_list + cc + bcc
 
+        # For cross-project (abs) emails, use full path as sender
+        # so the recipient can reply to the correct address.
+        abs_sender = str(self._agent._working_dir) if mode == "abs" else None
+
         for addr in all_recipients:
             dispatch_payload = dict(base_payload)
             dispatch_payload["_dispatch_to"] = addr
             dispatch_payload["_mode"] = mode
+            if abs_sender is not None:
+                dispatch_payload["from"] = abs_sender
             msg_id = _persist_to_outbox(self._agent, dispatch_payload, deliver_at)
             tt = threading.Thread(
                 target=_mailman,
@@ -662,8 +672,11 @@ class EmailManager:
         sent_id = _new_mailbox_id()
         sent_dir = self._mailbox_path / "sent" / sent_id
         sent_dir.mkdir(parents=True, exist_ok=True)
+        sent_payload = dict(base_payload)
+        if abs_sender is not None:
+            sent_payload["from"] = abs_sender
         sent_record = {
-            **base_payload,
+            **sent_payload,
             "_mailbox_id": sent_id,
             "sent_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "delay": delay,

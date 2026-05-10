@@ -139,8 +139,15 @@ def _summary_to_list(raw) -> list[str]:
     return [str(x) for x in raw if isinstance(x, str)]
 
 
-def _message_summary(msg: dict, read_ids: set[str], truncate: int = 500) -> dict:
-    """Build a summary dict for check output."""
+def _message_summary(msg: dict, read_ids: set[str], truncate: int = 500,
+                     *, recipient_agent_id: str = "") -> dict:
+    """Build a summary dict for check output.
+
+    When *recipient_agent_id* is provided and the sender has a different
+    ``agent_id`` but the same ``agent_name`` as the recipient, the sender
+    display is disambiguated with the sender's agent_id so the recipient
+    can tell them apart.
+    """
     msg_id = msg.get("_mailbox_id", "")
     body = msg.get("message", "")
     if truncate > 0 and len(body) > truncate:
@@ -150,7 +157,15 @@ def _message_summary(msg: dict, read_ids: set[str], truncate: int = 500) -> dict
     identity = msg.get("identity")
     sender = msg.get("from", "")
     if identity and identity.get("agent_name"):
-        sender = f"{identity['agent_name']} ({sender})"
+        name = identity["agent_name"]
+        sender_id = identity.get("agent_id", "")
+        # Disambiguate when sender is a different agent — always show
+        # agent_id when it differs from ours, regardless of name match.
+        # This handles abs-mode emails where from is a full path.
+        if (recipient_agent_id and sender_id
+                and sender_id != recipient_agent_id):
+            name = f"{name} (agent:{sender_id})"
+        sender = f"{name} ({sender})"
     return {
         "id": msg_id,
         "from": sender,
@@ -348,11 +363,17 @@ def _render_unread_digest(agent, *, max_entries: int = 10, preview_chars: int = 
     newest_ts = newest.get("received_at") or newest.get("sent_at") or ""
 
     lang = agent._config.language
+    recipient_id = getattr(agent, "_agent_id", "")
     lines = []
     for i, m in enumerate(shown, start=1):
         addr = m.get("from", "unknown")
         identity = m.get("identity") or {}
         name = identity.get("agent_name") or addr
+        # Disambiguate when sender is a different agent
+        sender_id = identity.get("agent_id", "")
+        if (recipient_id and sender_id
+                and sender_id != recipient_id):
+            name = f"{name} (agent:{sender_id})"
         subj_raw = m.get("subject")
         subject = subj_raw if subj_raw else _t(lang, "email.unread_digest.no_subject")
         ts = m.get("sent_at") or m.get("time") or m.get("received_at") or ""
