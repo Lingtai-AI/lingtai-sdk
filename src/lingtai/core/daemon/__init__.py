@@ -620,6 +620,94 @@ class DaemonManager:
         run_dir.mark_done(text)
         return text
 
+    def _run_codex_emanation(
+        self,
+        em_id: str,
+        run_dir: DaemonRunDir,
+        task: str,
+        cancel_event: threading.Event,
+        timeout_event: threading.Event | None = None,
+    ) -> str:
+        """Run a Codex CLI session as the emanation backend.
+
+        Spawns ``codex exec <task>`` and streams stdout back via
+        ``_notify_parent()``.  Unlike Claude Code, Codex has no session
+        resumption or JSONL session discovery — each invocation is
+        one-shot.
+        """
+        def _exit_cancelled() -> str:
+            if timeout_event is not None and timeout_event.is_set():
+                run_dir.mark_timeout()
+            else:
+                run_dir.mark_cancelled()
+            return "[cancelled]"
+
+        if cancel_event.is_set():
+            return _exit_cancelled()
+
+        cmd = [
+            "codex",
+            "exec",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--ephemeral",
+            task,
+        ]
+        self._log("daemon_codex_start", em_id=em_id, cmd=" ".join(cmd))
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                cwd=str(self._agent._working_dir),
+            )
+        except FileNotFoundError:
+            exc = RuntimeError("'codex' CLI not found on PATH")
+            run_dir.mark_failed(exc)
+            raise exc
+        except OSError as e:
+            exc = RuntimeError(f"Failed to start codex CLI: {e}")
+            run_dir.mark_failed(exc)
+            raise exc
+
+        output_lines: list[str] = []
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                if cancel_event.is_set():
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    return _exit_cancelled()
+                output_lines.append(line)
+                stripped = line.rstrip("\n")
+                if stripped:
+                    self._notify_parent(em_id, stripped)
+
+            proc.wait()
+        except Exception as e:
+            proc.kill()
+            proc.wait()
+            run_dir.mark_failed(e)
+            raise
+
+        full_output = "".join(output_lines)
+
+        if proc.returncode != 0:
+            exc = RuntimeError(
+                f"codex CLI exited with code {proc.returncode}: "
+                f"{full_output[-500:]}"
+            )
+            run_dir.mark_failed(exc)
+            raise exc
+
+        text = full_output.strip() or "[no output]"
+        run_dir.mark_done(text)
+        return text
+
     def _notify_parent(self, em_id: str, text: str) -> None:
         """Send a [daemon] notification to parent's inbox."""
         notification = f"[daemon:{em_id}]\n\n{text}"
@@ -889,8 +977,12 @@ class DaemonManager:
                 return {"status": "error",
                         "message": f"Failed to create daemon folder: {e}"}
 
+            if backend == "codex":
+                run_fn = self._run_codex_emanation
+            else:
+                run_fn = self._run_claude_code_emanation
             future = pool.submit(
-                self._run_claude_code_emanation,
+                run_fn,
                 em_id, run_dir, spec["task"],
                 cancel_event, timeout_event,
             )
@@ -962,8 +1054,11 @@ class DaemonManager:
             return {"status": "error", "message": f"Unknown emanation: {em_id}"}
 
         # Claude Code backend: resume the session with --resume <session-id>
-        if entry.get("backend") in ("claude-code", "codex"):
+        if entry.get("backend") == "claude-code":
             return self._handle_ask_cli(em_id, entry, message)
+        if entry.get("backend") == "codex":
+            return {"status": "error",
+                    "message": "ask is not supported for codex backends (one-shot execution)"}
 
         if entry["future"].done():
             return {"status": "error", "message": "not running"}
