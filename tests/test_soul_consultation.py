@@ -248,6 +248,57 @@ class TestFitInterfaceToWindow:
                         "orphan tool_result kept without matching tool_call"
                     )
 
+    def test_heals_trailing_dangling_tool_calls_when_fitted(self):
+        """Fitter must close dangling tail tool_calls so the consultation
+        path can append the spark via add_user_message.
+
+        Repro for the soul_whisper_error storm: snapshots taken mid-tool-flow
+        leave the tail assistant turn carrying tool_calls without matching
+        tool_results. The fitter previously returned them as-is and the
+        consultation crashed at spark append time.
+        """
+        iface = ChatInterface()
+        iface.add_system("sys")
+        iface.add_user_message("hello")
+        iface.add_assistant_message([
+            TextBlock(text="thinking..."),
+            ToolCallBlock(id="tc_dangling", name="bash", args={"cmd": "x"}),
+        ])
+        # No tool_result appended — simulates a snapshot frozen mid-flow.
+        assert iface.has_pending_tool_calls()
+
+        out = _fit_interface_to_window(iface, 1_000_000)
+
+        # After fitting, tail must be paired so add_user_message succeeds.
+        assert not out.has_pending_tool_calls(), (
+            "fitter left dangling tool_calls on tail — spark append would crash"
+        )
+        # Spark append must not raise.
+        out.add_user_message("spark")
+
+    def test_heals_trailing_dangling_tool_calls_when_trimmed(self):
+        """Same heal must apply when the interface is trimmed, not just when
+        it already fits."""
+        iface = ChatInterface()
+        iface.add_system("sys")
+        # Long body to force trimming.
+        for i in range(15):
+            iface.add_user_message(f"user {i} " * 200)
+            iface.add_assistant_message([TextBlock(text=f"reply {i} " * 200)])
+        # Trailing dangling tool_call after the body.
+        iface.add_user_message("final ask")
+        iface.add_assistant_message([
+            ToolCallBlock(id="tc_dangling_trim", name="bash", args={}),
+        ])
+        assert iface.has_pending_tool_calls()
+
+        # Small target forces trimming. The dangling tail should remain in
+        # the kept suffix because it's the most recent — and must be healed.
+        out = _fit_interface_to_window(iface, 5_000)
+
+        assert not out.has_pending_tool_calls()
+        out.add_user_message("spark")
+
 
 # ---------------------------------------------------------------------------
 # _list_snapshot_paths

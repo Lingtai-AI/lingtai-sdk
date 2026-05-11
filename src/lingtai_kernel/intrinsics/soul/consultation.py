@@ -285,7 +285,7 @@ def _fit_interface_to_window(iface, target_tokens: int):
     # caller can mutate the trimmed copy without affecting the source).
     current = iface.estimate_context_tokens()
     if current <= target_tokens:
-        return ChatInterface.from_dict(iface.to_dict())
+        return _heal_trailing_tool_calls(ChatInterface.from_dict(iface.to_dict()))
 
     # Identify a leading system entry (preserve it).
     head_system = []
@@ -341,7 +341,24 @@ def _fit_interface_to_window(iface, target_tokens: int):
         return ChatInterface.from_dict([])
 
     final_dicts = head_dicts + [e.to_dict() for e in final_body]
-    return ChatInterface.from_dict(final_dicts)
+    return _heal_trailing_tool_calls(ChatInterface.from_dict(final_dicts))
+
+
+def _heal_trailing_tool_calls(iface):
+    """Synthesize tool_result placeholders for any unanswered tool_calls
+    on the fitted interface's tail.
+
+    The consultation path appends a spark via ``add_user_message``, which
+    refuses if the tail assistant turn has dangling ``tool_calls``. The
+    fitter's boundary walk handles leading orphan tool_results but does
+    not heal trailing orphan tool_calls — those arrive when the agent
+    snapshot was taken mid-tool-flow (timeout, AED restart, daemon crash).
+    Heals in place via ``close_pending_tool_calls`` so the spark append
+    succeeds and the consultation sees the synthesized aborts in context.
+    """
+    if iface.has_pending_tool_calls():
+        iface.close_pending_tool_calls(reason="consultation:fit_window")
+    return iface
 
 
 def _kind_for_source(source: str) -> str:
