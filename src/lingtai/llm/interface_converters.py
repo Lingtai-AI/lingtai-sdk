@@ -191,6 +191,7 @@ def to_responses_input(iface: ChatInterface) -> list[dict]:
       * user text       -> ``{"role": "user", "content": <str>}``
       * assistant text  -> ``{"role": "assistant", "content": <str>}``
       * assistant call  -> ``{"type": "function_call", "call_id", "name", "arguments": <json-str>}``
+      * assistant thought -> ``{"type": "reasoning", "summary": [{"type": "summary_text", "text": <str>}]}``
       * tool result     -> ``{"type": "function_call_output", "call_id", "output": <str>}``
 
     Used by stateless Responses sessions (e.g. Codex) that must replay the
@@ -224,10 +225,19 @@ def to_responses_input(iface: ChatInterface) -> list[dict]:
                 })
         elif entry.role == "assistant":
             text_parts: list[str] = []
+            reasoning_items: list[dict] = []
             tool_calls: list[dict] = []
             for block in entry.content:
                 if isinstance(block, TextBlock):
                     text_parts.append(block.text)
+                elif isinstance(block, ThinkingBlock):
+                    if block.text:
+                        reasoning_items.append({
+                            "type": "reasoning",
+                            "summary": [
+                                {"type": "summary_text", "text": block.text},
+                            ],
+                        })
                 elif isinstance(block, ToolCallBlock):
                     tool_calls.append({
                         "type": "function_call",
@@ -235,9 +245,12 @@ def to_responses_input(iface: ChatInterface) -> list[dict]:
                         "name": block.name,
                         "arguments": json.dumps(block.args),
                     })
-                # ThinkingBlocks dropped: the Responses API expects encrypted
-                # reasoning items, which we don't carry through the canonical
-                # interface. Stateless replay simply omits past reasoning.
+            # Preserve the model's original output order: reasoning first,
+            # visible assistant text second, tool calls last.  Responses API
+            # output reasoning items may carry encrypted state when replaying
+            # byte-identical API output, but the input schema also accepts
+            # summary_text-only reasoning items for manually managed context.
+            items.extend(reasoning_items)
             if text_parts:
                 joined = "\n".join(text_parts)
                 if joined:

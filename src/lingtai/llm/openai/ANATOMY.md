@@ -91,7 +91,7 @@ Both paths return sessions wrapped via `_wrap_with_gate()` for rate limiting.
 | `ToolCallBlock` | `{type: "function", id, function: {name, arguments: <json-str>}}` on assistant message `tool_calls` array | `{type: "function_call", call_id, name, arguments: <json-str>}` as top-level output item |
 | `ToolResultBlock` | `{role: "tool", tool_call_id, content}` as separate message | `{type: "function_call_output", call_id, output}` as top-level input item |
 | `TextBlock` | `content` string on assistant message | `{type: "output_text", text}` inside message content |
-| `ThinkingBlock` | Emitted as `reasoning_content` on assistant message (DeepSeek thinking-mode round-trip; other CC providers ignore the field). Captured back from `message.reasoning_content` / `message.reasoning` into a ThinkingBlock by `_record_assistant_response` (non-streaming) and the streaming finalize path. | Dropped (reasoning items are encrypted) |
+| `ThinkingBlock` | Emitted as `reasoning_content` on assistant message (DeepSeek thinking-mode round-trip; other CC providers ignore the field). Captured back from `message.reasoning_content` / `message.reasoning` into a ThinkingBlock by `_record_assistant_response` (non-streaming) and the streaming finalize path. | Replayed as a top-level `{type: "reasoning", summary: [{type: "summary_text", text: ...}]}` item before assistant text/calls by `to_responses_input` (`../interface_converters.py:233-258`) so stateless Codex can retain summarized reasoning context. |
 
 ### Context overflow auto-recovery
 

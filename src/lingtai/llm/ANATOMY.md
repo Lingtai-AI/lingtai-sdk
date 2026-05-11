@@ -12,7 +12,7 @@ LLM adapter layer — multi-provider support with adapter registry, base classes
 | `_register.py` | 108 | Registers adapter factories for all providers with `LLMService.register_adapter()` |
 | `api_gate.py` | 112 | `APICallGate` — RPM rate limiter with deque timestamps, `ThreadPoolExecutor`, daemon gate thread |
 | `base.py` | 150 | `LLMAdapter` ABC (4 abstract methods), `_GatedSession` proxy |
-| `interface_converters.py` | 322 | Bidirectional converters: `to_*` / `from_*` for Anthropic, OpenAI, OpenAI Responses API, Gemini |
+| `interface_converters.py` | 335 | Bidirectional converters: `to_*` / `from_*` for Anthropic, OpenAI, OpenAI Responses API, Gemini |
 | `service.py` | 313 | `LLMService` concrete class — adapter registry, session management, one-shot generation |
 
 ## Connections
@@ -45,7 +45,7 @@ LLM adapter layer — multi-provider support with adapter registry, base classes
 - **Interface converters** — Four bidirectional pairs:
   - `to_anthropic`/`from_anthropic` — Anthropic Messages format (system excluded, ThinkingBlock with signature round-trip)
   - `to_openai` — Chat Completions format (tool results as `role=tool`, ThinkingBlocks emit as `reasoning_content` for DeepSeek round-trip; other OpenAI-compat providers ignore the field). One-way only — OpenAI history rehydration goes through `content_block_from_dict` on the canonical interface, not a reverse converter.
-  - `to_responses_input` — Responses API input items (`function_call` / `function_call_output` shapes, ThinkingBlocks omitted)
+  - `to_responses_input` — Responses API input items (`function_call` / `function_call_output` shapes; non-empty ThinkingBlocks replay as `reasoning` items with `summary_text`, before assistant text/calls; `interface_converters.py:184-259`)
   - `to_gemini`/`from_gemini` — Interactions TurnParam format (`role=model`, `function_call`/`function_result`, `thought` blocks)
 - **ToolCallBlock shape conversions** — Anthropic: `tool_use` with `input` dict. OpenAI CC: `function_call` with `arguments` JSON string. Responses: `function_call` with `arguments` JSON string and `call_id`. Gemini: `function_call` with `arguments` dict and `id`.
 - **APICallGate mechanics** — Gate thread dequeues items, prunes timestamps >60s old, sleeps if RPM window full, dispatches to pool (`api_gate.py:71-103`). Pool size defaults to `max(2, min(32, max_rpm // 3))`.
