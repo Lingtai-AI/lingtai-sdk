@@ -290,3 +290,130 @@ def test_perform_refresh_clears_llm_hang_sentinel(tmp_path):
     assert any(name == "llm_hang_cleared"
                and fields.get("reason") == "refresh"
                for name, fields in agent._logs)
+
+
+# ---------------------------------------------------------------------------
+# AED transient provider retry
+# ---------------------------------------------------------------------------
+
+
+class _FakeInterface:
+    def __init__(self):
+        self.heals: list[tuple[str, bool]] = []
+
+    def has_pending_tool_calls(self):
+        return False
+
+    def close_pending_tool_calls(self, *, reason: str, tool_completed: bool = False):
+        self.heals.append((reason, tool_completed))
+
+
+def _make_run_loop_agent(tmp_path):
+    agent = _FakeAgent(tmp_path)
+    agent.agent_name = "test"
+    agent._shutdown = threading.Event()
+    agent._cancel_event = threading.Event()
+    agent._inbox_timeout = 0.01
+    agent._reset_uptime = lambda: None
+    agent._save_chat_history = lambda *a, **kw: None
+    agent._config = SimpleNamespace(
+        insights_interval=0,
+        max_aed_attempts=10,
+        language="en",
+        time_awareness=True,
+        timezone_awareness=True,
+    )
+    iface = _FakeInterface()
+    agent._session = SimpleNamespace(
+        chat=SimpleNamespace(interface=iface),
+        _rebuild_session=lambda interface: setattr(agent, "rebuilds", getattr(agent, "rebuilds", 0) + 1),
+    )
+    agent.inbox = queue.Queue()
+    agent.inbox.put(_make_message(MSG_REQUEST, "human", "go"))
+    agent._preset_fallback_attempted = False
+    agent._can_fallback_preset = lambda: False
+    return agent
+
+
+def test_transient_provider_error_retries_before_aed_count(tmp_path, monkeypatch):
+    agent = _make_run_loop_agent(tmp_path)
+    calls = {"n": 0}
+
+    def fake_handle(_agent, _msg):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise RuntimeError("An error occurred while processing your request")
+        _agent._shutdown.set()
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    monkeypatch.setattr(turn.time, "sleep", lambda _seconds: None)
+
+    import lingtai_kernel.intrinsics.soul.flow as soul_flow
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: None)
+
+    turn._run_loop(agent)
+
+    assert calls["n"] == 3
+    assert [name for name, _ in agent._logs].count("aed_transient_retry") == 2
+    assert not any(name == "aed_attempt" for name, _ in agent._logs)
+    assert getattr(agent, "rebuilds", 0) == 0
+    assert all(tool_completed for _, tool_completed in agent._session.chat.interface.heals)
+
+
+def test_transient_provider_error_counts_as_aed_after_retry_budget(tmp_path, monkeypatch):
+    agent = _make_run_loop_agent(tmp_path)
+    agent._config.max_aed_attempts = 1
+    calls = {"n": 0}
+
+    def fake_handle(_agent, _msg):
+        calls["n"] += 1
+        raise RuntimeError("peer closed connection without sending complete message body")
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    monkeypatch.setattr(turn.time, "sleep", lambda _seconds: None)
+
+    import lingtai_kernel.intrinsics.soul.flow as soul_flow
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+
+    turn._run_loop(agent)
+
+    assert calls["n"] == turn._TRANSIENT_AED_RETRY_LIMIT + 1
+    assert [name for name, _ in agent._logs].count("aed_transient_retry") == turn._TRANSIENT_AED_RETRY_LIMIT
+    assert any(name == "aed_transient_exhausted" for name, _ in agent._logs)
+    assert any(name == "aed_attempt" and fields["attempt"] == 1 for name, fields in agent._logs)
+    assert any(name == "aed_exhausted" for name, _ in agent._logs)
+    assert agent._asleep.is_set()
+
+
+def test_structural_error_skips_transient_retry(tmp_path, monkeypatch):
+    agent = _make_run_loop_agent(tmp_path)
+    agent._config.max_aed_attempts = 1
+
+    def fake_handle(_agent, _msg):
+        raise ValueError("bad schema")
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+
+    import lingtai_kernel.intrinsics.soul.flow as soul_flow
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+
+    turn._run_loop(agent)
+
+    assert not any(name == "aed_transient_retry" for name, _ in agent._logs)
+    assert any(name == "aed_attempt" and fields["attempt"] == 1 for name, fields in agent._logs)
+
+
+def test_empty_llm_response_is_classified_transient():
+    err = turn.EmptyLLMResponseError(ledger_source="main", in_tool_loop=False)
+    assert turn._is_transient_provider_error(err) is True
+
+
+def test_status_code_classifier_treats_only_5xx_as_transient():
+    class StatusError(Exception):
+        def __init__(self, status_code: int):
+            super().__init__(f"HTTP {status_code}")
+            self.status_code = status_code
+
+    assert turn._is_transient_provider_error(StatusError(503)) is True
+    assert turn._is_transient_provider_error(StatusError(429)) is False
+    assert turn._is_transient_provider_error(StatusError(400)) is False

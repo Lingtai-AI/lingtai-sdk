@@ -52,6 +52,94 @@ class EmptyLLMResponseError(RuntimeError):
         )
 
 
+_TRANSIENT_AED_RETRY_LIMIT = 3
+_TRANSIENT_EXC_NAMES = {
+    "APIConnectionError",
+    "APITimeoutError",
+    "InternalServerError",
+    "ServerError",
+    "ServiceUnavailableError",
+    "ReadError",
+    "ConnectError",
+    "ConnectTimeout",
+    "ReadTimeout",
+    "PoolTimeout",
+    "RemoteProtocolError",
+    "IncompleteRead",
+    "ConnectionResetError",
+    "TimeoutError",
+}
+_TRANSIENT_MSG_FRAGMENTS = (
+    "an error occurred while processing your request",
+    "peer closed connection",
+    "incomplete chunked read",
+    "connection reset",
+    "read timed out",
+    "timed out",
+    "timeout",
+    "temporarily unavailable",
+    "service unavailable",
+    "bad gateway",
+    "gateway timeout",
+)
+
+
+def _exception_status_code(exc: Exception) -> int | None:
+    """Best-effort HTTP-ish status extraction across SDK exception shapes."""
+    for attr in ("status_code", "status", "code"):
+        value = getattr(exc, attr, None)
+        if isinstance(value, int):
+            return value
+    response = getattr(exc, "response", None)
+    if response is not None:
+        value = getattr(response, "status_code", None)
+        if isinstance(value, int):
+            return value
+    return None
+
+
+def _is_transient_provider_error(exc: Exception) -> bool:
+    """Return True for provider/network blips that should not spend AED budget.
+
+    The adapter zoo wraps HTTP failures through different SDK exception
+    classes.  Prefer explicit status-code handling when present; otherwise
+    fall back to stable class names and conservative message fragments.
+    4xx errors (including quota/rate limit) are not treated as transient here.
+    """
+    if isinstance(exc, EmptyLLMResponseError):
+        return True
+
+    status_code = _exception_status_code(exc)
+    if status_code is not None:
+        return 500 <= status_code < 600
+
+    try:
+        import httpx  # type: ignore
+    except Exception:  # pragma: no cover - httpx is a runtime dependency today
+        httpx = None
+    if httpx is not None and isinstance(exc, httpx.HTTPError):
+        return True
+
+    name = type(exc).__name__
+    if name in _TRANSIENT_EXC_NAMES:
+        return True
+
+    msg = (str(exc) or "").lower()
+    return any(fragment in msg for fragment in _TRANSIENT_MSG_FRAGMENTS)
+
+
+def _prepare_aed_retry_message(agent, err_desc: str) -> Message:
+    """Build the system recovery prompt reused by transient and AED retries."""
+    ts = now_iso(agent)
+    aed_msg = _t(
+        agent._config.language,
+        "system.stuck_revive",
+        ts=ts,
+        tool_calls=err_desc,
+    )
+    return _make_message(MSG_REQUEST, "system", aed_msg)
+
+
 def _on_llm_hang(agent) -> None:
     """Watchdog callback: LLM has been unresponsive for too long."""
     from ..state import AgentState
@@ -305,10 +393,12 @@ def _run_loop(agent) -> None:
             # --- Process with AED (Automatic Error Detection) ---
             sleep_state = AgentState.IDLE
             aed_attempts = 0
+            transient_attempts = 0
             skip_post_turn_save = False
             while True:
                 try:
                     _handle_message(agent, msg)
+                    transient_attempts = 0
                     break  # success (chat saved after each session.send inside)
                 except Exception as e:
                     from ..llm_utils import WorkerStillRunningError
@@ -320,6 +410,37 @@ def _run_loop(agent) -> None:
                         break
 
                     err_desc = str(e) or repr(e)
+
+                    if _is_transient_provider_error(e):
+                        if transient_attempts < _TRANSIENT_AED_RETRY_LIMIT:
+                            transient_attempts += 1
+                            backoff_s = min(2.0 ** (transient_attempts - 1), 8.0)
+                            if agent._session.chat is not None:
+                                agent._session.chat.interface.close_pending_tool_calls(
+                                    reason=f"transient_retry: {err_desc[:200]}",
+                                    tool_completed=True,
+                                )
+                            agent._log(
+                                "aed_transient_retry",
+                                attempt=transient_attempts,
+                                max_attempts=_TRANSIENT_AED_RETRY_LIMIT,
+                                backoff_s=backoff_s,
+                                error=err_desc[:300],
+                            )
+                            logger.warning(
+                                f"[{agent.agent_name}] AED transient retry "
+                                f"{transient_attempts}/{_TRANSIENT_AED_RETRY_LIMIT}: {err_desc}",
+                            )
+                            time.sleep(backoff_s)
+                            msg = _prepare_aed_retry_message(agent, err_desc)
+                            continue
+
+                        agent._log(
+                            "aed_transient_exhausted",
+                            attempts=transient_attempts,
+                            error=err_desc[:300],
+                        )
+
                     aed_attempts += 1
 
                     # Close any dangling tool_calls with synthetic error
@@ -363,9 +484,7 @@ def _run_loop(agent) -> None:
                         agent._session._rebuild_session(agent._session.chat.interface)
 
                     # Inject recovery message
-                    ts = now_iso(agent)
-                    aed_msg = _t(agent._config.language, "system.stuck_revive", ts=ts, tool_calls=err_desc)
-                    msg = _make_message(MSG_REQUEST, "system", aed_msg)
+                    msg = _prepare_aed_retry_message(agent, err_desc)
                     agent._set_state(AgentState.ACTIVE, reason=f"AED recovery attempt {aed_attempts}")
 
             # Issue #47: Check for pending notifications before going idle

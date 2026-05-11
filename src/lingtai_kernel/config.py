@@ -18,7 +18,7 @@ class AgentConfig:
     base_url: str | None = None
     retry_timeout: float = 300.0  # LLM call watchdog (seconds). Bumped from 120s — modern thinking models (GLM-5.1, DeepSeek V4 thinking, Anthropic extended-thinking) routinely take 60–180s for high-context turns; 120s spuriously fired on slow-but-successful calls and triggered AED cascades. 300s catches truly-hung connections without false positives on normal responses.
     aed_timeout: float = 360.0   # max seconds in STUCK before ASLEEP
-    max_aed_attempts: int = 3    # max AED retry attempts in message loop
+    max_aed_attempts: int = 10   # max AED retry attempts per inbox message turn
     max_rpm: int = 60  # API requests-per-minute cap for this agent's provider; 0 = no gating. Shared across all agents in the same process that use the same (provider, base_url) pair (adapter cache key).
     thinking_budget: int | None = None
     data_dir: str | None = None  # for cache files (e.g., model context windows)
