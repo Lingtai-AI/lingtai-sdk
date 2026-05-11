@@ -100,30 +100,47 @@ def setup(
     Raises ``ValueError`` if neither is provided.
     """
     if vision_service is None and provider is not None:
-        # Graceful skip: if the resolved provider isn't supported by vision
-        # and no fallback exists, silently skip registration.
         if provider not in PROVIDERS["providers"]:
-            agent._log(
-                "capability_skipped",
-                capability="vision",
-                requested_provider=provider,
-                reason=f"no vision support for provider {provider!r}",
-            )
-            return None
-
-        # Provider-specific kwarg injection. Each branch is opt-in because
-        # vision services have heterogeneous constructor signatures —
-        # passing api_host to a service that doesn't accept it raises
-        # TypeError at construction (silently swallowed by the agent's
-        # capability-setup try/except, leaving the agent without vision).
-        if provider == "minimax" and "api_host" not in kwargs:
-            from .._media_host import resolve_media_host
-            kwargs["api_host"] = resolve_media_host(agent)
-        if provider == "zhipu" and "z_ai_mode" not in kwargs:
-            from .._zhipu_mode import resolve_z_ai_mode
-            kwargs["z_ai_mode"] = resolve_z_ai_mode(agent)
-        kwargs.pop("base_url", None)
-        vision_service = create_vision_service(provider, api_key=api_key, **kwargs)
+            # No dedicated VisionService for this provider. If the agent's
+            # main LLM is OpenAI-compatible (custom relay, OpenRouter,
+            # DeepSeek, Kimi, ...), route vision through OpenAIVisionService
+            # using the LLM's own base_url. If the relay or model can't
+            # actually do vision, the call fails at runtime — no pre-check.
+            api_compat = ""
+            defaults = getattr(getattr(agent, "service", None), "_provider_defaults", None)
+            if isinstance(defaults, dict):
+                api_compat = defaults.get("api_compat") or ""
+            if api_compat == "openai":
+                from ...services.vision.openai import OpenAIVisionService
+                llm_base_url = getattr(agent.service, "_base_url", None)
+                llm_model = getattr(agent.service, "_model", None) or "gpt-4o"
+                vision_service = OpenAIVisionService(
+                    api_key=api_key,
+                    model=llm_model,
+                    base_url=llm_base_url,
+                )
+            else:
+                agent._log(
+                    "capability_skipped",
+                    capability="vision",
+                    requested_provider=provider,
+                    reason=f"no vision support for provider {provider!r}",
+                )
+                return None
+        else:
+            # Provider-specific kwarg injection. Each branch is opt-in because
+            # vision services have heterogeneous constructor signatures —
+            # passing api_host to a service that doesn't accept it raises
+            # TypeError at construction (silently swallowed by the agent's
+            # capability-setup try/except, leaving the agent without vision).
+            if provider == "minimax" and "api_host" not in kwargs:
+                from .._media_host import resolve_media_host
+                kwargs["api_host"] = resolve_media_host(agent)
+            if provider == "zhipu" and "z_ai_mode" not in kwargs:
+                from .._zhipu_mode import resolve_z_ai_mode
+                kwargs["z_ai_mode"] = resolve_z_ai_mode(agent)
+            kwargs.pop("base_url", None)
+            vision_service = create_vision_service(provider, api_key=api_key, **kwargs)
     elif vision_service is None:
         raise ValueError(
             "vision capability requires 'vision_service' or 'provider' + 'api_key'. "
