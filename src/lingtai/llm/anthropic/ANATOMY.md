@@ -9,12 +9,12 @@ Anthropic Claude adapter — Messages API with prompt caching, tool use, and ext
 | File | LOC | Role |
 |------|-----|------|
 | `__init__.py` | 3 | Re-exports `AnthropicAdapter`, `AnthropicChatSession` |
-| `adapter.py` | 760 | Adapter + session + helpers |
+| `adapter.py` | 829 | Adapter + session + helpers |
 | `defaults.py` | 6 | `DEFAULTS` dict: `api_key_env=ANTHROPIC_API_KEY`, `model=claude-sonnet-4-20250514` |
 
 ### Classes
 
-- **`AnthropicAdapter(LLMAdapter)`** — `adapter.py:583` — wraps `anthropic.Anthropic` SDK.
+- **`AnthropicAdapter(LLMAdapter)`** — `adapter.py:652` — wraps `anthropic.Anthropic` SDK.
 - **`AnthropicChatSession(ChatSession)`** — `adapter.py:279` — per-session state, owns `ChatInterface`.
 
 ### Helper functions (module-level)
@@ -44,23 +44,23 @@ Anthropic Claude adapter — Messages API with prompt caching, tool use, and ext
 
 | Method | Line | Notes |
 |--------|------|-------|
-| `create_chat` | 627 | Builds tools, tool_choice, thinking config; wraps in `_GatedSession` via `_wrap_with_gate` |
-| `generate` | 696 | One-shot via `self._client.messages.create`; gated by `_gated_call` |
-| `make_tool_result_message` | 741 | Returns canonical `ToolResultBlock` with `toolu_` prefix ID |
-| `is_quota_error` | 751 | `isinstance(exc, anthropic.RateLimitError)` |
+| `create_chat` | 696 | Builds tools, tool_choice, thinking config; wraps in `_GatedSession` via `_wrap_with_gate` |
+| `generate` | 765 | One-shot via `self._client.messages.create`; gated by `_gated_call` |
+| `make_tool_result_message` | 810 | Returns canonical `ToolResultBlock` with `toolu_` prefix ID |
+| `is_quota_error` | 820 | `isinstance(exc, anthropic.RateLimitError)` |
 
 ### ChatSession method overrides (`AnthropicChatSession`)
 
 | Method | Line | Notes |
 |--------|------|-------|
-| `send` | 337 | Commits to `ChatInterface` → `to_anthropic()` → `_ensure_alternation()` → `client.messages.create` |
-| `send_stream` | 402 | Uses `client.messages.stream()` context manager; accumulates via `StreamingAccumulator` |
-| `commit_tool_results` | 518 | Delegates to `interface.add_tool_results()` |
-| `update_tools` | 524 | Rebuilds `_tools` with `cache_tools=True`; syncs to interface |
-| `update_system_prompt` | 532 | Single-block cached system prompt |
-| `update_system_prompt_batches` | 537 | Multi-breakpoint caching; joins batches for interface |
-| `reset` | 551 | Reconstructs session with fresh `anthropic.Anthropic` client from saved `_client_kwargs` |
-| `context_window` | 574 | Returns stored `_context_window` |
+| `send` | 358 | Commits to `ChatInterface` → `to_anthropic()` → `_ensure_alternation()` → `client.messages.create` |
+| `send_stream` | 450 | Uses `client.messages.stream()` context manager; accumulates via `StreamingAccumulator` |
+| `commit_tool_results` | 587 | Delegates to `interface.add_tool_results()` |
+| `update_tools` | 593 | Rebuilds `_tools` with `cache_tools=True`; syncs to interface |
+| `update_system_prompt` | 601 | Single-block cached system prompt |
+| `update_system_prompt_batches` | 606 | Multi-breakpoint caching; joins batches for interface |
+| `reset` | 620 | Reconstructs session with fresh `anthropic.Anthropic` client from saved `_client_kwargs` |
+| `context_window` | 643 | Returns stored `_context_window` |
 
 ### Provider-specific shape conversions
 
@@ -72,7 +72,7 @@ Anthropic Claude adapter — Messages API with prompt caching, tool use, and ext
 
 - **Extraction**: `adapter.py:153-156` — `block.type == "thinking"` → `ThinkingBlock(text=..., provider_data={"anthropic": {"signature": ...}})`.
 - **Signature round-trip**: Thinking blocks stored in interface include `signature` field (required by Anthropic for replay in history). See `adapter.py:259-266`.
-- **Budget resolution**: `_resolve_thinking_budget()` at `adapter.py:607` — `"high"` → 16384, `"low"`/`"medium"` → 2048. Budget sets `max_tokens = max(budget*2, budget+8192)`.
+- **Budget resolution**: `_resolve_thinking_budget()` at `adapter.py:676` — `"high"` → 16384, `"low"`/`"medium"` → 2048. Budget sets `max_tokens = max(budget*2, budget+8192)`.
 
 ### Prompt caching
 
@@ -82,14 +82,14 @@ Anthropic Claude adapter — Messages API with prompt caching, tool use, and ext
 
 ### Streaming protocol
 
-- `send_stream` uses `client.messages.stream(**kwargs)` context manager (`adapter.py:428`).
+- `send_stream` uses `client.messages.stream(**kwargs)` context manager (`adapter.py:477`).
 - Events: `content_block_start` (tool_use detected → `acc.start_tool`), `content_block_delta` (`text_delta` / `thinking_delta` / `input_json_delta`), `content_block_stop` (finishes current block).
 - Final message from `stream.get_final_message()` provides authoritative usage including cache metrics.
 
 ### Authentication
 
-- **API key only** — passed to `anthropic.Anthropic(api_key=...)` at `adapter.py:603`.
-- **Base URL**: optional override for proxies (`adapter.py:601`).
+- **API key only** — passed to `anthropic.Anthropic(api_key=...)` at `adapter.py:671`.
+- **Base URL**: optional override for proxies (`adapter.py:669`).
 - **No OAuth**.
 
 ## State
@@ -103,13 +103,13 @@ Anthropic's `input_tokens` only counts tokens after the last cache breakpoint. W
 
 ### Error recovery
 
-Both `send` and `send_stream` revert the interface on API error via `interface.drop_trailing(lambda e: e.role == "user")` at `adapter.py:364,461`.
+Both `send` and `send_stream` revert the interface on API error via `interface.drop_trailing(lambda e: e.role == "user")` at `adapter.py:396,530`.
 
 ## Notes
 
 - **Strict alternation**: Anthropic rejects consecutive same-role messages. `_ensure_alternation()` at `adapter.py:201` merges them by combining content lists.
-- **JSON schema enforcement**: Implemented as a synthetic tool with `tool_choice: {"type": "tool", "name": ...}` (`adapter.py:657-668`).
-- **`client` property**: Escape hatch to raw SDK at `adapter.py:758`.
+- **JSON schema enforcement**: Implemented as a synthetic tool with `tool_choice: {"type": "tool", "name": ...}` (`adapter.py:726-737`).
+- **`client` property**: Escape hatch to raw SDK at `adapter.py:827`.
 - **MiniMax inheritance**: `MiniMaxAdapter` subclasses `AnthropicAdapter` directly, overriding only `__init__` to set `base_url`. Inherits the pre-request hook automatically.
 - **`send(None)` contract** (`f596ec1`): both `send` and `send_stream` accept `None` as the "continue from wire" signal — caller has already pre-staged the canonical interface (e.g. `BaseAgent._inject_notification_pair` spliced a synthesized `system(action="notification")` `(call, result)` pair). The input-dispatch ladder tests `if message is None: pass` first; the error-path `drop_trailing(lambda e: e.role == "user")` is guarded with `if message is not None` so an API failure during a `send(None)` cannot corrupt the pre-staged pair. Driven from `base_agent/turn.py:_handle_tc_wake`. From the LLM's viewpoint, the wake is indistinguishable from the agent voluntarily calling the tool itself.
 - **Pre-request hook** (`f46b346`, dormant after notification redesign): both `send` and `send_stream` fire `self.pre_request_hook(self._interface)` after committing the message but before the API call. Historically used for mid-turn tc_inbox drain (canonical-interface regime, same-turn delivery). Post-`fadbabf`/`d2da97e` the hook still fires but the queue is always empty — ACTIVE-state notification meta is now prepended at `SessionManager.send` time via `notification_inject_fn` instead. Phase 3 will remove the hook. See root `ANATOMY.md` "Notifications".

@@ -9,7 +9,7 @@ Custom adapter — factory for named provider aliases routing to OpenAI, Anthrop
 | File | LOC | Role |
 |------|-----|------|
 | `__init__.py` | 3 | Re-exports `create_custom_adapter`, `DEFAULTS` |
-| `adapter.py` | 39 | `create_custom_adapter()` factory function |
+| `adapter.py` | 48 | `create_custom_adapter()` factory function |
 | `defaults.py` | 6 | `DEFAULTS` dict: `api_compat=openai`, `base_url=None`, `api_key_env=CUSTOM_API_KEY`, `model=""` |
 
 ## Connections
@@ -34,6 +34,7 @@ Parameters:
 - `api_key: str | None` — passed through to chosen adapter.
 - `api_compat: str` — selects backend (`"openai"`, `"anthropic"`, `"gemini"`).
 - `base_url: str | None` — provider endpoint URL.
+- `default_headers: dict | None` — forwarded only to the OpenAI-compatible path; Anthropic/Gemini branches drop it for now.
 - `**kwargs` — forwarded to adapter constructor (`timeout_ms`, `max_rpm`, etc.).
 
 ### No class of its own
