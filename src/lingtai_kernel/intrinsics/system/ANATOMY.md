@@ -15,9 +15,9 @@ System intrinsic — runtime, lifecycle, and synchronization. Provides the agent
 
 - `preset.py` — Preset management and refresh.
   - `_preset_ref_in()` (`preset.py:13-33`) — normalized membership test for preset path strings (~/foo vs absolute).
-  - `_check_context_fits()` (`preset.py:36-64`) — verify agent's current context fits within target preset's context_limit.
-  - `_refresh()` (`preset.py:79-186`) — stop, reload config + MCP servers, restart. Handles preset swap (named or revert) with authorization gate and context-limit guard. **MCP retry hook (issue #34):** before calling `agent._perform_refresh()`, invokes `agent._retry_failed_mcps()` if the Agent subclass defines it. Failures are logged and swallowed so a flaky MCP cannot block refresh itself. Lets the documented "fix config → refresh" recovery path work in-process.
-  - `_presets()` (`preset.py:189-270`) — list available presets with LLM connectivity probing.
+  - `_check_context_fits()` (`preset.py:39-76`) — verify agent's current context fits within target preset's context_limit.
+  - `_refresh()` (`preset.py:131-249`) — stop, reload config + MCP servers, restart. Handles preset swap (named or revert) with authorization gate and context-limit guard, snapshots prior active preset, and writes `.preset.pending` before relaunch so the new process must confirm the swap. **MCP retry hook (issue #34):** before calling `agent._perform_refresh()`, invokes `agent._retry_failed_mcps()` if the Agent subclass defines it. Failures are logged and swallowed so a flaky MCP cannot block refresh itself. Lets the documented "fix config → refresh" recovery path work in-process.
+  - `_presets()` (`preset.py:253-330`) — list available presets with LLM connectivity probing and any unconfirmed `.preset.pending` marker.
 
 - `karma.py` — Karma-gated lifecycle actions.
   - `_KARMA_ACTIONS` / `_NIRVANA_ACTIONS` (`karma.py:13-14`) — gate mapping sets.
@@ -42,7 +42,7 @@ System intrinsic — runtime, lifecycle, and synchronization. Provides the agent
 - **Inbound:** `handle()` is called by the tool dispatcher (via `base_agent._dispatch_tool`).
 - **Inbound (cross-module):** `publish_notification` is imported by `base_agent/messaging.py` (both `_rerender_unread_digest` and `_enqueue_system_notification`) and by `intrinsics/soul/flow.py:_run_consultation_fire`. `clear_notification` is imported by the same call sites for the empty-state path. `_dismiss` is no longer called from `email/manager.py` — email arrivals use the single-slot unread-digest pattern, and dismiss is a no-op shim regardless.
 - **Outbound:** Depends on `...notifications` (canonical `submit`/`clear`/`collect_notifications`), `...i18n` (translations), `...handshake` (`resolve_address`, `is_agent`, `is_alive`), `...state` (`AgentState`), `lingtai.presets` (preset loading), `lingtai.preset_connectivity` (connectivity probing).
-- **Data flow:** Karma actions write signal files (`.sleep`, `.suspend`, `.interrupt`, `.clear`) into target agent working directories. Preset swap reads/writes `init.json` manifest. The `notification` action reads `.notification/*.json` (read-only); `publish_notification` re-export writes them via `tmp + rename`.
+- **Data flow:** Karma actions write signal files (`.sleep`, `.suspend`, `.interrupt`, `.clear`) into target agent working directories. Preset swap reads/writes `init.json` manifest and, for runtime swaps, writes `.preset.pending` until the relaunched `Agent._setup_from_init` confirms or reports drift. The `notification` action reads `.notification/*.json` (read-only); `publish_notification` re-export writes them via `tmp + rename`.
 
 ## Key invariants
 
@@ -50,5 +50,5 @@ System intrinsic — runtime, lifecycle, and synchronization. Provides the agent
 - The `notification` action is now agent-callable: it returns the bare `collect_notifications(workdir)` dict (no `_synthesized` envelope, since the call wasn't synthesized). Kernel-synthesized notification reads happen via the wire-injection path in `BaseAgent._inject_notification_pair` and carry `_synthesized: true` in their JSON body.
 - Karma gate checks resolve addresses through `_check_karma_gate()` which validates admin flags before any filesystem mutation.
 - `_dismiss` is a channel-level generic clear: guarded producer channels (currently email) refuse unless `force=true`; legacy `ids=` calls are ignored and logged for one release.
-- Preset swap has two guards: authorization (allowed list) and context-fit (current tokens ≤ target context_limit).
+- Preset swap has two guards: authorization (allowed list) and context-fit (current tokens ≤ target context_limit). A swap is only fully confirmed after `.preset.pending` is cleared by the relaunched process; until then `_presets()` surfaces the marker as `pending`.
 - Producer notification writes (`publish_notification`) are atomic (`tmp + rename` inside `notifications.publish`) — readers never see a half-written file.

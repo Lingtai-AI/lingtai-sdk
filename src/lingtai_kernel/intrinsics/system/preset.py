@@ -76,6 +76,58 @@ def _check_context_fits(agent, preset_name: str) -> tuple:
     return True, None, None
 
 
+def _read_active_preset(agent) -> str | None:
+    """Return manifest.preset.active from init.json, or None if absent."""
+    import json as _json
+
+    try:
+        data = _json.loads(
+            (agent._working_dir / "init.json").read_text(encoding="utf-8"))
+    except (OSError, _json.JSONDecodeError):
+        return None
+    preset_block = data.get("manifest", {}).get("preset") or {}
+    if not isinstance(preset_block, dict):
+        return None
+    active = preset_block.get("active")
+    return active if isinstance(active, str) else None
+
+
+def _write_preset_pending(agent, *, requested: str, prior_active: str | None,
+                          reason: str, revert: bool) -> None:
+    """Drop a durable marker for the relaunched process to confirm."""
+    import json as _json
+    import time as _time
+
+    pending = {
+        "requested": requested,
+        "prior_active": prior_active,
+        "requested_at": _time.time(),
+        "reason": reason,
+        "revert": bool(revert),
+    }
+    pending_path = agent._working_dir / ".preset.pending"
+    tmp = pending_path.with_suffix(".pending.tmp")
+    tmp.write_text(
+        _json.dumps(pending, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    tmp.replace(pending_path)
+
+
+def _read_preset_pending(agent) -> dict | None:
+    """Read `.preset.pending` for `_presets`; return None when absent."""
+    import json as _json
+
+    pending_path = agent._working_dir / ".preset.pending"
+    if not pending_path.is_file():
+        return None
+    try:
+        pending = _json.loads(pending_path.read_text(encoding="utf-8"))
+    except (OSError, _json.JSONDecodeError):
+        return {"unreadable": True}
+    return pending if isinstance(pending, dict) else {"unreadable": True}
+
+
 def _refresh(agent, args: dict) -> dict:
     from ...i18n import t
     reason = args.get("reason", "")
@@ -143,6 +195,7 @@ def _refresh(agent, args: dict) -> dict:
             agent._log("preset_swap_refused_oversize", **log_extra)
             return {"status": "error", "message": refuse_msg}
 
+        prior_active = _read_active_preset(agent)
         try:
             if revert_preset:
                 agent._activate_default_preset()
@@ -162,6 +215,17 @@ def _refresh(agent, args: dict) -> dict:
                     "message": f"failed to activate preset {preset_name!r}: {e}"}
         agent._log("preset_swap_started",
                    preset=preset_name, reason=reason, revert=revert_preset)
+        try:
+            _write_preset_pending(
+                agent,
+                requested=preset_name,
+                prior_active=prior_active,
+                reason=reason,
+                revert=bool(revert_preset),
+            )
+        except OSError as e:
+            # Best effort: refresh can still proceed; logs retain the failure.
+            agent._log("preset_pending_write_failed", error=str(e))
 
     agent._log("refresh_requested", reason=reason)
 
@@ -265,5 +329,6 @@ def _presets(agent, args: dict) -> dict:
     return {
         "status": "ok",
         "active": active,
+        "pending": _read_preset_pending(agent),
         "available": available,
     }

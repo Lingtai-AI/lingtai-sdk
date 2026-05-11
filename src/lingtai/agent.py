@@ -1087,6 +1087,86 @@ class Agent(BaseAgent):
             capabilities=[name for name, _ in self._capabilities],
             tools=list(self._tool_handlers.keys()),
         )
+        self._confirm_preset_pending()
+
+    def _confirm_preset_pending(self) -> None:
+        """Confirm or report drift on a pending preset swap.
+
+        `system(action="refresh", preset=...)` drops `.preset.pending`
+        before relaunch. The relaunched process is the only actor that can
+        clear it, so clearing the marker after setup proves a real round trip
+        instead of merely re-reading the `init.json` written by the old
+        process.
+        """
+        import json
+
+        pending_path = self._working_dir / ".preset.pending"
+        if not pending_path.is_file():
+            return
+
+        try:
+            pending = json.loads(pending_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            self._log("preset_pending_unreadable", error=str(e))
+            try:
+                pending_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return
+        if not isinstance(pending, dict):
+            self._log("preset_pending_unreadable", error="marker is not an object")
+            try:
+                pending_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return
+
+        requested = pending.get("requested")
+        active = None
+        try:
+            init = json.loads(
+                (self._working_dir / "init.json").read_text(encoding="utf-8"))
+            preset = init.get("manifest", {}).get("preset") or {}
+            if isinstance(preset, dict):
+                active = preset.get("active")
+        except (OSError, json.JSONDecodeError) as e:
+            self._log("preset_pending_active_read_failed", error=str(e))
+
+        if isinstance(requested, str) and active == requested:
+            prior_active = pending.get("prior_active")
+            self._log(
+                "preset_swap_completed",
+                preset=requested,
+                prior_active=prior_active,
+                requested_at=pending.get("requested_at"),
+                revert=bool(pending.get("revert")),
+            )
+            try:
+                self._enqueue_system_notification(
+                    source="preset",
+                    ref_id=requested,
+                    body=(
+                        f"Preset switch completed: {prior_active or '(none)'} "
+                        f"→ {requested}"
+                    ),
+                )
+            except Exception as e:
+                self._log("preset_swap_notification_failed", error=str(e))
+            try:
+                pending_path.unlink(missing_ok=True)
+            except OSError as e:
+                self._log("preset_pending_clear_failed", error=str(e))
+            return
+
+        self._log(
+            "preset_swap_drifted",
+            requested=requested,
+            active=active,
+            prior_active=pending.get("prior_active"),
+            requested_at=pending.get("requested_at"),
+        )
+        # Leave `.preset.pending` in place so system(action="presets") and
+        # operators can see that the swap has not been confirmed.
 
     def _reload_prompt_sections(self, data: dict | None = None) -> None:
         """Re-read all prompt sections from init.json and disk.

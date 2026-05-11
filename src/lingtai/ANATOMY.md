@@ -22,7 +22,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 
 ### Key functions / classes
 
-**`agent.py`** — `Agent(BaseAgent)`: `__init__` :33 (expand groups, decompress addons, setup caps, install manuals, load MCP) · `_setup_capability` :136 · `_persist_llm_config` :111 · `_install_intrinsic_manuals` :158 · `_load_mcp_from_workdir` :284 (also tracks specs in `_mcp_init_specs`) · `_retry_failed_mcps` :432 (re-spawn dead MCPs on `system(refresh)` — issue #34) · `_read_init` :742 (read + materialize preset + validate) · `_setup_from_init` :878 (**full reconstruct** — shared by boot and live refresh) · `_activate_preset` :804 (runtime swap, atomic write) · `_reload_prompt_sections` :1091 · `connect_mcp` :613 / `connect_mcp_http` :665 · `start` :606 / `stop` :711
+**`agent.py`** — `Agent(BaseAgent)`: `__init__` :33 (expand groups, decompress addons, setup caps, install manuals, load MCP) · `_setup_capability` :136 · `_persist_llm_config` :111 · `_install_intrinsic_manuals` :158 · `_load_mcp_from_workdir` :284 (also tracks specs in `_mcp_init_specs`) · `_retry_failed_mcps` :432 (re-spawn dead MCPs on `system(refresh)` — issue #34) · `_read_init` :742 (read + materialize preset + validate) · `_setup_from_init` :878 (**full reconstruct** — shared by boot and live refresh; clears confirmed `.preset.pending`) · `_activate_preset` :804 (runtime swap, atomic write) · `_confirm_preset_pending` :1092 · `_reload_prompt_sections` :1171 · `connect_mcp` :613 / `connect_mcp_http` :665 · `start` :606 / `stop` :711
 
 **`cli.py`**: `load_init` :21 · `build_agent` :72 · `run` :200 · `main` :246
 
@@ -50,7 +50,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 
 **Capability registration:** `setup_capability()` in `capabilities/__init__.py`; `@register_capability` decorator. Agent calls `_setup_capability` (agent.py:136) during `__init__` and `_setup_from_init`.
 
-**Preset materialization:** `materialize_active_preset` (`lingtai_kernel/presets.py:290`) called by `cli.load_init` (boot) and `Agent._read_init` (refresh). Reads `manifest.preset.active`, loads preset, substitutes `llm`+`capabilities` into manifest before validation.
+**Preset materialization:** `materialize_active_preset` (`lingtai_kernel/presets.py:290`) called by `cli.load_init` (boot) and `Agent._read_init` (refresh). Reads `manifest.preset.active`, loads preset, substitutes `llm`+`capabilities` into manifest before validation. Runtime swaps use `.preset.pending` as a separate confirmation marker so `system(action="presets")` can distinguish “file says active” from “relaunched process confirmed.”
 
 ## Composition
 
@@ -61,8 +61,9 @@ Parent: `src/lingtai/` under `lingtai-kernel/src/` alongside `lingtai_kernel/` (
 | Path | When | What |
 |---|---|---|
 | `<workdir>/init.json` | `_activate_preset` :804, `cli.run` :200 | Preset swap (atomic write); venv_path writeback |
+| `<workdir>/.preset.pending` | `system/preset.py:_refresh`, `_confirm_preset_pending` :1092 | Runtime preset swap handshake marker; written before relaunch and cleared only after the relaunched process confirms active preset |
 | `<workdir>/system/llm.json` | `_persist_llm_config` :111 | LLM provider/model/base_url for revive |
-| `<workdir>/system/{covenant,principle,substrate,procedures,brief,rules,pad}.md` | `_reload_prompt_sections` :1091 | Prompt sections from init.json. `substrate` is kernel-owned, cross-app stable (issue #39); auto-seeded from packaged `lingtai/prompts/substrate.md` (v1) on first boot if neither `data["substrate"]` nor `system/substrate.md` provides content — see `_setup_from_init` :878. |
+| `<workdir>/system/{covenant,principle,substrate,procedures,brief,rules,pad}.md` | `_reload_prompt_sections` :1171 | Prompt sections from init.json. `substrate` is kernel-owned, cross-app stable (issue #39); auto-seeded from packaged `lingtai/prompts/substrate.md` (v1) on first boot if neither `data["substrate"]` nor `system/substrate.md` provides content — see `_setup_from_init` :878. |
 | `<workdir>/.library/intrinsic/` | `_install_intrinsic_manuals` :156 | Wipe-and-rewrite every boot |
 | `<workdir>/.agent.json` | `_build_manifest` :233 via `_workdir.write_manifest` | Runtime manifest snapshot |
 | `<workdir>/.mcp_inbox/` | MCPInboxPoller (started at :452) | LICC events from out-of-process MCPs |
