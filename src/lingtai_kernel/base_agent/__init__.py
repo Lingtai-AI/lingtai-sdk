@@ -139,7 +139,55 @@ def _build_identity_section(manifest_data: dict, mailbox_name: str | None = None
     if mailbox_name:
         lines.append(f"You receive messages via {mailbox_name}.")
 
+    # Runtime LLM identity — provider/model/endpoint as the agent runs.
+    # Sourced from `manifest_data["llm"]` (sanitized at build time —
+    # see identity.py `_safe_llm_from_service` and wrapper `Agent._build_manifest`).
+    # Rendered as a single line so it sits in the cacheable prefix without
+    # adding much weight; missing fields are silently skipped.
+    llm = manifest_data.get("llm") or {}
+    if isinstance(llm, dict):
+        model = _identity_scalar(llm.get("model"))
+        provider = _identity_scalar(llm.get("provider"))
+        base_url = _identity_scalar(llm.get("base_url"))
+        if provider or model:
+            bits = []
+            if model:
+                bits.append(f"model `{model}`")
+            if provider:
+                bits.append(f"provider `{provider}`")
+            if base_url:
+                bits.append(f"endpoint `{base_url}`")
+            if bits:
+                lines.append("You are running on " + ", ".join(bits) + ".")
+
+    # Active preset — only the wrapper agent has a preset surface, so this
+    # block is silent for bare BaseAgent instances. Reports the active path
+    # plus the default if the two differ (lets the agent see when it's on a
+    # non-default preset). Allowed list is intentionally omitted from the
+    # prompt — it's structural metadata, not identity prose.
+    preset = manifest_data.get("preset") or {}
+    if isinstance(preset, dict):
+        active = _identity_scalar(preset.get("active"))
+        default = _identity_scalar(preset.get("default"))
+        if active:
+            if default and default != active:
+                lines.append(
+                    f"Your active preset is `{active}` "
+                    f"(default `{default}`)."
+                )
+            else:
+                lines.append(f"Your active preset is `{active}`.")
+
     return "\n".join(lines)
+
+
+def _identity_scalar(value) -> str:
+    """Return prompt-safe scalar text for identity metadata, else empty string."""
+    if isinstance(value, str):
+        return value if value else ""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return str(value)
+    return ""
 
 
 # ---------------------------------------------------------------------------

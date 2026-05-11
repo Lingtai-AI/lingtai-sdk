@@ -230,11 +230,28 @@ class Agent(BaseAgent):
 
     _SENSITIVE_KEYS = {"api_key", "api_key_env", "api_secret", "token", "password"}
 
+    #: Safelist for the public ``llm`` block surfaced in .agent.json. Mirrors
+    #: ``base_agent.identity._LLM_PUBLIC_KEYS`` and exists at the wrapper layer
+    #: as defense-in-depth — init.json's ``manifest.llm`` may carry api_key /
+    #: api_key_env values that must never reach the on-disk manifest or the
+    #: system prompt's identity section.
+    _LLM_PUBLIC_KEYS = ("provider", "model", "base_url", "api_compat", "context_limit")
+
+    #: Safelist for the public ``preset`` block. ``active`` and ``default`` are
+    #: path strings, ``allowed`` is a list of path strings — none of these
+    #: carry secrets, but pinning the safelist guards against future preset
+    #: schema growth that might introduce sensitive fields.
+    _PRESET_PUBLIC_KEYS = ("active", "default", "allowed")
+
     def _build_manifest(self) -> dict:
-        """Extend kernel manifest with capabilities and combo.
+        """Extend kernel manifest with capabilities, preset, and combo.
 
         Strips sensitive fields (api_key, etc.) from capability kwargs
         so they don't leak into the system prompt or outgoing mail identity.
+        Adds a sanitized ``preset`` block (active/default/allowed) and
+        re-applies the ``llm`` safelist for defense-in-depth — even if a
+        future LLMService grew a sensitive attribute, the manifest never
+        carries anything outside ``_LLM_PUBLIC_KEYS``.
         """
         data = super()._build_manifest()
         caps = getattr(self, "_capabilities", None)
@@ -245,7 +262,66 @@ class Agent(BaseAgent):
             ]
         if self._combo_name:
             data["combo"] = self._combo_name
+
+        # Enforce the llm safelist a second time — the kernel layer already
+        # filters, but a subclass override or future service shape might add
+        # a non-safelisted attribute. Doing it here means anything written
+        # to disk is guaranteed safelist-only.
+        if isinstance(data.get("llm"), dict):
+            data["llm"] = {
+                k: v for k, v in data["llm"].items()
+                if k in self._LLM_PUBLIC_KEYS
+            }
+            if not data["llm"]:
+                del data["llm"]
+
+        preset = self._read_preset_from_init()
+        if preset:
+            data["preset"] = preset
+
         return data
+
+    def _read_preset_from_init(self) -> dict:
+        """Read ``manifest.preset`` from init.json and sanitize.
+
+        Returns ``{}`` if init.json is missing, unreadable, or has no preset
+        block — bare init.json (e.g. tests) and pre-preset deployments both
+        silently fall through. Never raises: a corrupt init.json must not
+        break manifest writes.
+
+        Filters to ``_PRESET_PUBLIC_KEYS`` and string/list-of-string values so
+        the disk manifest never carries anything the safelist doesn't explicitly
+        allow.
+        """
+        import json
+
+        init_path = self._working_dir / "init.json"
+        if not init_path.is_file():
+            return {}
+        try:
+            raw = json.loads(init_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        manifest = raw.get("manifest") if isinstance(raw, dict) else None
+        if not isinstance(manifest, dict):
+            return {}
+        preset = manifest.get("preset")
+        if not isinstance(preset, dict):
+            return {}
+        clean: dict = {}
+        for key in self._PRESET_PUBLIC_KEYS:
+            if key not in preset:
+                continue
+            val = preset[key]
+            if key in {"active", "default"}:
+                if isinstance(val, str) and val:
+                    clean[key] = val
+                continue
+            if key == "allowed" and isinstance(val, list):
+                allowed = [item for item in val if isinstance(item, str) and item]
+                if allowed:
+                    clean[key] = allowed
+        return clean
 
     def _refresh_tool_inventory_section(self) -> None:
         """Refresh the 'tools' section — wrapper override includes MCP schemas."""

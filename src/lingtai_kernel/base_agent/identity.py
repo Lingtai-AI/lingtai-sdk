@@ -47,10 +47,18 @@ def _update_identity(agent) -> None:
     )
 
 
+#: Whitelisted (non-secret) keys we surface from ``service``/``llm`` configs.
+#: Safelist is more robust than denylist here — a single leaked credential
+#: field is enough to break the contract, so anything outside this set is
+#: dropped silently. ``base_url`` is included because operators rely on it
+#: to disambiguate self-hosted endpoints from upstream providers.
+_LLM_PUBLIC_KEYS = ("provider", "model", "base_url", "api_compat", "context_limit")
+
+
 def _build_manifest(agent) -> dict:
     """Build the manifest dict for .agent.json.
 
-    Subclasses override to add fields (e.g. capabilities).
+    Subclasses override to add fields (e.g. capabilities, preset block).
     Contains everything the agent knows about itself.
     address is always the current working_dir (hot-refreshed on every write).
     Must not depend on _session or _chat — called during __init__.
@@ -77,7 +85,96 @@ def _build_manifest(agent) -> dict:
         data["soul_voice_prompt"] = getattr(agent._config, "soul_voice_prompt", "") or ""
     if agent._mail_service is not None and agent._mail_service.address:
         data["address"] = agent._mail_service.address
+
+    # LLM identity — provider/model/base_url surfaced from the live service.
+    # The endpoint is read from the explicit service `_base_url` when present
+    # and falls back to provider-default `base_url`; api keys live behind the
+    # adapter and are not on `service`.
+    llm = _safe_llm_from_service(agent)
+    if llm:
+        data["llm"] = llm
+
     return data
+
+
+def _safe_llm_from_service(agent) -> dict:
+    """Extract a sanitized ``llm`` block from the live LLMService.
+
+    Returns a safelisted public block (provider/model/base_url plus optional
+    api_compat/context_limit) with only string/int values. Empty values, None,
+    and non-scalars are dropped. Returns ``{}`` on any unexpected service shape
+    (mocks in tests, future adapter rewrites). Never raises.
+    """
+    service = getattr(agent, "service", None)
+    if service is None:
+        return {}
+    llm: dict = {}
+    for key, attr in (
+        ("provider", "provider"),
+        ("model", "model"),
+    ):
+        try:
+            val = getattr(service, attr, None)
+        except Exception:
+            val = None
+        if isinstance(val, str) and val:
+            llm[key] = val
+        elif isinstance(val, int) and not isinstance(val, bool):
+            llm[key] = val
+
+    base_url = _effective_base_url_from_service(service)
+    if isinstance(base_url, str) and base_url:
+        llm["base_url"] = base_url
+
+    context_limit = _safe_int_attr(service, "_context_window")
+    if context_limit is not None:
+        llm["context_limit"] = context_limit
+
+    api_compat = _provider_default_from_service(service, "api_compat")
+    if isinstance(api_compat, str) and api_compat:
+        llm["api_compat"] = api_compat
+
+    return llm
+
+
+def _effective_base_url_from_service(service) -> str | None:
+    """Return explicit or provider-default base URL from an LLMService-like object."""
+    try:
+        base_url = getattr(service, "_base_url", None)
+    except Exception:
+        base_url = None
+    if isinstance(base_url, str) and base_url:
+        return base_url
+
+    val = _provider_default_from_service(service, "base_url")
+    if isinstance(val, str) and val:
+        return val
+    return None
+
+
+def _provider_default_from_service(service, key: str):
+    """Read a scalar provider default from an LLMService-like object."""
+    try:
+        provider = getattr(service, "provider", None)
+        defaults = getattr(service, "_provider_defaults", None)
+    except Exception:
+        return None
+    if not isinstance(provider, str) or not isinstance(defaults, dict):
+        return None
+    provider_defaults = defaults.get(provider.lower())
+    if not isinstance(provider_defaults, dict):
+        return None
+    return provider_defaults.get(key)
+
+
+def _safe_int_attr(service, attr: str) -> int | None:
+    try:
+        val = getattr(service, attr, None)
+    except Exception:
+        return None
+    if isinstance(val, int) and not isinstance(val, bool):
+        return val
+    return None
 
 
 def _status(agent) -> dict:

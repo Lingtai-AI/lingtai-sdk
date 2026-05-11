@@ -22,7 +22,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 
 ### Key functions / classes
 
-**`agent.py`** — `Agent(BaseAgent)`: `__init__` :33 (expand groups, decompress addons, setup caps, install manuals, load MCP) · `_setup_capability` :136 · `_persist_llm_config` :111 · `_install_intrinsic_manuals` :158 · `_load_mcp_from_workdir` :284 (also tracks specs in `_mcp_init_specs`) · `_retry_failed_mcps` :432 (re-spawn dead MCPs on `system(refresh)` — issue #34) · `_read_init` :742 (read + materialize preset + validate) · `_setup_from_init` :878 (**full reconstruct** — shared by boot and live refresh) · `_activate_preset` :804 (runtime swap, atomic write) · `_reload_prompt_sections` :1091 · `connect_mcp` :613 / `connect_mcp_http` :665 · `start` :606 / `stop` :711
+**`agent.py`** — `Agent(BaseAgent)`: `__init__` :33 (expand groups, decompress addons, setup caps, install manuals, load MCP) · `_setup_capability` :136 · `_persist_llm_config` :111 · `_install_intrinsic_manuals` :158 · `_load_mcp_from_workdir` :284 (also tracks specs in `_mcp_init_specs`) · `_retry_failed_mcps` :432 (re-spawn dead MCPs on `system(refresh)` — issue #34) · `_read_init` :742 (read + materialize preset + validate) · `_setup_from_init` :954 (**full reconstruct** — shared by boot and live refresh) · `_activate_preset` :880 (runtime swap, atomic write) · `_reload_prompt_sections` :1167 · `connect_mcp` :613 / `connect_mcp_http` :665 · `start` :606 / `stop` :711
 
 **`cli.py`**: `load_init` :21 · `build_agent` :72 · `run` :200 · `main` :246
 
@@ -60,19 +60,20 @@ Parent: `src/lingtai/` under `lingtai-kernel/src/` alongside `lingtai_kernel/` (
 
 | Path | When | What |
 |---|---|---|
-| `<workdir>/init.json` | `_activate_preset` :804, `cli.run` :200 | Preset swap (atomic write); venv_path writeback |
+| `<workdir>/init.json` | `_activate_preset` :880, `cli.run` :200 | Preset swap (atomic write); venv_path writeback |
 | `<workdir>/system/llm.json` | `_persist_llm_config` :111 | LLM provider/model/base_url for revive |
-| `<workdir>/system/{covenant,principle,substrate,procedures,brief,rules,pad}.md` | `_reload_prompt_sections` :1091 | Prompt sections from init.json. `substrate` is kernel-owned, cross-app stable (issue #39); auto-seeded from packaged `lingtai/prompts/substrate.md` (v1) on first boot if neither `data["substrate"]` nor `system/substrate.md` provides content — see `_setup_from_init` :878. |
-| `<workdir>/.library/intrinsic/` | `_install_intrinsic_manuals` :156 | Wipe-and-rewrite every boot |
-| `<workdir>/.agent.json` | `_build_manifest` :233 via `_workdir.write_manifest` | Runtime manifest snapshot |
-| `<workdir>/.mcp_inbox/` | MCPInboxPoller (started at :452) | LICC events from out-of-process MCPs |
+| `<workdir>/system/{covenant,principle,substrate,procedures,brief,rules,pad}.md` | `_reload_prompt_sections` :1167 | Prompt sections from init.json. `substrate` is kernel-owned, cross-app stable (issue #39); auto-seeded from packaged `lingtai/prompts/substrate.md` (v1) on first boot if neither `data["substrate"]` nor `system/substrate.md` provides content — see `_setup_from_init` :954. |
+| `<workdir>/.library/intrinsic/` | `_install_intrinsic_manuals` :158 | Wipe-and-rewrite every boot |
+| `<workdir>/.agent.json` | `_build_manifest` :246 via `_workdir.write_manifest` | Runtime manifest snapshot. Includes sanitized `llm` (provider/model/base_url) from the live LLMService and `preset` (active/default/allowed) read from `init.json` by `_read_preset_from_init` :284 — see issue #78. |
+| `<workdir>/.mcp_inbox/` | MCPInboxPoller (started at :685) | LICC events from out-of-process MCPs |
 
 ## Notes
 
-- **Boot vs refresh share one code path:** `cli.build_agent` constructs minimal `Agent`, calls `_setup_from_init()` :878. Live refresh re-enters the same method.
-- **`materialize_active_preset` is pure dict mutation** — disk write only in `_activate_preset` :804 (atomic `.tmp` → replace).
+- **Boot vs refresh share one code path:** `cli.build_agent` constructs minimal `Agent`, calls `_setup_from_init()` :954. Live refresh re-enters the same method.
+- **`materialize_active_preset` is pure dict mutation** — disk write only in `_activate_preset` :880 (atomic `.tmp` → replace).
 - **Preset implementation moved to kernel** — wrapper `presets.py` re-exports `lingtai_kernel.presets`; preset validation normalizes legacy shapes via kernel migrations before type-checking.
-- **Sensitive key stripping:** `_build_manifest` :241 strips `api_key`, `api_key_env`, `token`, `password` from capability kwargs before writing `.agent.json`.
-- **Drift hazard:** `_setup_from_init` :878 manually reconstructs `AgentConfig` with inline defaults that MUST mirror `lingtai_kernel.config.AgentConfig` (inline construction in `_setup_from_init`, nothing enforces).
-- **Addon decompression** runs BEFORE capability setup so `mcp` capability sees populated `mcp_registry.jsonl` on first reconcile (`Agent.__init__` :33, `_setup_from_init` :878).
-- **MCP retry contract (issue #34):** `_load_mcp_from_workdir` records every registered init.json mcp entry into `self._mcp_init_specs` (name → `{cfg, source, client}`). `_retry_failed_mcps` walks this dict, closes any dead client (`is_connected()` False), respawns with the original config, and reports `{retried, recovered, still_failed, healthy}`. `system(action="refresh")` calls it via `intrinsics/system/preset.py:_refresh` before `_perform_refresh` so the documented "fix config → refresh" recovery path works without full process restart.
+- **Sensitive key stripping (capabilities):** `_build_manifest` :246 strips `api_key`, `api_key_env`, `api_secret`, `token`, `password` (`_SENSITIVE_KEYS`) from capability kwargs before writing `.agent.json`.
+- **LLM / preset safelists (issue #78):** `_build_manifest` :246 also re-applies `_LLM_PUBLIC_KEYS = ("provider", "model", "base_url", "api_compat", "context_limit")` to the kernel-supplied `llm` block as defense-in-depth, and reads `manifest.preset` from init.json via `_read_preset_from_init` :284 filtered to `_PRESET_PUBLIC_KEYS = ("active", "default", "allowed")`. Anything outside the safelists never reaches `.agent.json` or the identity prompt section. This is the central safety claim of #78 — see `tests/test_agent_preset_manifest.py::test_manifest_never_contains_api_key`.
+- **Drift hazard:** `_setup_from_init` :954 manually reconstructs `AgentConfig` with inline defaults that MUST mirror `lingtai_kernel.config.AgentConfig` (inline construction in `_setup_from_init`, nothing enforces).
+- **Addon decompression** runs BEFORE capability setup so `mcp` capability sees populated `mcp_registry.jsonl` on first reconcile (`Agent.__init__` :33, `_setup_from_init` :954).
+- **MCP retry contract (issue #34):** `_load_mcp_from_workdir` :350 records every registered init.json mcp entry into `self._mcp_init_specs` (name → `{cfg, source, client}`). `_retry_failed_mcps` :498 walks this dict, closes any dead client (`is_connected()` False), respawns with the original config, and reports `{retried, recovered, still_failed, healthy}`. `system(action="refresh")` calls it via `intrinsics/system/preset.py:_refresh` before `_perform_refresh` so the documented "fix config → refresh" recovery path works without full process restart.
