@@ -638,6 +638,7 @@ def test_sync_idle_injects_pair_with_synthesized_marker(tmp_path: Path) -> None:
     from lingtai_kernel.llm.interface import TextBlock
     assert isinstance(entries[0].content[0], TextBlock)
     summary_text = entries[0].content[0].text
+    assert "Notification received: 1 email" in summary_text
     assert "not necessarily a human instruction" in summary_text
     assert "Identify the source" in summary_text
     call_block = entries[0].content[1]
@@ -653,6 +654,8 @@ def test_sync_idle_injects_pair_with_synthesized_marker(tmp_path: Path) -> None:
     assert "not automatically human instructions" in body["_notification_guidance"]
     assert "source(s): email" in body["_notification_guidance"]
     assert "email" in body["notifications"]
+    assert "not necessarily a human instruction" in body["notifications"]["email"]["_notification_guidance"]
+    assert "'email' notification channel" in body["notifications"]["email"]["_notification_guidance"]
 
     assert agent._notification_block_id == call_block.id
 
