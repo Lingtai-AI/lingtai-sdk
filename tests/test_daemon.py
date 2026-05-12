@@ -228,10 +228,14 @@ def test_handle_emanate_dispatches_and_returns_ids(tmp_path):
 
     time.sleep(1)
 
-    messages = []
-    while not agent.inbox.empty():
-        messages.append(agent.inbox.get_nowait())
-    assert len(messages) == 2
+    from lingtai_kernel.notifications import collect_notifications
+
+    assert agent.inbox.empty()
+    events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+    assert len(events) == 2
+    assert {e["source"] for e in events} == {"daemon"}
+    assert {e["ref_id"] for e in events} == {"em-1", "em-2"}
+    assert all("[daemon:em-" not in e["body"] for e in events)
 
 
 def test_handle_emanate_allows_concurrent(tmp_path):
@@ -395,15 +399,102 @@ def test_end_to_end_emanate_list_ask_reclaim(tmp_path):
     statuses = {e["id"]: e["status"] for e in list_result["emanations"]}
     assert statuses.get("em-1") == "done"
 
-    messages = []
-    while not agent.inbox.empty():
-        messages.append(agent.inbox.get_nowait())
-    assert len(messages) >= 1
-    texts = [m.content for m in messages]
-    assert any("Task done" in t for t in texts)
+    from lingtai_kernel.notifications import collect_notifications
+
+    assert agent.inbox.empty()
+    events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+    assert any(e["source"] == "daemon" and e["ref_id"] == "em-1" for e in events)
+    assert any("Task done" in e["body"] for e in events)
+    assert any("daemon(action=\"check\", id=\"em-1\")" in e["body"] for e in events)
+    assert all("[daemon:em-" not in e["body"] for e in events)
 
     reclaim_result = mgr._handle_reclaim()
     assert reclaim_result["status"] == "reclaimed"
+
+
+
+def test_on_emanation_done_publishes_system_notification_not_request(tmp_path):
+    from lingtai_kernel.notifications import collect_notifications
+
+    agent = _make_agent(tmp_path, ["daemon"])
+    agent.inbox = queue.Queue()
+    mgr = agent.get_capability("daemon")
+    rd = _make_run_dir(agent, em_id="em-9")
+
+    future = MagicMock()
+    future.result.return_value = "final report long enough to notify"
+    mgr._emanations["em-9"] = {
+        "future": future,
+        "task": "test task",
+        "start_time": time.time(),
+        "run_dir": rd,
+    }
+
+    mgr._on_emanation_done("em-9", "test task", future)
+
+    assert agent.inbox.empty()
+    notifications = collect_notifications(agent._working_dir)
+    events = notifications["system"]["data"]["events"]
+    assert len(events) == 1
+    event = events[0]
+    assert event["source"] == "daemon"
+    assert event["ref_id"] == "em-9"
+    assert "Daemon em-9 done" in event["body"]
+    assert "daemon(action=\"check\", id=\"em-9\")" in event["body"]
+    assert "final report" in event["body"]
+    assert "[daemon:em-" not in event["body"]
+
+
+def test_on_emanation_done_failure_always_notifies(tmp_path):
+    from lingtai_kernel.notifications import collect_notifications
+
+    agent = _make_agent(tmp_path, ["daemon"])
+    agent.inbox = queue.Queue()
+    mgr = agent.get_capability("daemon")
+    rd = _make_run_dir(agent, em_id="em-fail")
+
+    future = MagicMock()
+    future.result.side_effect = RuntimeError("boom")
+    mgr._emanations["em-fail"] = {
+        "future": future,
+        "task": "test task",
+        "start_time": time.time(),
+        "run_dir": rd,
+    }
+
+    mgr._on_emanation_done("em-fail", "test task", future)
+
+    assert agent.inbox.empty()
+    events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
+    assert len(events) == 1
+    assert events[0]["source"] == "daemon"
+    assert events[0]["ref_id"] == "em-fail"
+    assert "failed" in events[0]["body"]
+    assert "boom" in events[0]["body"]
+    assert "[daemon:em-" not in events[0]["body"]
+
+
+def test_on_emanation_done_short_success_still_suppressed(tmp_path):
+    from lingtai_kernel.notifications import collect_notifications
+
+    agent = _make_agent(tmp_path, ["daemon"])
+    agent.inbox = queue.Queue()
+    mgr = agent.get_capability("daemon")
+    rd = _make_run_dir(agent, em_id="em-short")
+
+    future = MagicMock()
+    future.result.return_value = "ok"
+    mgr._emanations["em-short"] = {
+        "future": future,
+        "task": "test task",
+        "start_time": time.time(),
+        "run_dir": rd,
+    }
+
+    mgr._on_emanation_done("em-short", "test task", future)
+
+    assert agent.inbox.empty()
+    assert collect_notifications(agent._working_dir) == {}
 
 
 def test_sequential_emanate_increments_ids(tmp_path):
@@ -764,12 +855,9 @@ def _make_agent_with_presets(tmp_path, presets_dir):
 def test_emanate_with_preset_validates_preset_exists(tmp_path, monkeypatch):
     """If a per-task preset is specified but doesn't exist in the library,
     refuse THE WHOLE BATCH (no partial emanations)."""
-    from unittest.mock import patch
-    import lingtai_kernel.preset_connectivity as preset_connectivity
-
     presets_dir = tmp_path / "presets"
     presets_dir.mkdir()
-    preset_file = _write_preset_file(presets_dir, "deepseek")
+    _write_preset_file(presets_dir, "deepseek")
 
     agent = _make_agent_with_presets(tmp_path, presets_dir)
     agent.inbox = queue.Queue()
@@ -795,7 +883,7 @@ def test_emanate_with_preset_unreachable_refuses(tmp_path, monkeypatch):
 
     presets_dir = tmp_path / "presets"
     presets_dir.mkdir()
-    preset_file = _write_preset_file(presets_dir, "deepseek", api_key_env="DEEPSEEK_API_KEY")
+    _write_preset_file(presets_dir, "deepseek", api_key_env="DEEPSEEK_API_KEY")
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
 
@@ -862,7 +950,6 @@ def test_emanate_with_preset_passes_through(tmp_path, monkeypatch):
     mock_session.send = MagicMock(return_value=mock_resp)
 
     # The preset's LLMService will call create_session — mock at the class level
-    from lingtai.llm.service import LLMService as ConcreteLLMService
     preset_svc = MagicMock()
     preset_svc.create_session = MagicMock(return_value=mock_session)
     preset_svc.make_tool_result = MagicMock(return_value="mock_result")

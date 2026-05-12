@@ -3,7 +3,7 @@
 Gives an agent the ability to split its consciousness into focused worker
 fragments that operate in parallel on the same working directory.  Each
 emanation is a disposable ChatSession with a curated tool surface — not an
-agent.  Results return as [daemon:em-N] notifications in the parent's inbox.
+agent.  Results are persisted in daemon run directories; completion is surfaced via a compact system notification.
 
 Usage:
     Agent(capabilities=["daemon"])
@@ -26,8 +26,6 @@ if TYPE_CHECKING:
     from ...agent import Agent
 
 from lingtai_kernel.llm.base import FunctionSchema
-from lingtai_kernel.message import MSG_REQUEST, _make_message
-
 from .run_dir import DaemonRunDir
 
 PROVIDERS = {"providers": [], "default": "builtin"}
@@ -148,14 +146,13 @@ class DaemonManager:
 
     def __init__(self, agent: "Agent", max_emanations: int = 10,
                  max_turns: int = 200, timeout: float = 3600.0,
-                 notify_threshold: int = 20, max_result_chars: int = 2000):
+                 notify_threshold: int = 20):
         self._agent = agent
         self._max_emanations = max_emanations
         self._max_turns = max_turns
         self._timeout = timeout
         self._default_model = agent.service.model
         self._notify_threshold = notify_threshold
-        self._max_result_chars = max_result_chars
 
         # Emanation registry: em_id → entry dict
         self._emanations: dict[str, dict] = {}
@@ -445,9 +442,8 @@ class DaemonManager:
                 if cancel_event.is_set():
                     return _exit_cancelled()
 
-                # Intermediate text → notify parent
-                if response.text:
-                    self._notify_parent(em_id, response.text)
+                # Intermediate text is already persisted in chat_history via
+                # bump_turn(); do not inject daemon progress as parent requests.
 
                 tool_results = []
                 for tc in response.tool_calls:
@@ -537,7 +533,7 @@ class DaemonManager:
         """Run a Claude Code CLI session as the emanation backend.
 
         Spawns ``claude --print --dangerously-skip-permissions --name <em_id> <task>``
-        and streams stdout back via ``_notify_parent()``. After the process
+        and records stdout in the daemon run directory. After the process
         finishes, discovers the session ID from the JSONL files and stores it
         in run_dir's daemon.json as ``claude_session_id``.
         """
@@ -592,7 +588,7 @@ class DaemonManager:
                 output_lines.append(line)
                 stripped = line.rstrip("\n")
                 if stripped:
-                    self._notify_parent(em_id, stripped)
+                    run_dir.record_cli_output(stripped, stream="combined")
 
             proc.wait()
         except Exception as e:
@@ -633,8 +629,8 @@ class DaemonManager:
     ) -> str:
         """Run a Codex CLI session as the emanation backend.
 
-        Spawns ``codex exec <task>`` and streams stdout back via
-        ``_notify_parent()``.  Unlike Claude Code, Codex has no session
+        Spawns ``codex exec <task>`` and records stdout in the daemon run
+        directory. Unlike Claude Code, Codex has no session
         resumption or JSONL session discovery — each invocation is
         one-shot.
         """
@@ -688,7 +684,7 @@ class DaemonManager:
                 output_lines.append(line)
                 stripped = line.rstrip("\n")
                 if stripped:
-                    self._notify_parent(em_id, stripped)
+                    run_dir.record_cli_output(stripped, stream="combined")
 
             proc.wait()
         except Exception as e:
@@ -711,11 +707,54 @@ class DaemonManager:
         run_dir.mark_done(text)
         return text
 
-    def _notify_parent(self, em_id: str, text: str) -> None:
-        """Send a [daemon] notification to parent's inbox."""
-        notification = f"[daemon:{em_id}]\n\n{text}"
-        msg = _make_message(MSG_REQUEST, "daemon", notification)
-        self._agent.inbox.put(msg)
+    _NOTIFICATION_PREVIEW_MAX = 500
+
+    def _publish_daemon_notification(
+        self,
+        em_id: str,
+        *,
+        status: str,
+        text: str,
+        run_dir: DaemonRunDir | None = None,
+    ) -> None:
+        """Publish a compact daemon completion event via .notification/system.json.
+
+        Full daemon output belongs in the run directory and is inspectable via
+        ``daemon(action="check", id=...)``.  The parent notification is only a
+        wake signal with provenance, bounded preview, and the inspection path.
+        It must not arrive as ordinary ``MSG_REQUEST`` text.
+        """
+        preview = text or ""
+        if len(preview) > self._NOTIFICATION_PREVIEW_MAX:
+            preview = (
+                preview[: self._NOTIFICATION_PREVIEW_MAX]
+                + f"...[truncated; {len(preview)} chars total]"
+            )
+        parts = [
+            f"Daemon {em_id} {status}.",
+            f"Inspect with daemon(action=\"check\", id=\"{em_id}\").",
+        ]
+        if run_dir is not None:
+            parts.append(f"Run directory: {run_dir.path}")
+            result_path = run_dir.state_snapshot().get("result_path")
+            if result_path:
+                parts.append(f"Result file: {result_path}")
+        if preview:
+            parts.append(f"Preview:\n{preview}")
+        body = "\n".join(parts)
+        try:
+            self._agent._enqueue_system_notification(
+                source="daemon",
+                ref_id=em_id,
+                body=body,
+            )
+        except Exception as e:
+            self._log(
+                "daemon_notification_error",
+                em_id=em_id,
+                status=status,
+                error=str(e)[:200],
+            )
 
     def _drain_followup(self, em_id: str) -> str | None:
         """Drain the follow-up buffer for a specific emanation."""
@@ -943,8 +982,9 @@ class DaemonManager:
         """Dispatch emanations via an external CLI backend (claude-code, codex).
 
         Skips preset resolution — the CLI manages its own tools/model/provider.
-        Creates a DaemonRunDir for tracking and streams output via the parent
-        notification channel.
+        Creates a DaemonRunDir for tracking. CLI output is persisted in the
+        run directory; only terminal completion/failure emits a compact
+        system notification.
         """
         cancel_event = threading.Event()
         timeout_event = threading.Event()
@@ -1118,7 +1158,10 @@ class DaemonManager:
                                f"{(result.stderr or output)[-500:]}"}
 
         if output:
-            self._notify_parent(em_id, output)
+            run_dir.record_cli_output(output, stream="combined")
+            self._publish_daemon_notification(
+                em_id, status="follow-up completed", text=output, run_dir=run_dir
+            )
 
         return {"status": "sent", "id": em_id, "output": output}
 
@@ -1197,10 +1240,18 @@ class DaemonManager:
             "id": em_id,
             "run_id": state.get("run_id"),
             "state": state.get("state"),
+            "backend": state.get("backend"),
+            "path": str(run_dir.path),
             "turn": state.get("turn"),
             "current_tool": state.get("current_tool"),
             "elapsed_s": state.get("elapsed_s"),
+            "finished_at": state.get("finished_at"),
             "tokens": state.get("tokens", {}),
+            "result_preview": state.get("result_preview"),
+            "result_path": state.get("result_path"),
+            "last_output": state.get("last_output"),
+            "last_output_at": state.get("last_output_at"),
+            "error": state.get("error"),
             "events": events,
             "events_total": events_total,
             "events_returned": len(events),
@@ -1223,25 +1274,28 @@ class DaemonManager:
         entry = self._emanations.get(em_id)
         if entry:
             elapsed = time.time() - entry["start_time"]
+        status = "done"
         try:
             text = future.result()
             self._log("daemon_result", em_id=em_id, status="done",
                       text_length=len(text), elapsed_ms=round(elapsed * 1000))
         except Exception as e:
+            status = "failed"
             text = f"Failed: {e}"
             self._log("daemon_error", em_id=em_id,
                       exception=type(e).__name__, exception_message=str(e))
 
-        # Truncate long results
-        if len(text) > self._max_result_chars:
-            text = text[:self._max_result_chars] + f"\n[truncated — {len(text)} chars total]"
-
-        # Suppress notifications for short results to prevent notification storms
-        if len(text) < self._notify_threshold:
+        # Suppress notifications for short successful results to prevent
+        # notification storms. Failures always notify.
+        if status == "done" and len(text) < self._notify_threshold:
             self._log("daemon_result", em_id=em_id, status="suppressed_short",
                       text_length=len(text))
-        else:
-            self._notify_parent(em_id, text)
+            return
+
+        run_dir = entry.get("run_dir") if entry else None
+        self._publish_daemon_notification(
+            em_id, status=status, text=text, run_dir=run_dir
+        )
 
     def _watchdog(self, cancel_event: threading.Event,
                   timeout_event: threading.Event, timeout: float) -> None:
@@ -1267,13 +1321,12 @@ class DaemonManager:
 
 def setup(agent: "Agent", max_emanations: int = 10,
           max_turns: int = 200, timeout: float = 3600.0,
-          notify_threshold: int = 20, max_result_chars: int = 2000) -> DaemonManager:
+          notify_threshold: int = 20) -> DaemonManager:
     """Set up the daemon capability on an agent."""
     lang = agent._config.language
     mgr = DaemonManager(agent, max_emanations=max_emanations,
                         max_turns=max_turns, timeout=timeout,
-                        notify_threshold=notify_threshold,
-                        max_result_chars=max_result_chars)
+                        notify_threshold=notify_threshold)
     schema = get_schema(lang)
     agent.add_tool("daemon", schema=schema, handler=mgr.handle,
                    description=get_description(lang))

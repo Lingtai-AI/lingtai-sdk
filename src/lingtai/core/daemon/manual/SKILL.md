@@ -53,13 +53,14 @@ This means: when an emanation looks stuck, you can read its actual state instead
 ```
 daemons/em-3-20260427-094215-a1b2c3/
 ├── daemon.json                  ← identity card + live status snapshot
+├── result.txt                   ← full terminal result when available
 ├── .prompt                      ← system prompt as built (forensic)
 ├── .heartbeat                   ← mtime touched on every write
 ├── history/
 │   └── chat_history.jsonl       ← full LLM transcript
 └── logs/
     ├── token_ledger.jsonl       ← per-call token usage
-    └── events.jsonl             ← daemon_start, tool_call, tool_result, daemon_done/...
+    └── events.jsonl             ← daemon_start, tool_call, tool_result, cli_output, daemon_done/...
 ```
 
 ## Inspection patterns
@@ -73,6 +74,8 @@ Read `daemon.json` once. The fields you want:
 - `turn` — which LLM round the emanation is on
 - `tool_call_count` — how many tool dispatches it has done
 - `tokens` — running totals
+- `last_output` / `last_output_at` — recent stdout/stderr from CLI backends
+- `result_preview` / `result_path` — bounded terminal preview and full `result.txt` path after completion
 - `elapsed_s` — wall clock since start
 
 If `current_tool` is null AND `tool_call_count` hasn't changed for a while, the LLM is thinking — wait. If `current_tool` is set and stays set, that tool is slow (e.g., a big file read or a long bash command).
@@ -138,7 +141,9 @@ The `backend` parameter selects the execution engine for emanations. Default is 
 
 **CLI backends skip preset resolution** — the external CLI manages its own model, tools, and permissions. The `tools` field in the task spec is ignored for CLI backends.
 
-**Working directory:** Both CLI backends run in the parent agent's working directory (`_working_dir`), not in the emanation's `daemons/em-N-*/` folder. The `daemons/` folder is used only for tracking state (`daemon.json`, logs).
+**Working directory:** Both CLI backends run in the parent agent's working directory (`_working_dir`), not in the emanation's `daemons/em-N-*/` folder. The `daemons/` folder is used for tracking state (`daemon.json`, logs) and terminal output (`result.txt`).
+
+**Progress delivery:** CLI stdout/stderr is persisted to the run directory as `cli_output` events and `daemon.json.last_output`; it is not injected into the parent as ordinary `[daemon:em-N]` request text. Completion/failure publishes one compact `system` notification telling the parent which daemon finished and to inspect it with `daemon(action="check", id="em-N")`.
 
 ## What the manual does NOT cover
 
