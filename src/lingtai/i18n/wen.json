@@ -23,7 +23,7 @@
   "bash.action": "所行之事：'run'（默认）执行指令，'poll' 查异步任务之状，'cancel' 斩异步任务",
   "bash.command": "欲执行之指令",
   "bash.timeout": "超时秒数（默认：30，唯同步执行时生效）",
-  "bash.working_dir": "指令之工作目录（可选）",
+  "bash.working_dir": "指令之工作目录（可选）。须在 agent 工作目录沙箱之内；沙箱外路径会被拒。若需操作外部仓库/路径，请令 working_dir 保持为 agent 目录，并在 command 中显式 cd，如 cd /absolute/path && ...",
   "bash.async": "后台运行指令，即返 job_id（默认：false，唯 action='run' 时生效）",
   "bash.job_id": "异步任务之号，用于 poll/cancel（由异步 run 所返）",
   "codex.description": "汝跨凝蜕长存之自我记忆——所习、所断、所悟之日记。每经卷之 id + 题 + 摘要恒见于汝之系统提示（上方典之目录块）；正文与扩展之材按需以 view 取之。经卷数有上限——珍惜每一条目。将满时合经。submit 录入。view 展阅其文。consolidate 合经。delete 焚经。",

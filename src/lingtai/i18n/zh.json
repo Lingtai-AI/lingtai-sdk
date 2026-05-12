@@ -23,7 +23,7 @@
   "bash.action": "执行动作：'run'（默认）执行命令，'poll' 查询异步任务状态，'cancel' 终止异步任务",
   "bash.command": "要执行的 shell 命令",
   "bash.timeout": "超时秒数（默认：30，仅同步执行时生效）",
-  "bash.working_dir": "命令的工作目录（可选）",
+  "bash.working_dir": "命令的工作目录（可选）。必须位于 agent 工作目录沙箱内；沙箱外路径会被拒绝。若要操作外部仓库/路径，请将 working_dir 保持为 agent 目录，并在 command 中显式 cd，例如 cd /absolute/path && ...",
   "bash.async": "后台运行命令并立即返回 job_id（默认：false，仅 action='run' 时生效）",
   "bash.job_id": "异步任务 ID，用于 poll/cancel（由异步 run 返回）",
   "codex.description": "你的跨凝蜕长存自我之记忆——记录所学、所断、所悟之日记。每条之 id + 标题 + 摘要始终于系统提示中可见；正文与扩展材料按需以 view 取之。条目有上限——珍惜每一条。将满时合经。submit 录入。view 展阅。consolidate 合经。delete 焚经。",

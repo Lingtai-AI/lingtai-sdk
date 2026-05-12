@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from unittest.mock import MagicMock
 
-from lingtai.core.bash import BashManager, BashPolicy, setup as setup_bash
+from lingtai.core.bash import BashManager, BashPolicy, get_schema, setup as setup_bash
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +135,27 @@ class TestBashManager:
         result = mgr.handle({"command": "pwd"})
         assert result["status"] == "ok"
         assert str(tmp_path) in result["stdout"]
+
+    def test_working_dir_outside_sandbox_error_suggests_cd_workaround(self, tmp_path):
+        sandbox = tmp_path / "agent"
+        external = tmp_path / "external"
+        sandbox.mkdir()
+        external.mkdir()
+        mgr = BashManager(policy=BashPolicy.yolo(), working_dir=str(sandbox))
+
+        result = mgr.handle({"command": "pwd", "working_dir": str(external)})
+
+        assert result["status"] == "error"
+        assert "under agent working directory" in result["message"]
+        assert "cd " in result["message"]
+        assert str(external.resolve()) in result["message"]
+
+    def test_schema_documents_working_dir_sandbox_and_cd_workaround(self):
+        desc = get_schema("en")["properties"]["working_dir"]["description"]
+
+        assert "agent working directory sandbox" in desc
+        assert "paths outside" in desc
+        assert "cd /absolute/path &&" in desc
 
     def test_output_truncation(self):
         mgr = BashManager(policy=BashPolicy.yolo(), working_dir="/tmp", max_output=20)

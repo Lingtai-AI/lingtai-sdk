@@ -23,7 +23,7 @@
   "bash.action": "Action to perform: 'run' (default) executes a command, 'poll' checks async job status, 'cancel' kills an async job",
   "bash.command": "The shell command to execute",
   "bash.timeout": "Timeout in seconds (default: 30, only for sync execution)",
-  "bash.working_dir": "Working directory for the command (optional)",
+  "bash.working_dir": "Working directory for the command (optional). Must be inside the agent working directory sandbox; paths outside it are rejected. For external repos/paths, keep working_dir at the agent dir and put an explicit cd in command, e.g. cd /absolute/path && ...",
   "bash.async": "Run command in background and return immediately with a job_id (default: false, only for action='run')",
   "bash.job_id": "Job ID for poll/cancel actions (returned by async run)",
   "codex.description": "Your durable journal across molts — what you've learned, decided, and discovered. Each entry's id + title + summary is visible in your system prompt; content and supplementary load on demand via view. Use progressive disclosure: keep summaries concise and scannable (1-3 sentences); put detailed explanations in content; raw data, citations, and long-form reference in supplementary. This layered approach keeps your prompt efficient while preserving depth. Slots are limited — consolidate related entries when you fill up. submit to add. view to read. consolidate to merge. delete to remove.",

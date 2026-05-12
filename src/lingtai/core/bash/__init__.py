@@ -191,8 +191,12 @@ class BashManager:
             if not (resolved == sandbox or resolved.startswith(sandbox + "/")):
                 return {
                     "status": "error",
-                    "message": f"working_dir must be under agent working directory: "
-                    f"{self._working_dir}",
+                    "message": (
+                        f"working_dir must be under agent working directory: "
+                        f"{self._working_dir}. To operate on an external path, "
+                        f"use an allowed working_dir and put `cd {resolved} && ...` "
+                        f"inside the command."
+                    ),
                 }
         except (ValueError, OSError):
             return {"status": "error", "message": "Invalid working_dir path"}

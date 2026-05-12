@@ -242,6 +242,34 @@ class TestRestoreDanglingToolCalls:
         assert tail.content[0].id == "call_X"
         assert "restored from disk" in tail.content[0].content
 
+    def test_bash_heal_notice_includes_recovery_metadata(self):
+        iface = ChatInterface()
+        iface.add_system("prompt")
+        iface.add_user_message("run")
+        iface.add_assistant_message([
+            ToolCallBlock(
+                id="call_bash_1",
+                name="bash",
+                args={
+                    "command": "cd /repo && git status --short",
+                    "working_dir": "/agent",
+                    "timeout": 30,
+                },
+            )
+        ])
+
+        iface.close_pending_tool_calls("heal:idle_inject_blocked")
+
+        content = iface.entries[-1].content[0].content
+        assert "tool call did not complete" in content
+        assert "Reason recorded by the kernel: heal:idle_inject_blocked" in content
+        assert "Recovery metadata:" in content
+        assert "Tool call id: call_bash_1" in content
+        assert "bash action: run" in content
+        assert "bash working_dir: /agent" in content
+        assert "bash timeout: 30" in content
+        assert "bash command preview: cd /repo && git status --short" in content
+
 
 # ---------------------------------------------------------------------------
 # Real result arriving after a heal — replace-in-place behavior

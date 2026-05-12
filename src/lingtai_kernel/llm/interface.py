@@ -63,11 +63,42 @@ class ToolResultBlock:
         return {"type": "tool_result", "id": self.id, "name": self.name, "content": self.content}
 
 
+def _tool_call_context(tool_call: "ToolCallBlock | None") -> str:
+    """Short, safe context for a synthesized tool-result recovery notice."""
+    if tool_call is None:
+        return ""
+    lines = [f"Tool call id: {tool_call.id}"]
+    args = tool_call.args if isinstance(tool_call.args, dict) else {}
+    if tool_call.name == "bash":
+        action = args.get("action", "run")
+        lines.append(f"bash action: {action}")
+        if "working_dir" in args:
+            lines.append(f"bash working_dir: {args.get('working_dir')}")
+        if "timeout" in args:
+            lines.append(f"bash timeout: {args.get('timeout')}")
+        if "async" in args:
+            lines.append(f"bash async: {args.get('async')}")
+        if "job_id" in args:
+            lines.append(f"bash job_id: {args.get('job_id')}")
+        command = args.get("command")
+        if isinstance(command, str) and command:
+            preview = command.replace("\n", "\\n")
+            if len(preview) > 240:
+                preview = preview[:240] + "..."
+            lines.append(f"bash command preview: {preview}")
+    elif args:
+        keys = ", ".join(sorted(str(k) for k in args.keys())[:12])
+        if keys:
+            lines.append(f"tool args present: {keys}")
+    return "\n".join(lines)
+
+
 def _synthesized_abort_message(
     tool_name: str,
     reason: str,
     *,
     tool_completed: bool = False,
+    tool_call: "ToolCallBlock | None" = None,
 ) -> str:
     """Content for a heal-path placeholder ToolResultBlock.
 
@@ -84,6 +115,8 @@ def _synthesized_abort_message(
     tool result.  In that case the message says so honestly instead of
     implying the tool itself failed.
     """
+    context = _tool_call_context(tool_call)
+    context_block = f"\n\nRecovery metadata:\n{context}" if context else ""
     if tool_completed:
         return (
             f"[kernel notice — tool call completed but LLM continuation failed]\n"
@@ -101,6 +134,7 @@ def _synthesized_abort_message(
             f"left off without re-executing the tool.\n"
             f"\n"
             f"Reason recorded by the kernel: {reason}"
+            f"{context_block}"
         )
     return (
         f"[kernel notice — tool call did not complete]\n"
@@ -117,6 +151,7 @@ def _synthesized_abort_message(
         f"Only retry the call if you've confirmed it didn't take effect.\n"
         f"\n"
         f"Reason recorded by the kernel: {reason}"
+        f"{context_block}"
     )
 
 
@@ -397,7 +432,10 @@ class ChatInterface:
                 id=b.id,
                 name=b.name,
                 content=_synthesized_abort_message(
-                    b.name, reason, tool_completed=tool_completed,
+                    b.name,
+                    reason,
+                    tool_completed=tool_completed,
+                    tool_call=b,
                 ),
                 synthesized=True,
             )

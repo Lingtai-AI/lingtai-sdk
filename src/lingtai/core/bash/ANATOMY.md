@@ -7,7 +7,7 @@ be explicitly opted into.
 
 ## Components
 
-- `bash/__init__.py` — the entire capability in a single file. `get_description` (`bash/__init__.py:28-29`), `get_schema` (`bash/__init__.py:32-51`), `setup` (`bash/__init__.py:217-255`). Two core classes: `BashPolicy` (`bash/__init__.py:55-143`) for command filtering, `BashManager` (`bash/__init__.py:146-214`) for execution.
+- `bash/__init__.py` — the entire capability in a single file. `get_description` (`bash/__init__.py:32-33`), `get_schema` (`bash/__init__.py:36-70`), `setup` (`bash/__init__.py:505-539`). Two core classes: `BashPolicy` (`bash/__init__.py:74-162`) for command filtering, `BashManager` (`bash/__init__.py:165-503`) for execution.
 - `bash/bash_policy.json` — default denylist policy shipped with the kernel. Denies destructive (`rm`, `rmdir`, `shred`, `dd`), privilege escalation (`sudo`, `su`, `doas`), permission changes (`chmod`, `chown`, `chgrp`), disk management (`mount`, `umount`, `mkfs`, `fdisk`), package managers (`apt`, `apt-get`, `yum`, `dnf`, `brew`), process control (`kill`, `killall`, `pkill`, `shutdown`, `reboot`, `systemctl`), network (`nc`, `ncat`), and code execution (`eval`, `exec`).
 
 ## Public API
