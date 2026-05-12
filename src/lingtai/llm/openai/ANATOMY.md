@@ -9,30 +9,31 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 | File | LOC | Role |
 |------|-----|------|
 | `__init__.py` | 3 | Re-exports `OpenAIAdapter`, `OpenAIChatSession` |
-| `adapter.py` | 1470 | 5 classes + helpers: `OpenAIChatSession`, `OpenAIResponsesSession`, `OpenAIAdapter`, `CodexResponsesSession`, `CodexOpenAIAdapter` |
+| `adapter.py` | 1597 | 5 classes + helpers: `OpenAIChatSession`, `OpenAIResponsesSession`, `OpenAIAdapter`, `CodexResponsesSession`, `CodexOpenAIAdapter` |
 | `defaults.py` | 7 | `DEFAULTS` dict: `api_compat="openai"`, `use_responses_api=True` |
 
 ### adapter.py class map
 
 | Class | Lines | Role |
 |-------|-------|------|
-| `OpenAIChatSession` | 289–781 | Chat Completions session with context overflow auto-recovery |
-| `OpenAIResponsesSession` | 789–971 | Responses API session with server-side `previous_response_id` chaining |
-| `OpenAIAdapter` | 979–1242 | `LLMAdapter` implementation; dispatches to Completions or Responses path |
-| `CodexResponsesSession` | 1250–1413 | Stateless Responses variant for ChatGPT-OAuth `/backend-api/codex` |
-| `CodexOpenAIAdapter` | 1416–1470 | Adapter variant that builds `CodexResponsesSession` |
+| `OpenAIChatSession` | 399–891 | Chat Completions session with context overflow auto-recovery |
+| `OpenAIResponsesSession` | 899–1081 | Responses API session with server-side `previous_response_id` chaining |
+| `OpenAIAdapter` | 1089–1352 | `LLMAdapter` implementation; dispatches to Completions or Responses path |
+| `CodexResponsesSession` | 1360–1539 | Stateless Responses variant for ChatGPT-OAuth `/backend-api/codex` |
+| `CodexOpenAIAdapter` | 1543–1597 | Adapter variant that builds `CodexResponsesSession` |
 
 ### adapter.py helpers
 
 | Function | Lines | Role |
 |----------|-------|------|
-| `_build_http_timeout()` | 37–51 | `httpx.Timeout` per-phase caps (connect≤30s, read≤60s, pool=10s) |
-| `_build_tools()` | 59–73 | `FunctionSchema` → OpenAI CC tool format (`{type, function: {name, description, parameters}}`) |
-| `_build_responses_tools()` | 83–107 | `FunctionSchema` → Responses API flat format (`{type, name, description, parameters}`); scrubs disallowed top-level JSON-Schema combinators (`allOf`, `oneOf`, etc.) |
-| `_parse_tool_calls()` | 110–127 | Raw SDK `tool_calls` → `list[ToolCall]` |
-| `_parse_response()` | 130–174 | ChatCompletion → `LLMResponse` (extracts reasoning from `reasoning_content` or `reasoning`) |
-| `_handle_responses_reasoning_event()` | 195–236 | Responses stream reasoning-summary event handler; accumulates `summary_text` deltas/done fallback without raw reasoning text |
-| `_parse_responses_api_response()` | 239–281 | Responses API output → `LLMResponse` (handles `message`, `function_call`, `reasoning` output items) |
+| `_codex_responses_trace_path()` / `_codex_responses_trace_record()` | 46–141 | Opt-in Codex Responses stream diagnostic trace helpers; safe metadata only, default off |
+| `_build_http_timeout()` | 143–157 | `httpx.Timeout` per-phase caps (connect≤30s, read≤60s, pool=10s) |
+| `_build_tools()` | 165–179 | `FunctionSchema` → OpenAI CC tool format (`{type, function: {name, description, parameters}}`) |
+| `_build_responses_tools()` | 189–213 | `FunctionSchema` → Responses API flat format (`{type, name, description, parameters}`); scrubs disallowed top-level JSON-Schema combinators (`allOf`, `oneOf`, etc.) |
+| `_parse_tool_calls()` | 216–233 | Raw SDK `tool_calls` → `list[ToolCall]` |
+| `_parse_response()` | 236–280 | ChatCompletion → `LLMResponse` (extracts reasoning from `reasoning_content` or `reasoning`) |
+| `_handle_responses_reasoning_event()` | 303–346 | Responses stream reasoning-summary event handler; accumulates `summary_text` deltas/done fallback without raw reasoning text |
+| `_parse_responses_api_response()` | 349–391 | Responses API output → `LLMResponse` (handles `message`, `function_call`, `reasoning` output items) |
 
 ## Connections
 
@@ -79,7 +80,8 @@ Both paths return sessions wrapped via `_wrap_with_gate()` for rate limiting.
 - **`OpenAIChatSession._interface`** — canonical `ChatInterface`, single source of truth. Mutated in-place: `add_user_message`, `add_tool_results`, `add_assistant_message`, `drop_trailing`.
 - **`OpenAIChatSession._request_timeout`** — per-request HTTP timeout set by caller before dispatch (line 319). Prevents race between watchdog and SDK.
 - **`OpenAIResponsesSession._response_id`** — server-side session chain pointer. Updated after each `send()` / streamed response.
-- **`CodexResponsesSession._response_id`** — transient debug aid only; never threaded into next request (line 1410).
+- **`CodexResponsesSession._response_id`** — transient debug aid only; never threaded into next request (line 1538).
+- **Codex Responses trace** — opt-in diagnostics write JSONL metadata to `logs/codex_responses_trace.jsonl` when `LINGTAI_CODEX_RESPONSES_TRACE=1` (override path with `LINGTAI_CODEX_RESPONSES_TRACE_PATH`). Default off; stores event/item shapes, lengths/hashes, usage, and accumulator counts, not raw content.
 - **`OpenAIAdapter._client`** — shared `openai.OpenAI` instance. `_client_kwargs` stored for session `reset()`.
 - **`OpenAIAdapter._session_class`** — class var, subclasses override (e.g. DeepSeek injects `reasoning_content` preservation).
 
@@ -109,7 +111,7 @@ Both paths return sessions wrapped via `_wrap_with_gate()` for rate limiting.
 
 - **CC streaming** (`send_stream`, line 622) — `stream=True, stream_options={include_usage: True}`. Uses `StreamingAccumulator` for text + tool deltas. Reasoning deltas captured from `delta.reasoning` or `delta.reasoning_content` (OpenRouter compatibility, lines 726-733). Overflow recovery wraps the stream open + first chunk (lines 668-690).
 - **Responses streaming** (`send_stream`, line 891) — event types: `response.reasoning_summary_text.delta/done` (summary thoughts only), `response.output_text.delta`, `response.function_call_arguments.delta`, `response.output_item.added/done`, `response.completed`.
-- **Codex streaming** — forces `stream=True` even on `send()` (line 1262). Full interface replay per request; captured summary thoughts are persisted as ThinkingBlocks so `to_responses_input` replays reasoning items before function calls.
+- **Codex streaming** — forces `stream=True` even on `send()` (line 1372). Full interface replay per request; captured summary thoughts are persisted as ThinkingBlocks so `to_responses_input` replays reasoning items before function calls. Optional diagnostics (`LINGTAI_CODEX_RESPONSES_TRACE=1`) append safe per-event metadata to `logs/codex_responses_trace.jsonl` without changing accumulator/persistence behavior.
 
 ### Authentication paths
 

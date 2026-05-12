@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -252,6 +254,74 @@ def test_done_only_summary_is_not_duplicated_by_output_item_done():
         block for block in assistant_entry.content if isinstance(block, ThinkingBlock)
     ]
     assert [block.text for block in thinking_blocks] == ["Done-only summary."]
+
+
+
+def test_codex_responses_trace_disabled_by_default(tmp_path, monkeypatch):
+    trace_path = tmp_path / "codex_responses_trace.jsonl"
+    monkeypatch.delenv("LINGTAI_CODEX_RESPONSES_TRACE", raising=False)
+    monkeypatch.setenv("LINGTAI_CODEX_RESPONSES_TRACE_PATH", str(trace_path))
+    session = _create_codex_session(_reasoning_events() + _function_call_events() + [_completed()])
+
+    result = session.send("please answer via tool")
+
+    assert result.thoughts == ["I should call the report tool."]
+    assert result.tool_calls[0].name == "report_answer"
+    assert not trace_path.exists()
+
+
+def test_codex_responses_trace_records_safe_metadata_when_enabled(tmp_path, monkeypatch):
+    trace_path = tmp_path / "codex_responses_trace.jsonl"
+    monkeypatch.setenv("LINGTAI_CODEX_RESPONSES_TRACE", "1")
+    monkeypatch.setenv("LINGTAI_CODEX_RESPONSES_TRACE_PATH", str(trace_path))
+    session = _create_codex_session(_reasoning_events() + _function_call_events() + [_completed()])
+
+    result = session.send("please answer via tool")
+
+    assert result.thoughts == ["I should call the report tool."]
+    assert result.text == ""
+    assert result.tool_calls[0].name == "report_answer"
+    assistant_entry = session.interface.entries[-1]
+    assert isinstance(assistant_entry.content[0], ThinkingBlock)
+    assert isinstance(assistant_entry.content[1], ToolCallBlock)
+
+    records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    event_types = [record["event_type"] for record in records]
+    assert "response.reasoning_summary_text.delta" in event_types
+    assert "response.output_item.added" in event_types
+    assert "response.function_call_arguments.delta" in event_types
+    assert "response.completed" in event_types
+
+    reasoning_delta = next(
+        record
+        for record in records
+        if record["event_type"] == "response.reasoning_summary_text.delta"
+    )
+    assert reasoning_delta["accepted_reasoning"] is True
+    assert reasoning_delta["item_id"] == "rs_fake"
+    assert reasoning_delta["delta"]["length"] == len("I should call ")
+    assert "sha256_12" in reasoning_delta["delta"]
+    assert "I should call" not in json.dumps(reasoning_delta)
+
+    function_arg_delta = next(
+        record
+        for record in records
+        if record["event_type"] == "response.function_call_arguments.delta"
+    )
+    assert function_arg_delta["accepted_reasoning"] is False
+    assert function_arg_delta["delta"]["length"] == len('{"answer"')
+    assert "answer" not in json.dumps(function_arg_delta)
+
+    completed = next(
+        record for record in records if record["event_type"] == "response.completed"
+    )
+    assert completed["usage"] == {
+        "input_tokens": 10,
+        "output_tokens": 20,
+        "cached_tokens": 0,
+        "reasoning_tokens": 7,
+    }
+    assert completed["thoughts"]["after_count"] == 1
 
 
 def test_openai_responses_stream_captures_summary_thoughts():

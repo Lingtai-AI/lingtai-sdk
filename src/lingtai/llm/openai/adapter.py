@@ -9,8 +9,12 @@ This is the **only** module that imports the ``openai`` package.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -32,6 +36,108 @@ from ..interface_converters import to_openai, to_responses_input
 from lingtai_kernel.llm.streaming import StreamingAccumulator
 
 logger = get_logger()
+
+
+_CODEX_RESPONSES_TRACE_ENV = "LINGTAI_CODEX_RESPONSES_TRACE"
+_CODEX_RESPONSES_TRACE_PATH_ENV = "LINGTAI_CODEX_RESPONSES_TRACE_PATH"
+_CODEX_RESPONSES_TRACE_FILE = "codex_responses_trace.jsonl"
+
+
+def _codex_responses_trace_path() -> Path | None:
+    """Return the opt-in Codex Responses stream trace path, if enabled."""
+    enabled = os.environ.get(_CODEX_RESPONSES_TRACE_ENV, "")
+    if enabled.lower() not in {"1", "true", "yes", "on"}:
+        return None
+
+    explicit_path = os.environ.get(_CODEX_RESPONSES_TRACE_PATH_ENV)
+    if explicit_path:
+        return Path(explicit_path).expanduser()
+
+    base_dir = Path(os.environ.get("LINGTAI_AGENT_DIR", ".")).expanduser()
+    return base_dir / "logs" / _CODEX_RESPONSES_TRACE_FILE
+
+
+def _text_fingerprint(text: str | None) -> dict[str, Any]:
+    """Return safe metadata for text-like stream deltas without storing content."""
+    if text is None:
+        return {"present": False, "length": 0}
+    encoded = text.encode("utf-8", errors="replace")
+    return {
+        "present": True,
+        "length": len(text),
+        "sha256_12": hashlib.sha256(encoded).hexdigest()[:12],
+    }
+
+
+def _codex_responses_trace_record(
+    *,
+    event: Any,
+    accepted_reasoning: bool,
+    thoughts_before: list[str],
+    thoughts_after: list[str],
+    pending_thought_chars_before: int,
+    pending_thought_chars_after: int,
+    trace_path: Path | None,
+) -> None:
+    """Append safe diagnostic metadata for one Codex Responses stream event.
+
+    This intentionally records event/item shapes, text lengths, and hashes only;
+    it must not store prompt text, raw response text, raw reasoning text, tool
+    result content, or API credentials.
+    """
+    if trace_path is None:
+        return
+
+    item = getattr(event, "item", None)
+    response = getattr(event, "response", None)
+    usage = getattr(response, "usage", None) if response is not None else None
+    input_details = getattr(usage, "input_tokens_details", None) if usage is not None else None
+    output_details = getattr(usage, "output_tokens_details", None) if usage is not None else None
+
+    summaries = []
+    for summary in getattr(item, "summary", None) or []:
+        summaries.append({
+            "type": getattr(summary, "type", None),
+            "text": _text_fingerprint(getattr(summary, "text", None)),
+        })
+
+    record = {
+        "ts": time.time(),
+        "event_type": getattr(event, "type", None),
+        "accepted_reasoning": accepted_reasoning,
+        "item": None if item is None else {
+            "type": getattr(item, "type", None),
+            "id": getattr(item, "id", None),
+            "call_id": getattr(item, "call_id", None),
+            "name": getattr(item, "name", None),
+            "summary": summaries,
+        },
+        "item_id": getattr(event, "item_id", None),
+        "delta": _text_fingerprint(getattr(event, "delta", None)),
+        "summary_text": _text_fingerprint(getattr(event, "text", None)),
+        "thoughts": {
+            "before_count": len(thoughts_before),
+            "after_count": len(thoughts_after),
+            "before_lengths": [len(t) for t in thoughts_before],
+            "after_lengths": [len(t) for t in thoughts_after],
+            "pending_chars_before": pending_thought_chars_before,
+            "pending_chars_after": pending_thought_chars_after,
+        },
+    }
+    if usage is not None:
+        record["usage"] = {
+            "input_tokens": getattr(usage, "input_tokens", None),
+            "output_tokens": getattr(usage, "output_tokens", None),
+            "cached_tokens": getattr(input_details, "cached_tokens", None),
+            "reasoning_tokens": getattr(output_details, "reasoning_tokens", None),
+        }
+
+    try:
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+        with trace_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as exc:  # pragma: no cover - diagnostics must not break send
+        logger.warning("Codex Responses trace write failed: %s", exc)
 
 
 def _build_http_timeout(request_timeout: float | None):
@@ -1339,10 +1445,27 @@ class CodexResponsesSession(OpenAIResponsesSession):
             response_id = None
             usage = UsageMetadata()
             seen_reasoning_summary_items: set[str] = set()
+            trace_path = _codex_responses_trace_path()
 
             stream = self._client.responses.create(**kwargs)
             for event in stream:
-                if _handle_responses_reasoning_event(event, acc, seen_reasoning_summary_items):
+                thoughts_before = acc.thoughts
+                pending_thought_chars_before = len("".join(acc._thought_parts))
+                accepted_reasoning = _handle_responses_reasoning_event(
+                    event,
+                    acc,
+                    seen_reasoning_summary_items,
+                )
+                _codex_responses_trace_record(
+                    event=event,
+                    accepted_reasoning=accepted_reasoning,
+                    thoughts_before=thoughts_before,
+                    thoughts_after=acc.thoughts,
+                    pending_thought_chars_before=pending_thought_chars_before,
+                    pending_thought_chars_after=len("".join(acc._thought_parts)),
+                    trace_path=trace_path,
+                )
+                if accepted_reasoning:
                     continue
                 if event.type == "response.output_text.delta":
                     acc.add_text(event.delta)
