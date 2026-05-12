@@ -370,11 +370,17 @@ def test_new_knowledge_and_skills_config_registers_both(tmp_path):
         assert "library" not in agent._tool_handlers
         assert "codex" not in agent._tool_handlers
         assert "new-shared" in (agent._prompt_manager.read_section("skills") or "")
-        result = agent._tool_handlers["knowledge"]({
-            "action": "submit", "title": "New", "summary": "knowledge entry"
-        })
+        # Knowledge is now filesystem-backed and isomorphic to skills: author by
+        # writing knowledge/<name>/KNOWLEDGE.md, then refresh via info.
+        entry_dir = workdir / "knowledge" / "new-entry"
+        entry_dir.mkdir(parents=True)
+        (entry_dir / "KNOWLEDGE.md").write_text(
+            "---\nname: new-entry\ndescription: A freshly authored knowledge entry.\n---\nBody.\n"
+        )
+        result = agent._tool_handlers["knowledge"]({"action": "info"})
         assert result["status"] == "ok"
-        assert "New" in (agent._prompt_manager.read_section("knowledge") or "")
+        assert result["catalog_size"] == 1
+        assert "new-entry" in (agent._prompt_manager.read_section("knowledge") or "")
     finally:
         agent.stop(timeout=1.0)
 

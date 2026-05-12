@@ -1,23 +1,27 @@
 # Knowledge capability contract
 
-`knowledge` is the agent-private durable knowledge capability. It stores bounded,
-curated entries that survive molts and are summarized into the agent's system
-prompt. The implementation lives in `src/lingtai/core/knowledge/`; the code is
-the source of truth.
+`knowledge` is the agent-private durable knowledge capability. It scans the
+agent's local `knowledge/` directory for `KNOWLEDGE.md`-bearing entries and
+injects a compact catalog into the system prompt. The implementation lives in
+`src/lingtai/core/knowledge/`; the code is the source of truth.
 
 ## Routing Card
 
 **Use this when:**
 - You are editing the private durable knowledge capability.
-- You are reviewing tool schema, persistence, prompt-injection, capacity, or rename changes.
-- You need to verify the boundary between private knowledge and portable skills.
+- You are reviewing the catalog scanner, prompt injection, frontmatter schema,
+  or the knowledge/skill boundary.
+- You need to verify that knowledge entries can carry private references
+  (local paths, mail ids, logs) without violating the skills contract.
 
 **Do not use this for:**
-- Skill catalog behavior: read `src/lingtai/core/skills/`.
+- Skill catalog behavior: read `src/lingtai/core/skills/CONTRACT.md` (the
+  structurally isomorphic, physically separate sibling).
 - Code navigation only: read `src/lingtai/core/knowledge/ANATOMY.md`.
-- General procedure authoring: read the `skills-manual` skill.
+- Authoring procedures for sharing across agents: write a skill instead.
 
-**Fast paths:** tool schema -> §Tool surface; storage -> §Persistence; breaking rename -> §Scope; review -> §Verification matrix.
+**Fast paths:** tool schema -> §Tool surface; on-disk layout -> §Storage;
+how it differs from skills -> §Knowledge vs skills.
 
 ## Scope
 
@@ -27,97 +31,119 @@ the source of truth.
 
 This is a breaking rename while the user base is still small. New manifests must
 spell the private durable store as `knowledge`. Old `library`/`codex` capability
-entries are skipped as unknown capabilities; old `library(...)`/`codex(...)` tool
-calls are unavailable.
+entries are skipped as unknown capabilities; old `library(...)`/`codex(...)`
+tool calls are unavailable.
 
 `knowledge` means private durable memory: what one agent has learned, decided,
-and discovered. `skills` means portable procedure catalog. Knowledge entries may
-point to public skills; skills must not depend on private knowledge entry ids,
-agent-local paths, mail ids, or other private memory state.
+and discovered. `skills` means portable procedure catalog. Knowledge entries
+MAY reference public skills; skills MUST NOT depend on private knowledge entry
+contents, agent-local paths, mail ids, or other private memory state.
+
+## Knowledge vs skills
+
+The two capabilities are structurally isomorphic but physically separate:
+
+| Aspect | `skills` | `knowledge` |
+|---|---|---|
+| Root directory | `<agent>/.library/{intrinsic,custom}/` | `<agent>/knowledge/` |
+| Manifest file | `SKILL.md` | `KNOWLEDGE.md` |
+| Tool name | `skills` | `knowledge` |
+| Tool surface | `info` | `info` |
+| Prompt section | protected `skills` (`<available_skills>` XML) | protected `knowledge` (`<knowledge>` XML) |
+| Extra path sources | `manifest.capabilities.skills.paths` | none — strictly per-agent |
+| Visibility | portable / shareable | private / agent-owned |
+| May reference local paths, mail ids, logs | no | yes |
+
+Two separate handlers register two separate tools. The scanner and frontmatter
+parser logic mirror each other but live in their own modules so each can evolve
+independently without leaking private semantics into the public skill catalog.
+
+## Tool surface
+
+The schema requires `action` and accepts exactly one action:
+
+| Action | Required fields | Optional fields | Return on success |
+|---|---|---|---|
+| `info` | — | — | `{status: "ok", knowledge_dir, catalog_size, problems}` |
+
+Unknown actions return `{status: "error", message: ...}` and do not mutate
+state. The previous JSON-database actions (`submit`, `view`, `consolidate`,
+`delete`) are intentionally removed: knowledge is now authored by writing
+`KNOWLEDGE.md` files with the regular `write`/`edit` tools, just like skills.
+There is no in-tool capacity limit; the historical `knowledge_limit` kwarg is
+accepted but ignored.
+
+Only `knowledge(...)` is registered. There is no `library(...)` or `codex(...)`
+alias.
+
+## Storage
+
+The on-disk layout is:
+
+```text
+<agent>/knowledge/
+  <entry-1>/
+    KNOWLEDGE.md
+    scripts/
+    assets/
+    notes/
+  <entry-2>/
+    KNOWLEDGE.md
+    raw-log.json
+  ...
+```
+
+Each entry is a directory whose name is the routing handle. The directory must
+contain a `KNOWLEDGE.md` file with YAML frontmatter:
+
+```markdown
+---
+name: <routing handle>
+description: <one or more sentences; prompt-visible>
+version: <optional>
+---
+
+<body — read on demand via the `read` tool>
+```
+
+Required frontmatter fields are `name` and `description`. Entries missing
+either are skipped and surfaced in `problems`. Folders without a
+`KNOWLEDGE.md` are recursed into so nested namespaces are allowed; folders
+with loose files but no `KNOWLEDGE.md` are reported as corrupted.
+
+Entries may carry supporting files (scripts, assets, notes, raw logs,
+attachments). Those files are not parsed by the capability; the agent opens
+them via the regular `read`/`bash` tools when it loads an entry.
+
+The capability never writes inside `knowledge/`. The agent is the sole
+author. There is no JSON store and no automatic migration from the previous
+`knowledge/knowledge.json` file; that file is ignored.
+
+## Prompt injection
+
+On setup and on every `info` call, the capability rewrites protected prompt
+section `knowledge`:
+
+- If there are entries, the section contains a preamble plus a
+  `<knowledge>` XML block. Each `<entry>` carries `<name>`, `<description>`,
+  and `<location>` (the absolute `KNOWLEDGE.md` path).
+- If there are no entries, the section is cleared.
+
+Only `name`, `description`, and `path` are ever injected. Bodies and supporting
+files stay out of the prompt until the agent loads them through `read`. This
+mirrors the skills catalog and keeps the always-on prompt cheap.
 
 ## Knowledge / skill directionality
 
 Knowledge entries MAY reference skills by public path/name when an agent has
 learned that a skill is useful for a recurring situation.
 
-Skills MUST NOT reference private knowledge entry ids, private agent paths, mail
-ids, or agent-local memory state.
+Skills MUST NOT reference private knowledge entry paths, private agent paths,
+mail ids, or agent-local memory state.
 
 Reason: skills are portable shared procedures; knowledge is agent-local
-accumulated memory. The dependency direction is knowledge -> skill, never skill
--> private knowledge.
-
-## Tool surface
-
-The schema requires `action` and accepts exactly four actions:
-
-| Action | Required fields | Optional fields | Return on success |
-|---|---|---|---|
-| `submit` | `title`, `summary` | `content`, `supplementary` | `{status: "ok", id, entries, max}` |
-| `view` | `ids` | `include_supplementary` | `{status: "ok", entries: [...]}` |
-| `consolidate` | `ids`, `title`, `summary` | `content`, `supplementary` | `{status: "ok", id, removed}` |
-| `delete` | `ids` | — | `{status: "ok", removed}` |
-
-Unknown actions return an error and do not mutate state. Removed historical
-actions such as `filter` and `export` are intentionally rejected.
-
-Only `knowledge(...)` is registered. There is no `library(...)` or `codex(...)`
-alias.
-
-## Persistence
-
-The store path is `<agent>/knowledge/knowledge.json`. File shape:
-
-```json
-{"version": 1, "entries": [ ... ]}
-```
-
-Writes are atomic within `knowledge/`: create a temporary file, write UTF-8 JSON
-with `ensure_ascii=False`, close it, then `os.replace()` it over
-`knowledge.json`. Reads are tolerant: missing/invalid/unreadable JSON means an
-empty store; legacy entries without `title` are backfilled from old `content`.
-
-No automatic storage migration from the old `<agent>/codex/codex.json` path is
-performed in this change.
-
-## Prompt injection
-
-On setup and after every mutating action, the capability rewrites protected
-prompt section `knowledge`:
-
-- If there are entries, the section contains a compact catalog: total count/max
-  count plus one line per entry with `[id] title: summary`, followed by a
-  reminder to call `knowledge(view, ids=[...])`.
-- If there are no entries, the section is cleared.
-
-Only ids, titles, and summaries are always injected. Full `content` and
-`supplementary` stay out of the prompt until loaded through `view`.
-
-## Progressive disclosure
-
-Knowledge is exposed in layers:
-
-1. Prompt catalog: a compact index with `id`, `title`, and `summary` only.
-2. `knowledge(view, ids=[...])`: full `content` for selected entries.
-3. `include_supplementary=true`: backing material only when explicitly needed.
-
-This keeps the always-on prompt small while preserving deep recall on demand.
-The prompt catalog must never include full `content` or `supplementary`; tests
-lock this behavior because leaking deep material into the system prompt defeats
-the progressive-disclosure contract.
-
-## Future direction
-
-This contract describes the current JSON-backed `knowledge` capability. The
-next architecture step is the file-backed, paper-like knowledge v2 design in
-`docs/plans/2026-05-12-knowledge-v2-file-backed.md`. That design is explicitly
-future-facing: it does not change the current tool surface or persistence path
-until implemented by later PRs.
-
-## Capacity configuration
-
-`KnowledgeManager.DEFAULT_MAX_ENTRIES` is `50`. `knowledge_limit=N` overrides the
-default. Old `library_limit` and `codex_limit` kwargs are not accepted.
+accumulated memory. The dependency direction is knowledge -> skill, never
+skill -> private knowledge.
 
 ## Anchored claims
 
@@ -125,19 +151,20 @@ default. Old `library_limit` and `codex_limit` kwargs are not accepted.
 |---|---|---|
 | `knowledge` is the only private durable memory capability in the builtin registry | `src/lingtai/capabilities/__init__.py` | `tests/test_check_caps.py::test_get_all_providers_includes_expected_capabilities` |
 | `knowledge` setup registers only the `knowledge` tool | `src/lingtai/core/knowledge/__init__.py` | `tests/test_knowledge.py::test_knowledge_setup_registers_only_knowledge_tool` |
-| Manager lookup is exact: `knowledge` resolves and former names do not | `src/lingtai/agent.py` | `tests/test_knowledge.py::test_knowledge_manager_accessible_by_exact_name` |
-| Prompt catalog lives in protected `knowledge` section | `src/lingtai/core/knowledge/__init__.py` | `tests/test_knowledge.py::test_knowledge_tool_uses_knowledge_store` |
-| Store path is `knowledge/knowledge.json` | `src/lingtai/core/knowledge/__init__.py` | `tests/test_knowledge.py::test_submit_creates_entry` |
-| `knowledge_limit` controls capacity | `src/lingtai/core/knowledge/__init__.py` | `tests/test_knowledge.py::test_submit_enforces_limit` |
+| Manager-style lookup is exact: `knowledge` resolves and former names do not | `src/lingtai/agent.py` | `tests/test_knowledge.py::test_former_alias_capabilities_do_not_register_knowledge` |
+| Catalog reads `<agent>/knowledge/<name>/KNOWLEDGE.md` and excludes `SKILL.md` entries | `src/lingtai/core/knowledge/__init__.py` | `tests/test_knowledge.py::test_knowledge_md_convention_distinct_from_skill_md` |
+| Prompt catalog includes only `name`/`description`/`path` from frontmatter | `src/lingtai/core/knowledge/__init__.py` | `tests/test_knowledge.py::test_prompt_catalog_only_metadata_not_body` |
+| Entries may carry references, scripts, and assets | filesystem convention | `tests/test_knowledge.py::test_entries_may_have_scripts_and_assets` |
 
 ## Verification matrix
 
 | Invariant | Automated test | Manual check | Risk if broken |
 |---|---|---|---|
-| `knowledge(...)` is the only durable-memory tool | `tests/test_knowledge.py` | Boot with `capabilities={"knowledge": {}}` and inspect tools | Old names linger and confuse the model |
+| `knowledge(...)` is the only private-memory tool | `tests/test_knowledge.py` | Boot with `capabilities={"knowledge": {}}` and inspect tools | Old names linger and confuse the model |
 | Former `library`/`codex` names do not register | alias-removal tests in `tests/test_knowledge.py` / `tests/test_skills.py` | Boot old manifests and inspect capability skip logs | Breaking rename is only half-applied |
-| Skills do not depend on private knowledge | documented invariant; enforce by review | Check shared skill docs for private ids/paths | Shared skills become non-portable |
-| Full content stays out of prompt catalog | `test_view_returns_content` plus prompt inspection | Submit long content, inspect prompt section | Prompt bloat / private detail leakage |
+| Skills do not depend on private knowledge | documented invariant; enforce by review | Check shared skill docs for private paths/ids | Shared skills become non-portable |
+| Knowledge and skills use distinct manifest filenames | `tests/test_knowledge.py::test_knowledge_md_convention_distinct_from_skill_md` | Drop a `SKILL.md` into `<agent>/knowledge/foo/` and confirm it is not picked up | Physical separation collapses; private/public boundary blurs |
+| Body content stays out of prompt catalog | `tests/test_knowledge.py::test_prompt_catalog_only_metadata_not_body` | Author an entry with a long body and inspect the prompt section | Prompt bloat / private detail leakage |
 
 Run before merging knowledge changes:
 

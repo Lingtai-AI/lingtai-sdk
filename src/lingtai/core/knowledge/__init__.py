@@ -1,28 +1,215 @@
 """Knowledge capability — private durable knowledge across molts.
 
-A journal-shaped private knowledge store persisted in knowledge/knowledge.json.
-Each entry's id + title + summary is always visible in the system prompt;
-content and supplementary material load on demand via view().
+Filesystem-backed catalog. Each agent has its own ``<agent>/knowledge/``
+directory; every immediate subdirectory with a ``KNOWLEDGE.md`` file is a
+knowledge entry. The capability is pure presentation: it scans the directory,
+parses each ``KNOWLEDGE.md``'s YAML frontmatter for ``name`` + ``description``,
+and injects a compact ``<knowledge>`` XML catalog into the system prompt's
+``knowledge`` section. Bodies, supporting files, scripts, and assets live next
+to ``KNOWLEDGE.md`` and are loaded on demand through the regular ``read`` tool.
 
-Usage:
-    agent = Agent(capabilities=["knowledge"])
+Knowledge is structurally isomorphic to skills but physically separate:
+
+- Skills live under ``<agent>/.library/{intrinsic,custom}/<name>/SKILL.md`` and
+  are portable / shareable across agents.
+- Knowledge lives under ``<agent>/knowledge/<name>/KNOWLEDGE.md`` and is
+  private, agent-owned, and may reference agent-local paths, mail ids, and
+  logs that skills must not depend on.
+
+Tool surface is a single ``info`` action that returns a runtime health
+snapshot (catalog size, problems). Bodies are read via the ``read`` tool, the
+same way the agent opens a ``SKILL.md``.
+
+Usage: ``Agent(capabilities={"knowledge": {}})`` or via init.json.
 """
 from __future__ import annotations
 
-import hashlib
-import json
-import os
-import tempfile
-from datetime import datetime, timezone
+import logging
+import re
+from pathlib import Path
 from typing import TYPE_CHECKING
+
+import yaml
 
 from ...i18n import t
 
 if TYPE_CHECKING:
     from lingtai_kernel.base_agent import BaseAgent
 
+log = logging.getLogger(__name__)
+
 PROVIDERS = {"providers": [], "default": "builtin"}
 
+
+# ---------------------------------------------------------------------------
+# Frontmatter parser
+# ---------------------------------------------------------------------------
+
+_FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?\n)---\s*\n", re.DOTALL)
+
+
+def _parse_frontmatter(text: str) -> dict[str, str]:
+    m = _FRONTMATTER_RE.match(text)
+    if not m:
+        return {}
+    try:
+        loaded = yaml.safe_load(m.group(1)) or {}
+    except yaml.YAMLError:
+        return {}
+    if not isinstance(loaded, dict):
+        return {}
+    return {str(k): (" ".join(str(v).split()) if v is not None else "") for k, v in loaded.items()}
+
+
+# ---------------------------------------------------------------------------
+# Entry scanner
+# ---------------------------------------------------------------------------
+
+def _parse_entry_file(entry_file: Path, label: str) -> tuple[dict | None, dict | None]:
+    try:
+        text = entry_file.read_text(encoding="utf-8")
+    except OSError as e:
+        return None, {"folder": label, "reason": f"cannot read KNOWLEDGE.md: {e}"}
+
+    fm = _parse_frontmatter(text)
+    name = fm.get("name", "")
+    description = fm.get("description", "")
+    if not name:
+        return None, {"folder": label, "reason": "KNOWLEDGE.md missing required frontmatter field: name"}
+    if not description:
+        return None, {"folder": label, "reason": "KNOWLEDGE.md missing required frontmatter field: description"}
+
+    return {
+        "name": name,
+        "description": description,
+        "version": fm.get("version", ""),
+        "path": str(entry_file),
+    }, None
+
+
+def _scan_recursive(
+    directory: Path,
+    valid: list[dict],
+    problems: list[dict],
+    prefix: str = "",
+) -> None:
+    if not directory.is_dir():
+        return
+
+    try:
+        children = sorted(directory.iterdir())
+    except OSError:
+        return
+
+    for child in children:
+        if not child.is_dir():
+            continue
+        if child.name.startswith("."):
+            continue
+
+        label = f"{prefix}{child.name}" if prefix else child.name
+        entry_file = child / "KNOWLEDGE.md"
+
+        if entry_file.is_file():
+            entry, prob = _parse_entry_file(entry_file, label)
+            if entry:
+                valid.append(entry)
+            if prob:
+                problems.append(prob)
+            continue
+
+        # No KNOWLEDGE.md — classify.
+        try:
+            grandchildren = list(child.iterdir())
+        except OSError:
+            continue
+        has_loose_files = any(
+            not c.is_dir() and not c.name.startswith(".")
+            for c in grandchildren
+        )
+        if has_loose_files:
+            problems.append({
+                "folder": label,
+                "reason": "not a knowledge entry (no KNOWLEDGE.md) and has loose files — corrupted",
+            })
+            continue
+
+        _scan_recursive(child, valid, problems, prefix=f"{label}/")
+
+
+def _scan(directory: Path) -> tuple[list[dict], list[dict]]:
+    valid: list[dict] = []
+    problems: list[dict] = []
+    _scan_recursive(directory, valid, problems)
+    return valid, problems
+
+
+# ---------------------------------------------------------------------------
+# XML catalog builder
+# ---------------------------------------------------------------------------
+
+def _escape_xml(s: str) -> str:
+    return (
+        s.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&apos;")
+    )
+
+
+def _build_catalog_xml(entries: list[dict], lang: str) -> str:
+    if not entries:
+        return ""
+
+    lines = [
+        t(lang, "knowledge.preamble"),
+        "",
+        "<knowledge>",
+    ]
+    for e in entries:
+        lines.append("  <entry>")
+        lines.append(f"    <name>{_escape_xml(e['name'])}</name>")
+        lines.append(f"    <description>{_escape_xml(e['description'])}</description>")
+        lines.append(f"    <location>{_escape_xml(e['path'])}</location>")
+        lines.append("  </entry>")
+    lines.append("</knowledge>")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Core reconciliation (shared by setup and `info`)
+# ---------------------------------------------------------------------------
+
+def _reconcile(agent: "BaseAgent") -> dict:
+    """Scan ``<agent>/knowledge/``, inject catalog, report status.
+
+    Pure presentation: never writes inside ``knowledge/``. The agent is the
+    sole author of its knowledge entries; the capability only renders them.
+    """
+    working_dir = agent._working_dir
+    knowledge_dir = working_dir / "knowledge"
+
+    entries, problems = _scan(knowledge_dir)
+
+    lang = agent._config.language
+    catalog_xml = _build_catalog_xml(entries, lang)
+    if catalog_xml:
+        agent.update_system_prompt("knowledge", catalog_xml, protected=True)
+    else:
+        agent.update_system_prompt("knowledge", "", protected=True)
+
+    return {
+        "status": "ok",
+        "knowledge_dir": str(knowledge_dir),
+        "catalog_size": len(entries),
+        "problems": problems,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tool dispatch
+# ---------------------------------------------------------------------------
 
 def get_description(lang: str = "en") -> str:
     return t(lang, "knowledge.description")
@@ -34,292 +221,40 @@ def get_schema(lang: str = "en") -> dict:
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["submit", "view", "consolidate", "delete"],
-                "description": t(lang, "knowledge.action"),
-            },
-            "title": {
-                "type": "string",
-                "description": t(lang, "knowledge.title"),
-            },
-            "summary": {
-                "type": "string",
-                "description": t(lang, "knowledge.summary"),
-            },
-            "content": {
-                "type": "string",
-                "description": t(lang, "knowledge.content"),
-            },
-            "supplementary": {
-                "type": "string",
-                "description": t(lang, "knowledge.supplementary"),
-            },
-            "ids": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": t(lang, "knowledge.ids"),
-            },
-            "include_supplementary": {
-                "type": "boolean",
-                "description": t(lang, "knowledge.include_supplementary"),
+                "enum": ["info"],
+                "description": t(lang, "knowledge.action_info"),
             },
         },
         "required": ["action"],
     }
 
 
+def setup(agent: "BaseAgent", **_ignored) -> None:
+    """Set up the knowledge capability.
 
-class KnowledgeManager:
-    """Durable long-term knowledge — submit, view, consolidate, delete."""
+    Scans ``<agent>/knowledge/`` for ``<name>/KNOWLEDGE.md`` entries and
+    injects the catalog into the system prompt. Registers a single ``info``
+    action that re-scans and returns a runtime health snapshot.
 
-    DEFAULT_MAX_ENTRIES = 50
-
-    def __init__(
-        self,
-        agent: "BaseAgent",
-        *,
-        knowledge_limit: int | None = None,
-    ):
-        self._agent = agent
-        self._working_dir = agent._working_dir
-        self._max_entries = (
-            knowledge_limit if knowledge_limit is not None else self.DEFAULT_MAX_ENTRIES
-        )
-
-        self._knowledge_json = self._working_dir / "knowledge" / "knowledge.json"
-        self._entries: list[dict] = self._load_entries()
-
-    # ------------------------------------------------------------------
-    # System prompt catalog
-    # ------------------------------------------------------------------
-
-    def _inject_catalog(self) -> None:
-        """Inject knowledge entry index (id + title + summary) into system prompt."""
-        if not self._entries:
-            self._agent.update_system_prompt("knowledge", "", protected=True)
-            return
-
-        lines = [
-            f"Your knowledge has {len(self._entries)}/{self._max_entries} entries:",
-            "",
-        ]
-        for e in self._entries:
-            lines.append(f"- [{e['id']}] {e['title']}: {e['summary']}")
-        lines.append("")
-        lines.append(
-            "This is a compact index only. "
-            "Use knowledge(view, ids=[...]) to disclose full content "
-            "for selected entries. Pass include_supplementary=true only "
-            "when you need backing material."
-        )
-
-        self._agent.update_system_prompt("knowledge", "\n".join(lines), protected=True)
-
-    # ------------------------------------------------------------------
-    # Persistence
-    # ------------------------------------------------------------------
-
-    def _load_entries(self) -> list[dict]:
-        if not self._knowledge_json.is_file():
-            return []
-        try:
-            data = json.loads(self._knowledge_json.read_text())
-            entries = data.get("entries", [])
-            for e in entries:
-                if "title" not in e:
-                    e["title"] = e.get("content", "")[:50] or "Untitled"
-                    e["summary"] = e.get("content", "")[:200]
-                    e["supplementary"] = ""
-            return entries
-        except (json.JSONDecodeError, OSError):
-            return []
-
-    def _save_entries(self) -> None:
-        data = {"version": 1, "entries": self._entries}
-        self._knowledge_json.parent.mkdir(exist_ok=True)
-        fd, tmp = tempfile.mkstemp(
-            dir=str(self._knowledge_json.parent), suffix=".tmp",
-        )
-        try:
-            os.write(fd, json.dumps(data, indent=2, ensure_ascii=False).encode())
-            os.close(fd)
-            os.replace(tmp, str(self._knowledge_json))
-        except Exception:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-            if os.path.exists(tmp):
-                os.unlink(tmp)
-            raise
-
-    @staticmethod
-    def _make_id(content: str, created_at: str) -> str:
-        return hashlib.sha256(
-            (content + created_at).encode()
-        ).hexdigest()[:8]
-
-    # ------------------------------------------------------------------
-    # Dispatch
-    # ------------------------------------------------------------------
-
-    _VALID_ACTIONS = {"submit", "view", "consolidate", "delete"}
-
-    def handle(self, args: dict) -> dict:
-        action = args.get("action", "")
-        if action not in self._VALID_ACTIONS:
-            return {
-                "error": f"Unknown action: {action!r}. "
-                f"Valid: {', '.join(sorted(self._VALID_ACTIONS))}.",
-            }
-        method = getattr(self, f"_{action}")
-        return method(args)
-
-    # ------------------------------------------------------------------
-    # Actions
-    # ------------------------------------------------------------------
-
-    def _submit(self, args: dict) -> dict:
-        title = args.get("title", "").strip()
-        summary = args.get("summary", "").strip()
-        content = args.get("content", "").strip()
-        supplementary = args.get("supplementary", "").strip()
-        if not title:
-            return {"error": "title is required for submit."}
-        if not summary:
-            return {"error": "summary is required for submit."}
-        if len(self._entries) >= self._max_entries:
-            return {
-                "error": f"Knowledge is full ({self._max_entries} entries). "
-                "Consolidate related entries first, "
-                "delete obsolete ones, or use supplementary "
-                "to pack more detail into existing entries.",
-                "entries": len(self._entries),
-                "max": self._max_entries,
-            }
-        now = datetime.now(timezone.utc).isoformat()
-        # Seed for id: title + (content or summary) — preserves uniqueness
-        # when content is omitted.
-        entry_id = self._make_id(title + (content or summary), now)
-        self._entries.append({
-            "id": entry_id,
-            "title": title,
-            "summary": summary,
-            "content": content,
-            "supplementary": supplementary,
-            "created_at": now,
-        })
-        self._save_entries()
-        self._inject_catalog()
-        return {
-            "status": "ok",
-            "id": entry_id,
-            "entries": len(self._entries),
-            "max": self._max_entries,
-        }
-
-    def _view(self, args: dict) -> dict:
-        ids = args.get("ids")
-        if not ids:
-            return {"error": "ids is required for view."}
-        include_supp = bool(args.get("include_supplementary", False))
-
-        entries_by_id = {e["id"]: e for e in self._entries}
-        invalid = [i for i in ids if i not in entries_by_id]
-        if invalid:
-            return {"error": f"Unknown knowledge IDs: {', '.join(invalid)}"}
-
-        result_entries = []
-        for entry_id in ids:
-            e = entries_by_id[entry_id]
-            item = {
-                "id": e["id"],
-                "title": e["title"],
-                "summary": e["summary"],
-                "content": e.get("content", ""),
-            }
-            if include_supp:
-                item["supplementary"] = e.get("supplementary", "")
-            result_entries.append(item)
-
-        return {"status": "ok", "entries": result_entries}
-
-    def _consolidate(self, args: dict) -> dict:
-        ids = args.get("ids")
-        title = args.get("title", "").strip()
-        summary = args.get("summary", "").strip()
-        content = args.get("content", "").strip()
-        supplementary = args.get("supplementary", "").strip()
-        if not ids:
-            return {"error": "ids is required for consolidate."}
-        if not title:
-            return {"error": "title is required for consolidate."}
-        if not summary:
-            return {"error": "summary is required for consolidate."}
-
-        existing_ids = {e["id"] for e in self._entries}
-        invalid = [i for i in ids if i not in existing_ids]
-        if invalid:
-            return {"error": f"Unknown knowledge IDs: {', '.join(invalid)}"}
-
-        ids_set = set(ids)
-        self._entries = [e for e in self._entries if e["id"] not in ids_set]
-
-        now = datetime.now(timezone.utc).isoformat()
-        new_id = self._make_id(title + (content or summary), now)
-        self._entries.append({
-            "id": new_id,
-            "title": title,
-            "summary": summary,
-            "content": content,
-            "supplementary": supplementary,
-            "created_at": now,
-        })
-
-        self._save_entries()
-        self._inject_catalog()
-        return {"status": "ok", "id": new_id, "removed": len(ids)}
-
-    def _delete(self, args: dict) -> dict:
-        ids = args.get("ids")
-        if not ids:
-            return {"error": "ids is required for delete."}
-
-        existing_ids = {e["id"] for e in self._entries}
-        invalid = [i for i in ids if i not in existing_ids]
-        if invalid:
-            return {"error": f"Unknown knowledge IDs: {', '.join(invalid)}"}
-
-        ids_set = set(ids)
-        before = len(self._entries)
-        self._entries = [e for e in self._entries if e["id"] not in ids_set]
-        removed = before - len(self._entries)
-
-        self._save_entries()
-        self._inject_catalog()
-        return {"status": "ok", "removed": removed}
-
-
-def setup(
-    agent: "BaseAgent",
-    *,
-    knowledge_limit: int | None = None,
-) -> KnowledgeManager:
-    """Set up the knowledge capability — private durable knowledge."""
+    Unknown kwargs (e.g. the historical ``knowledge_limit``) are accepted and
+    ignored — the file-backed catalog has no fixed-size limit.
+    """
     lang = agent._config.language
 
-    mgr = KnowledgeManager(
-        agent,
-        knowledge_limit=knowledge_limit,
-    )
+    _reconcile(agent)
+
+    def handle_knowledge(args: dict) -> dict:
+        action = args.get("action", "")
+        if action == "info":
+            return _reconcile(agent)
+        return {
+            "status": "error",
+            "message": f"unknown action: {action!r}, only 'info' is supported",
+        }
 
     agent.add_tool(
         "knowledge",
         schema=get_schema(lang),
-        handler=mgr.handle,
+        handler=handle_knowledge,
         description=get_description(lang),
     )
-    # Inject knowledge catalog into system prompt at boot.
-    mgr._inject_catalog()
-
-    return mgr
-

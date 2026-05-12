@@ -1,40 +1,55 @@
 # core/knowledge
 
-Knowledge capability — private durable knowledge across molts. Entry id + title
-+ summary are injected into the `knowledge` prompt section; full content and
-supplementary material load on demand through `knowledge(view, ids=[...])`.
+Knowledge capability — private durable knowledge across molts. The catalog is
+filesystem-backed: each immediate subdirectory of `<agent>/knowledge/` with a
+`KNOWLEDGE.md` file is one entry. The frontmatter `name` + `description` are
+injected as a compact `<knowledge>` XML catalog in the system prompt's
+`knowledge` section. Bodies and supporting files are loaded on demand through
+the regular `read` tool.
 
 ## Components
 
-- `knowledge/__init__.py` — the capability implementation. `get_description`,
-  `get_schema`, `KnowledgeManager`, and `setup` live here.
-- `knowledge/CONTRACT.md` — public behavior contract for the implementation,
-  including the breaking rename, knowledge/skill directionality, persistence,
-  prompt behavior, anchored claims, and verification matrix.
+- `knowledge/__init__.py` — the capability implementation. `_parse_frontmatter`,
+  `_scan`, `_build_catalog_xml`, `_reconcile`, `get_description`, `get_schema`,
+  and `setup` live here.
+- `knowledge/CONTRACT.md` — public behavior contract: tool surface, on-disk
+  layout, prompt injection, knowledge/skill directionality, anchored claims,
+  and verification matrix.
 
 ## Connections
 
 - `lingtai.capabilities` maps builtin capability name `knowledge` here. Former
   `library` and `codex` capability names are not registered.
-- `setup()` registers exactly one tool, `knowledge`, on the manager handler.
-- `_inject_catalog()` writes protected prompt section `knowledge`.
-- `skills/` is a sibling capability and remains the portable procedure catalog;
-  knowledge may reference public skills, but skills must not reference private
-  knowledge entries or agent-local memory.
+- `setup()` registers exactly one tool, `knowledge`, with a single `info`
+  action. The historical `knowledge_limit` kwarg is accepted and ignored.
+- `_reconcile()` writes protected prompt section `knowledge`.
+- `skills/` is the structurally isomorphic, physically separate sibling
+  capability — it owns `<agent>/.library/{intrinsic,custom}/<name>/SKILL.md`,
+  knowledge owns `<agent>/knowledge/<name>/KNOWLEDGE.md`. Two separate
+  modules, two separate tools, two separate prompt sections.
 
 ## State
 
-- Store path: `<agent>/knowledge/knowledge.json`.
-- File shape: `{"version": 1, "entries": [...]}`.
-- Prompt state: `knowledge` section contains the compact catalog.
-- Capacity: `DEFAULT_MAX_ENTRIES = 50`; override with `knowledge_limit`.
+- Root path: `<agent>/knowledge/`.
+- Entry layout: `<agent>/knowledge/<name>/KNOWLEDGE.md` plus arbitrary
+  supporting files (scripts, assets, notes, raw logs).
+- Required frontmatter: `name`, `description`. Optional: `version`.
+- Prompt state: protected `knowledge` section holds the preamble + `<knowledge>`
+  XML block.
+- No JSON store, no per-entry size cap, no automatic migration from the
+  previous `knowledge/knowledge.json` layout.
 
 ## Invariants
 
-- `knowledge` is private, agent-owned memory. It is not the public skill catalog.
+- `knowledge` is private, agent-owned memory. It is not the public skill
+  catalog.
 - `library` and `codex` are gone as durable-memory aliases. This is a breaking
   rename by design.
-- Full `content` and `supplementary` are never injected into the prompt catalog;
-  callers must use `view` for depth.
+- The catalog injects only `name`/`description`/`path`. Bodies and supporting
+  files never appear in the prompt; the agent loads them via `read`.
+- The capability never writes inside `<agent>/knowledge/`. The agent is the
+  sole author.
+- `SKILL.md` belongs to skills; `KNOWLEDGE.md` belongs to knowledge. The two
+  filenames are not aliases.
 - For the stable behavior contract, read `src/lingtai/core/knowledge/CONTRACT.md`
   before editing this capability.
