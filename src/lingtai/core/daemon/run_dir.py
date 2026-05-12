@@ -28,7 +28,8 @@ class DaemonRunDir:
             .heartbeat                   # mtime-touched on activity
             history/chat_history.jsonl   # session transcript
             logs/token_ledger.jsonl      # per-call tokens, daemon-scoped
-            logs/events.jsonl            # tool_call, tool_result, daemon_*
+            logs/events.jsonl            # tool_call, tool_result, cli_output, daemon_*
+            result.txt                 # full terminal result when available
     """
 
     def __init__(
@@ -91,6 +92,9 @@ class DaemonRunDir:
             "tool_call_count": 0,
             "tokens": {"input": 0, "output": 0, "thinking": 0, "cached": 0},
             "result_preview": None,
+            "result_path": None,
+            "last_output": None,
+            "last_output_at": None,
             "error": None,
             "preset_name": preset_name,
             "preset_provider": preset_provider,
@@ -144,6 +148,10 @@ class DaemonRunDir:
     @property
     def token_ledger_path(self) -> Path:
         return self._path / "logs" / "token_ledger.jsonl"
+
+    @property
+    def result_path(self) -> Path:
+        return self._path / "result.txt"
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -294,6 +302,57 @@ class DaemonRunDir:
             )
         self._safe("clear_current_tool", _write)
 
+
+    # ------------------------------------------------------------------
+    # External CLI backend hooks
+    # ------------------------------------------------------------------
+
+    _CLI_OUTPUT_EVENT_MAX = 4000
+    _LAST_OUTPUT_MAX = 1000
+
+    def record_cli_output(self, text: str, *, stream: str = "stdout") -> None:
+        """Record one stdout/stderr progress line from an external CLI backend.
+
+        CLI backends (Claude Code / Codex) do not run through the LingTai
+        ChatSession tool loop, so ``turn`` and ``current_tool`` stay mostly
+        static while the child process works.  This hook makes their progress
+        visible to ``daemon(check)`` by appending bounded ``cli_output`` events,
+        updating a small ``last_output`` field in daemon.json, and touching the
+        heartbeat.  The final full output is still captured by ``mark_done``.
+        """
+        text = text.rstrip("\n")
+        if not text:
+            return
+        if stream not in ("stdout", "stderr", "combined"):
+            stream = "stdout"
+        event_text = text
+        truncated = False
+        if len(event_text) > self._CLI_OUTPUT_EVENT_MAX:
+            event_text = event_text[:self._CLI_OUTPUT_EVENT_MAX] + "...[truncated]"
+            truncated = True
+        last_output = text
+        if len(last_output) > self._LAST_OUTPUT_MAX:
+            last_output = last_output[-self._LAST_OUTPUT_MAX:]
+
+        def _write():
+            ts = self._now_iso()
+            self._state["elapsed_s"] = self._now_secs()
+            self._state["last_output"] = last_output
+            self._state["last_output_at"] = ts
+            self._atomic_write_json(self.daemon_json_path, self._state)
+            entry = {
+                "event": "cli_output",
+                "stream": stream,
+                "text": event_text,
+                "elapsed_s": self._state["elapsed_s"],
+                "ts": ts,
+            }
+            if truncated:
+                entry["truncated"] = True
+            self._append_jsonl(self.events_path, entry)
+            self.heartbeat_path.touch()
+        self._safe("record_cli_output", _write)
+
     # ------------------------------------------------------------------
     # Token accounting — dual ledger writes
     # ------------------------------------------------------------------
@@ -369,25 +428,52 @@ class DaemonRunDir:
     _RESULT_PREVIEW_MAX = 200
 
     def mark_done(self, text: str) -> None:
-        """Normal completion. Sets state=done, finished_at, result_preview."""
+        """Normal completion. Sets state=done, finished_at, result_preview.
+
+        The complete terminal text is written to ``result.txt`` for deliberate
+        inspection; daemon.json keeps only a bounded preview so list/check stay
+        compact.  A failure to write result.txt must not prevent the terminal
+        state transition.
+        """
+        text = text or ""
+
         def _write():
+            result_path = None
+            try:
+                self.result_path.write_text(text, encoding="utf-8")
+                result_path = str(self.result_path)
+            except OSError as e:
+                if self._log_callback is not None:
+                    try:
+                        self._log_callback(
+                            "daemon_fs_error",
+                            em_id=self._handle,
+                            run_id=self._run_id,
+                            op="mark_done.result",
+                            error=str(e),
+                        )
+                    except Exception:
+                        pass
             self._state["state"] = "done"
             self._state["finished_at"] = self._now_iso()
             self._state["elapsed_s"] = self._now_secs()
             self._state["current_tool"] = None
-            preview = text or ""
+            preview = text
             if len(preview) > self._RESULT_PREVIEW_MAX:
                 preview = preview[:self._RESULT_PREVIEW_MAX]
             self._state["result_preview"] = preview
+            self._state["result_path"] = result_path
             self._atomic_write_json(self.daemon_json_path, self._state)
             self._append_jsonl(
                 self.events_path,
                 {
                     "event": "daemon_done",
                     "elapsed_s": self._state["elapsed_s"],
+                    "result_path": result_path,
                     "ts": self._now_iso(),
                 },
             )
+            self.heartbeat_path.touch()
         self._safe("mark_done", _write)
 
     def mark_failed(self, exc: BaseException) -> None:

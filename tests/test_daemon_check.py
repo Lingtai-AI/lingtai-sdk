@@ -1,5 +1,4 @@
 """Tests for daemon(action='check') — read-only event-tail surface."""
-import json
 import threading
 from unittest.mock import MagicMock
 
@@ -147,9 +146,49 @@ def test_check_includes_terminal_event_for_done_emanation(tmp_path):
 
     out = mgr.handle({"action": "check", "id": "em-5"})
     assert out["state"] == "done"
+    assert out["backend"] == "lingtai"
+    assert out["path"] == str(rd.path)
+    assert out["finished_at"] is not None
+    assert out["result_preview"] == "final report text"
+    assert out["result_path"] == str(rd.result_path)
+    assert out["error"] is None
     event_types = {e.get("event") for e in out["events"]}
     assert "daemon_done" in event_types
 
+
+
+def test_check_includes_cli_progress_fields(tmp_path):
+    agent = _make_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    rd = _make_run_dir(agent, "em-cli")
+    rd._state["backend"] = "codex"
+    rd._atomic_write_json(rd.daemon_json_path, rd._state)
+    _register(mgr, "em-cli", rd)
+
+    rd.record_cli_output("phase 1 complete", stream="combined")
+
+    out = mgr.handle({"action": "check", "id": "em-cli"})
+    assert out["backend"] == "codex"
+    assert out["last_output"] == "phase 1 complete"
+    assert out["last_output_at"] is not None
+    cli_events = [e for e in out["events"] if e.get("event") == "cli_output"]
+    assert cli_events
+    assert cli_events[-1]["text"] == "phase 1 complete"
+
+
+def test_check_includes_failure_error(tmp_path):
+    agent = _make_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    rd = _make_run_dir(agent, "em-fail")
+    _register(mgr, "em-fail", rd, future=MagicMock(done=MagicMock(return_value=True)))
+
+    rd.mark_failed(RuntimeError("boom"))
+
+    out = mgr.handle({"action": "check", "id": "em-fail"})
+    assert out["state"] == "failed"
+    assert out["error"]["type"] == "RuntimeError"
+    assert out["error"]["message"] == "boom"
+    assert out["finished_at"] is not None
 
 def test_check_default_last_is_20(tmp_path):
     agent = _make_agent(tmp_path)

@@ -248,6 +248,42 @@ def test_multiple_tool_dispatches_increment_count(tmp_path):
     assert data["tool_call_count"] == 2
 
 
+
+def test_record_cli_output_updates_state_and_event(tmp_path):
+    rd = _make_run_dir(tmp_path, backend="codex")
+    initial_mtime = rd.heartbeat_path.stat().st_mtime
+    time.sleep(0.05)
+
+    rd.record_cli_output("working on step 1", stream="combined")
+
+    data = json.loads(rd.daemon_json_path.read_text())
+    assert data["last_output"] == "working on step 1"
+    assert data["last_output_at"] is not None
+    assert data["elapsed_s"] >= 0.0
+    assert rd.heartbeat_path.stat().st_mtime > initial_mtime
+
+    last = json.loads(rd.events_path.read_text().splitlines()[-1])
+    assert last["event"] == "cli_output"
+    assert last["stream"] == "combined"
+    assert last["text"] == "working on step 1"
+    assert "elapsed_s" in last
+
+
+def test_record_cli_output_bounds_large_event_and_last_output(tmp_path):
+    rd = _make_run_dir(tmp_path)
+    big = "x" * 5000
+
+    rd.record_cli_output(big, stream="stderr")
+
+    data = json.loads(rd.daemon_json_path.read_text())
+    assert len(data["last_output"]) == rd._LAST_OUTPUT_MAX
+
+    last = json.loads(rd.events_path.read_text().splitlines()[-1])
+    assert last["event"] == "cli_output"
+    assert last["stream"] == "stderr"
+    assert last["truncated"] is True
+    assert len(last["text"]) <= rd._CLI_OUTPUT_EVENT_MAX + len("...[truncated]")
+
 def test_append_tokens_writes_daemon_ledger(tmp_path):
     rd = _make_run_dir(tmp_path)
     rd.append_tokens(input=100, output=20, thinking=5, cached=10)
@@ -316,6 +352,8 @@ def test_mark_done_writes_terminal_state(tmp_path):
     assert data["state"] == "done"
     assert data["finished_at"] is not None
     assert data["result_preview"] == "Task done. Found 3 TODOs."
+    assert data["result_path"] == str(rd.result_path)
+    assert rd.result_path.read_text() == "Task done. Found 3 TODOs."
     assert data["error"] is None
 
 
@@ -325,6 +363,7 @@ def test_mark_done_truncates_result_preview(tmp_path):
     rd.mark_done(long_text)
     data = json.loads(rd.daemon_json_path.read_text())
     assert len(data["result_preview"]) <= 200
+    assert rd.result_path.read_text() == long_text
 
 
 def test_mark_done_logs_event(tmp_path):
@@ -333,6 +372,7 @@ def test_mark_done_logs_event(tmp_path):
     lines = rd.events_path.read_text().splitlines()
     last = json.loads(lines[-1])
     assert last["event"] == "daemon_done"
+    assert last["result_path"] == str(rd.result_path)
     assert "elapsed_s" in last
 
 
