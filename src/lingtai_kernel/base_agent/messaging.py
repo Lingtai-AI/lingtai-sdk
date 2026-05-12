@@ -3,9 +3,7 @@ from __future__ import annotations
 
 import time
 
-from ..message import _make_message, MSG_REQUEST, MSG_TC_WAKE
-from ..i18n import t as _t
-from ..time_veil import veil
+from ..message import _make_message, MSG_REQUEST
 
 
 def _on_mail_received(agent, payload: dict) -> None:

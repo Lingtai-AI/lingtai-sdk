@@ -4,7 +4,7 @@ Covers the design's invariants and the patch's §13 test matrix:
 
 - §13.1 — fingerprint + collection primitives, atomicity, concurrency
 - §13.2 — IDLE-state pair injection / strip / no-op
-- §13.3 — ACTIVE-state meta on most recent str ToolResultBlock
+- §13.3 — ACTIVE-state deferral without ToolResultBlock mutation
 - §13.4 — ASLEEP-state wake on fingerprint change
 - §13.5 — voluntary `system(action="notification")` returns the dict
 - §13.6 — producer migrations: email, soul, system
@@ -814,12 +814,26 @@ def test_sync_no_change_is_noop(tmp_path: Path) -> None:
     assert len(agent._chat_stub.interface.entries) == n_entries_before
 
 
-def test_sync_active_stashes_meta(tmp_path: Path) -> None:
-    """ACTIVE state: fingerprint change → `_pending_notification_meta` set."""
+def test_sync_active_defers_without_committing_or_mutating_tool_result(tmp_path: Path) -> None:
+    """ACTIVE state: fingerprint change is noticed but not delivered yet.
+
+    The old behavior prepended ``notifications:\n...`` onto the most recent
+    unrelated ToolResultBlock.  ACTIVE sync now leaves the wire byte-for-byte
+    unchanged and keeps the fingerprint uncommitted so the next IDLE boundary
+    retries via a distinct synthetic notification pair.
+    """
     from lingtai_kernel.base_agent import BaseAgent
     from lingtai_kernel.state import AgentState
+    from lingtai_kernel.llm.interface import ToolCallBlock, ToolResultBlock
 
     chat = _make_chat_stub()
+    iface = chat.interface
+    iface.add_assistant_message(content=[ToolCallBlock(id="c1", name="daemon", args={})])
+    iface.add_tool_results([
+        ToolResultBlock(id="c1", name="daemon", content='{"status":"dispatched"}')
+    ])
+    original_content = iface.entries[1].content[0].content
+    original_entry_count = len(iface.entries)
 
     class _Agent(BaseAgent):
         def __init__(self, workdir):
@@ -827,7 +841,6 @@ def test_sync_active_stashes_meta(tmp_path: Path) -> None:
             self._state = AgentState.ACTIVE
             self._notification_fp = ()
             self._notification_block_id = None
-            self._pending_notification_meta = None
             self._chat_stub = chat
             self._logs = []
             self.agent_name = "stub"
@@ -854,15 +867,19 @@ def test_sync_active_stashes_meta(tmp_path: Path) -> None:
             pass
 
     agent = _Agent(tmp_path)
-    publish(tmp_path, "email", {"count": 1, "data": {"count": 1}})
+    publish(tmp_path, "system", {"data": {"events": [{"source": "daemon"}]}})
+    fp = notification_fingerprint(tmp_path)
+
     agent._sync_notifications()
 
-    assert agent._pending_notification_meta is not None
-    body = json.loads(agent._pending_notification_meta)
-    assert body["_synthesized"] is True
-    assert "email" in body["notifications"]
-    # No wire mutation yet — the meta will be applied at request-send time.
-    assert len(agent._chat_stub.interface.entries) == 0
+    assert agent._notification_fp == ()  # not committed while ACTIVE
+    assert agent._notification_fp != fp
+    assert agent._notification_block_id is None
+    assert agent.inbox.empty()
+    assert len(iface.entries) == original_entry_count
+    assert iface.entries[1].content[0].content == original_content
+    assert not iface.entries[1].content[0].content.startswith("notifications:\n")
+    assert any(evt == "notification_deferred_active" for evt, _ in agent._logs)
 
 
 def test_sync_empty_state_clears_pending_meta(tmp_path: Path) -> None:
@@ -916,150 +933,130 @@ def test_sync_empty_state_clears_pending_meta(tmp_path: Path) -> None:
     assert agent._pending_notification_fp is None
 
 
-def test_inject_notification_meta_prefers_most_recent_block(tmp_path: Path) -> None:
-    """Most recent ToolResultBlock has dict content — meta is injected
-    there (dict serialized to JSON string), not on the older str block."""
+def test_session_manager_has_no_notification_inject_hook() -> None:
+    """The retired ACTIVE meta-prefix hook is no longer part of SessionManager.
+
+    Regression guard for #82: notification delivery must not mutate arbitrary
+    ToolResultBlock content at ``SessionManager.send()`` time.
+    """
+    import inspect
+    from lingtai_kernel.session import SessionManager
+
+    params = inspect.signature(SessionManager.__init__).parameters
+    assert "notification_inject_fn" not in params
+    assert not hasattr(SessionManager.__new__(SessionManager), "_notification_inject_fn")
+
+
+def test_base_agent_no_longer_exposes_meta_prefix_injector() -> None:
+    """BaseAgent no longer carries the mutating _inject_notification_meta path."""
     from lingtai_kernel.base_agent import BaseAgent
-    from lingtai_kernel.llm.interface import ToolCallBlock, ToolResultBlock
+
+    assert not hasattr(BaseAgent, "_inject_notification_meta")
+
+
+def test_end_of_turn_idle_sync_delivers_deferred_notification(tmp_path: Path) -> None:
+    """End-of-turn sync runs after IDLE transition and delivers a pair+wake.
+
+    This exercises the #83 ordering: a notification produced during ACTIVE work
+    must not be stranded in ACTIVE deferral.  At the post-turn IDLE boundary it
+    becomes a distinct synthetic notification pair and a MSG_TC_WAKE.
+    """
+    import queue
+    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai_kernel.base_agent import turn as turn_mod
+    from lingtai_kernel.message import _make_message, MSG_REQUEST, MSG_TC_WAKE
+    from lingtai_kernel.state import AgentState
+    from lingtai_kernel.llm.interface import ToolResultBlock
+
+    class _SessionStub:
+        def __init__(self, chat):
+            self.chat = chat
+            self._compaction_warnings = 0
+
+        def get_context_pressure(self):
+            return 0.0
+
+    class _ConfigStub:
+        language = "en"
+        molt_pressure = 0.9
+        molt_hard_ceiling = 0.95
+        molt_warnings = 3
+        molt_prompt = ""
+        insights_interval = 0
+        max_aed_attempts = 1
 
     chat = _make_chat_stub()
-    iface = chat.interface
-
-    # First pair: string content (older).
-    iface.add_assistant_message(content=[ToolCallBlock(id="c1", name="bash", args={})])
-    iface.add_tool_results([ToolResultBlock(id="c1", name="bash", content="hello world")])
-    # Second pair: dict content (newer — should receive the notification).
-    iface.add_assistant_message(content=[ToolCallBlock(id="c2", name="mcp", args={})])
-    iface.add_tool_results([ToolResultBlock(id="c2", name="mcp", content={"structured": True})])
+    states: list[AgentState] = []
 
     class _Agent(BaseAgent):
-        def __init__(self):
+        def __init__(self, workdir):
+            self._working_dir = workdir
+            self._state = AgentState.ACTIVE
+            self._notification_fp = ()
+            self._notification_block_id = None
+            self._notification_inject_seq = 0
             self._chat_stub = chat
-            self._pending_notification_meta = '{"_synthesized": true, "notifications": {"email": {}}}'
-            self._pending_notification_fp = None
+            self._session = _SessionStub(chat)
             self._logs = []
+            self.agent_name = "stub"
+            self.inbox = queue.Queue()
+            self._asleep = threading.Event()
+            self._cancel_event = threading.Event()
+            self._shutdown = threading.Event()
+            self._config = _ConfigStub()
 
         @property
         def _chat(self):
             return self._chat_stub
 
-        def _log(self, evt, **fields):
-            self._logs.append((evt, fields))
+        def _set_state(self, new_state, reason=""):
+            self._state = new_state
+            states.append(new_state)
 
-    agent = _Agent()
-    agent._inject_notification_meta(message=None)
-
-    # Older str-content block is untouched.
-    str_block = iface.entries[1].content[0]
-    assert str_block.content == "hello world"
-
-    # Newer dict-content block was serialized and now carries the prefix.
-    dict_block = iface.entries[3].content[0]
-    assert isinstance(dict_block.content, str)
-    assert dict_block.content.startswith("notifications:\n")
-    assert '"structured": true' in dict_block.content
-
-    # Pending meta cleared.
-    assert agent._pending_notification_meta is None
-
-
-def test_inject_notification_meta_dict_only(tmp_path: Path) -> None:
-    """When ALL ToolResultBlocks have dict content, the notification is
-    still injected (dict serialized to JSON string) instead of being
-    deferred indefinitely.  Regression test for 79% deferral rate bug."""
-    from lingtai_kernel.base_agent import BaseAgent
-    from lingtai_kernel.llm.interface import ToolCallBlock, ToolResultBlock
-
-    chat = _make_chat_stub()
-    iface = chat.interface
-
-    # Only dict-content blocks — the old code would defer here.
-    iface.add_assistant_message(content=[ToolCallBlock(id="c1", name="psyche", args={})])
-    iface.add_tool_results([ToolResultBlock(id="c1", name="psyche", content={"status": "ok", "identity": "test"})])
-    iface.add_assistant_message(content=[ToolCallBlock(id="c2", name="soul", args={})])
-    iface.add_tool_results([ToolResultBlock(id="c2", name="soul", content={"voices": []})])
-
-    class _Agent(BaseAgent):
-        def __init__(self):
-            self._chat_stub = chat
-            self._pending_notification_meta = '{"_synthesized": true, "notifications": {"molt": {"pressure": 0.9}}}'
-            self._pending_notification_fp = None
-            self._logs = []
-
-        @property
-        def _chat(self):
-            return self._chat_stub
+        def _save_chat_history(self, *, ledger_source="main"):
+            pass
 
         def _log(self, evt, **fields):
             self._logs.append((evt, fields))
 
-    agent = _Agent()
-    agent._inject_notification_meta(message=None)
+        def _wake_nap(self, *_a, **_kw):
+            pass
 
-    # Most recent block (soul) should carry the notification prefix.
-    target = iface.entries[3].content[0]
-    assert isinstance(target.content, str)
-    assert target.content.startswith("notifications:\n")
-    assert '"voices": []' in target.content
-    assert "molt" in target.content
+        def _reset_uptime(self):
+            pass
 
-    # Older dict block untouched (already serialized would only happen
-    # if it had been a previous target — it wasn't, so still dict).
-    older = iface.entries[1].content[0]
-    assert older.content == {"status": "ok", "identity": "test"}
+    agent = _Agent(tmp_path)
+    agent.inbox.put(_make_message(MSG_REQUEST, "tester", "do work"))
 
-    # Pending meta cleared — not deferred.
-    assert agent._pending_notification_meta is None
-    # Logged as injected, not deferred.
-    events = [e for e, _ in agent._logs]
-    assert "notification_meta_injected" in events
-    assert "notification_meta_deferred" not in events
+    # Stop the run loop after the post-turn sweep has a chance to execute.
+    # Patch the module-level dispatcher because _run_loop calls it directly.
+    def fake_handle_message(_agent, _msg):
+        publish(_agent._working_dir, "system", {"data": {"events": [{"source": "daemon"}]}})
+        _agent._shutdown.set()
 
+    orig_handle = turn_mod._handle_message
+    try:
+        turn_mod._handle_message = fake_handle_message
+        turn_mod._run_loop(agent)
+    finally:
+        turn_mod._handle_message = orig_handle
 
-def test_inject_notification_meta_strips_old_prefix(tmp_path: Path) -> None:
-    """Prior result block carries an old prefix — it gets stripped when
-    a new prefix is reinjected on a more recent block."""
-    from lingtai_kernel.base_agent import BaseAgent
-    from lingtai_kernel.llm.interface import ToolCallBlock, ToolResultBlock
+    assert AgentState.IDLE in states
+    assert agent._notification_block_id is not None
+    assert agent._notification_fp == notification_fingerprint(tmp_path)
+    wake = agent.inbox.get_nowait()
+    assert wake.type == MSG_TC_WAKE
 
-    chat = _make_chat_stub()
-    iface = chat.interface
-
-    old_prefix = "notifications:\n{\"_synthesized\": true, \"notifications\": {}}\n\n"
-    iface.add_assistant_message(content=[ToolCallBlock(id="c1", name="bash", args={})])
-    iface.add_tool_results([
-        ToolResultBlock(id="c1", name="bash", content=old_prefix + "first output")
-    ])
-    iface.add_assistant_message(content=[ToolCallBlock(id="c2", name="bash", args={})])
-    iface.add_tool_results([
-        ToolResultBlock(id="c2", name="bash", content="second output")
-    ])
-
-    class _Agent(BaseAgent):
-        def __init__(self):
-            self._chat_stub = chat
-            self._pending_notification_meta = '{"_synthesized": true, "notifications": {"email": {}}}'
-            self._pending_notification_fp = None
-            self._logs = []
-
-        @property
-        def _chat(self):
-            return self._chat_stub
-
-        def _log(self, evt, **fields):
-            self._logs.append((evt, fields))
-
-    agent = _Agent()
-    agent._inject_notification_meta(message=None)
-
-    # Oldest result: prefix stripped.
-    older = iface.entries[1].content[0]
-    assert older.content == "first output"
-    # Most recent: fresh prefix.
-    newer = iface.entries[3].content[0]
-    assert newer.content.startswith("notifications:\n")
-    assert "second output" in newer.content
-    assert agent._pending_notification_meta is None
+    entries = chat.interface.entries
+    assert len(entries) == 2
+    assert entries[0].role == "assistant"
+    assert entries[1].role == "user"
+    result_block = entries[1].content[0]
+    assert isinstance(result_block, ToolResultBlock)
+    body = json.loads(result_block.content)
+    assert body["_synthesized"] is True
+    assert "system" in body["notifications"]
+    assert not result_block.content.startswith("notifications:\n")
 
 
 # ---------------------------------------------------------------------------

@@ -487,8 +487,15 @@ def _run_loop(agent) -> None:
                     msg = _prepare_aed_retry_message(agent, err_desc)
                     agent._set_state(AgentState.ACTIVE, reason=f"AED recovery attempt {aed_attempts}")
 
-            # Issue #47: Check for pending notifications before going idle
-            # This catches messages that arrived during active work
+            if not agent._asleep.is_set():
+                agent._set_state(sleep_state)
+
+            # Issue #83: check for pending notifications only after the
+            # state is observably IDLE.  A check while still ACTIVE would
+            # take the ACTIVE deferral path, leaving the fingerprint
+            # uncommitted with no wake queued until a later heartbeat.
+            # At the IDLE boundary, _sync_notifications uses the distinct
+            # synthetic notification pair + MSG_TC_WAKE path.
             if sleep_state == AgentState.IDLE and not agent._asleep.is_set():
                 try:
                     from ..notifications import notification_fingerprint, collect_notifications
@@ -498,14 +505,10 @@ def _run_loop(agent) -> None:
                         if notifications:
                             agent._log("idle_notification_check",
                                        sources=list(notifications.keys()))
-                            # Sync notifications to surface any pending messages
                             agent._sync_notifications()
                 except Exception as notif_err:
                     agent._log("idle_notification_check_error",
                                error=str(notif_err))
-
-            if not agent._asleep.is_set():
-                agent._set_state(sleep_state)
             if skip_post_turn_save:
                 agent._log(
                     "chat_history_save_skipped",
@@ -689,8 +692,6 @@ def _check_molt_pressure(agent) -> None:
 
 def _handle_request(agent, msg: Message) -> None:
     """Send request to LLM, process response with tool calls."""
-    from ..llm import LLMResponse
-
     # Reset per-turn molt warning flag so the counter increments at most
     # once per turn (mid-loop _check_molt_pressure calls update the
     # notification but don't double-count).
@@ -722,9 +723,9 @@ def _handle_request(agent, msg: Message) -> None:
     # Molt pressure — warn agent when context is getting full.
     _check_molt_pressure(agent)
 
-    # Synchronous notification sync — ensure any just-published molt
-    # warning reaches _pending_notification_meta before session.send()
-    # so the heartbeat race is eliminated for same-turn publishes.
+    # Synchronous notification sync — record same-turn notification
+    # changes.  While ACTIVE this deliberately defers without mutating
+    # unrelated tool results; delivery happens at the next IDLE boundary.
     try:
         agent._sync_notifications()
     except Exception:
@@ -760,8 +761,6 @@ def _handle_tc_wake(agent, msg: Message) -> None:
     of no-op-and-return — the previous "tc_inbox_empty" silent
     no-op was the bug that left spliced notification pairs unread.
     """
-    from ..llm import LLMResponse
-
     # Reset per-turn molt warning flag (same as _handle_request).
     agent._molt_warning_counted = False
 
@@ -875,9 +874,8 @@ def _handle_tc_wake(agent, msg: Message) -> None:
         # Notification-driven turns should also check pressure so
         # warnings fire even when the agent is woken by mail/soul.
         _check_molt_pressure(agent)
-        # Synchronous notification sync — same pattern as _process_response:
-        # ensure any just-published molt warning reaches
-        # _pending_notification_meta before the next session.send().
+        # Synchronous notification sync — same ACTIVE deferral semantics as
+        # _handle_request; delivery happens at the next IDLE boundary.
         try:
             agent._sync_notifications()
         except Exception:
@@ -1127,9 +1125,8 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         # chains so the agent doesn't go from below-threshold to hard
         # ceiling in a single turn with zero warnings.
         _check_molt_pressure(agent)
-        # Synchronous notification sync — same pattern as _handle_request:
-        # ensure any just-published molt warning reaches
-        # _pending_notification_meta before the next session.send().
+        # Synchronous notification sync — same ACTIVE deferral semantics as
+        # _handle_request; delivery happens at the next IDLE boundary.
         try:
             agent._sync_notifications()
         except Exception:

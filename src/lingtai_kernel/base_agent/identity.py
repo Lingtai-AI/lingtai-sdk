@@ -183,7 +183,6 @@ def _status(agent) -> dict:
     Contains identity, runtime metrics, and token/context usage.
     Must only be called after _session exists (not during __init__).
     """
-    from datetime import datetime, timezone
     from ..time_veil import now_iso, scrub_time_fields
 
     mail_addr = None

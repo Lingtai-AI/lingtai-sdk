@@ -6,7 +6,7 @@ BaseAgent delegates all session operations here.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable
+from typing import Any, Callable, TYPE_CHECKING
 
 from .config import AgentConfig
 from .llm import (
@@ -24,6 +24,9 @@ from .logging import get_logger
 from .token_counter import count_tokens, count_tool_tokens
 
 logger = get_logger()
+
+if TYPE_CHECKING:
+    from .llm.interface import ChatInterface
 
 
 class SessionManager:
@@ -44,7 +47,6 @@ class SessionManager:
         build_tool_schemas_fn: Callable[[], list[FunctionSchema]],
         logger_fn: Callable[..., None] | None,
         build_system_batches_fn: Callable[[], list[str]] | None = None,
-        notification_inject_fn: Callable[[Any], Any] | None = None,
     ):
         self._llm_service = llm_service
         self._config = config
@@ -59,13 +61,6 @@ class SessionManager:
         # and can place cache breakpoints between them. When absent, the
         # string builder is used for everything.
         self._build_system_batches_fn = build_system_batches_fn
-        # Optional ACTIVE-state notification meta injector.  Called from
-        # send() before each API call.  Receives the outgoing message
-        # and may mutate the wire's most recent ToolResultBlock to
-        # carry a notification prefix.  See
-        # base_agent/__init__.py:_inject_notification_meta.
-        self._notification_inject_fn = notification_inject_fn
-
         # Persistent LLM session
         self._chat: ChatSession | None = None
         self._interaction_id: str | None = None
@@ -224,24 +219,6 @@ class SessionManager:
         self._chat.update_tools(self._build_tool_schemas_fn() or None)
 
         self._health_check(message)
-
-        # ACTIVE-state notification meta injection.  If the agent has a
-        # pending notification body stashed (set by
-        # BaseAgent._sync_notifications when a `.notification/` change
-        # arrived while the agent was mid-tool-chain), prepend it as a
-        # `notifications:\n<json>\n\n` prefix to the wire's most recent
-        # string-content ToolResultBlock.  See
-        # base_agent/__init__.py:_inject_notification_meta.
-        if self._notification_inject_fn is not None:
-            try:
-                message = self._notification_inject_fn(message)
-            except Exception as inject_err:
-                # Notification injection should never block the send.
-                # A failure here is a bug worth logging but not crashing.
-                self._log(
-                    "notification_inject_failed",
-                    error=str(inject_err),
-                )
 
         self._log(
             "llm_call",
