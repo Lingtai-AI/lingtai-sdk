@@ -177,25 +177,27 @@ def _parse_response(raw) -> LLMResponse:
 def _add_responses_reasoning_done_text(
     acc: StreamingAccumulator,
     reasoning_item_id: str | None,
-    seen_reasoning_delta_items: set[str],
+    seen_reasoning_summary_items: set[str],
     text: str | None,
 ) -> None:
     """Add final reasoning-summary text only when no delta was seen.
 
     Responses ``*.done`` events carry the complete text.  When the stream
-    already delivered ``*.delta`` chunks for the same reasoning item, adding
-    ``done.text`` would duplicate the thought.  If a provider emits only the
-    done event, use it as a lossless fallback.
+    already accepted summary text for the same reasoning item from deltas or a
+    done fallback, adding ``done.text`` would duplicate the thought.  If a
+    provider emits only the done event, use it as a lossless fallback.
     """
-    if text and (not reasoning_item_id or reasoning_item_id not in seen_reasoning_delta_items):
+    if text and (not reasoning_item_id or reasoning_item_id not in seen_reasoning_summary_items):
         acc.add_thought(text)
+        if reasoning_item_id:
+            seen_reasoning_summary_items.add(reasoning_item_id)
     acc.finish_thought()
 
 
 def _handle_responses_reasoning_event(
     event: Any,
     acc: StreamingAccumulator,
-    seen_reasoning_delta_items: set[str],
+    seen_reasoning_summary_items: set[str],
 ) -> bool:
     """Feed safe Responses reasoning-summary events into ``acc``.
 
@@ -210,13 +212,13 @@ def _handle_responses_reasoning_event(
             acc.add_thought(delta)
             item_id = getattr(event, "item_id", None)
             if item_id:
-                seen_reasoning_delta_items.add(item_id)
+                seen_reasoning_summary_items.add(item_id)
         return True
     if event_type == "response.reasoning_summary_text.done":
         _add_responses_reasoning_done_text(
             acc,
             getattr(event, "item_id", None),
-            seen_reasoning_delta_items,
+            seen_reasoning_summary_items,
             getattr(event, "text", None),
         )
         return True
@@ -227,8 +229,10 @@ def _handle_responses_reasoning_event(
             if getattr(summary, "type", None) == "summary_text":
                 item_id = getattr(event.item, "id", None)
                 text = getattr(summary, "text", None)
-                if text and (not item_id or item_id not in seen_reasoning_delta_items):
+                if text and (not item_id or item_id not in seen_reasoning_summary_items):
                     acc.add_thought(text)
+                    if item_id:
+                        seen_reasoning_summary_items.add(item_id)
                     added_fallback = True
         if added_fallback or acc.thoughts:
             acc.finish_thought()
@@ -918,11 +922,11 @@ class OpenAIResponsesSession(ChatSession):
         acc = StreamingAccumulator()
         response_id = None
         usage = UsageMetadata()
-        seen_reasoning_delta_items: set[str] = set()
+        seen_reasoning_summary_items: set[str] = set()
 
         stream = self._client.responses.create(**kwargs)
         for event in stream:
-            if _handle_responses_reasoning_event(event, acc, seen_reasoning_delta_items):
+            if _handle_responses_reasoning_event(event, acc, seen_reasoning_summary_items):
                 continue
             if event.type == "response.output_text.delta":
                 acc.add_text(event.delta)
@@ -1334,11 +1338,11 @@ class CodexResponsesSession(OpenAIResponsesSession):
             acc = StreamingAccumulator()
             response_id = None
             usage = UsageMetadata()
-            seen_reasoning_delta_items: set[str] = set()
+            seen_reasoning_summary_items: set[str] = set()
 
             stream = self._client.responses.create(**kwargs)
             for event in stream:
-                if _handle_responses_reasoning_event(event, acc, seen_reasoning_delta_items):
+                if _handle_responses_reasoning_event(event, acc, seen_reasoning_summary_items):
                     continue
                 if event.type == "response.output_text.delta":
                     acc.add_text(event.delta)

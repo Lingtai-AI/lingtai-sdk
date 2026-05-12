@@ -219,6 +219,41 @@ def test_reasoning_done_text_is_used_as_fallback_without_delta():
     assert assistant_entry.content[0].text == "Done-only summary."
 
 
+def test_done_only_summary_is_not_duplicated_by_output_item_done():
+    session = _create_codex_session(
+        [
+            Event(
+                "response.reasoning_summary_text.done",
+                item_id="rs_done_only",
+                text="Done-only summary.",
+            ),
+            Event(
+                "response.output_item.done",
+                item=SimpleNamespace(
+                    type="reasoning",
+                    id="rs_done_only",
+                    summary=[
+                        SimpleNamespace(
+                            type="summary_text",
+                            text="Done-only summary.",
+                        )
+                    ],
+                ),
+            ),
+            _completed(),
+        ]
+    )
+
+    result = session.send("think only")
+
+    assert result.thoughts == ["Done-only summary."]
+    assistant_entry = session.interface.entries[-1]
+    thinking_blocks = [
+        block for block in assistant_entry.content if isinstance(block, ThinkingBlock)
+    ]
+    assert [block.text for block in thinking_blocks] == ["Done-only summary."]
+
+
 def test_openai_responses_stream_captures_summary_thoughts():
     session = OpenAIResponsesSession(
         client=FakeClient(_reasoning_events() + [_completed()]),
