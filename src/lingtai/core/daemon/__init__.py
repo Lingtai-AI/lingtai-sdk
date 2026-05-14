@@ -545,9 +545,15 @@ class DaemonManager:
         - Per-turn ``text``/``tool_use`` blocks via
           ``record_cli_output`` so ``daemon(check)`` shows live progress.
         - Tool calls via ``set_current_tool`` / ``clear_current_tool``.
-        - Token deltas via ``append_tokens``.
         - stderr to its own pipe so diagnostic messages aren't lost in
           the stdout stream.
+
+        Note: Claude Code's token ``usage`` fields are deliberately NOT
+        forwarded to ``append_tokens``. Claude Code bills through its
+        own provider account, and its cache_creation/cache_read
+        semantics don't map cleanly onto the kernel's LLM-adapter
+        accounting. Mixing them into ``sum_token_ledger`` would
+        produce a misleading "lifetime totals" number for the parent.
 
         Falls back to the legacy JSONL scan if no ``session_id`` ever
         appears in the stream.
@@ -650,17 +656,15 @@ class DaemonManager:
                         run_dir.set_current_tool(tool_name, tool_input)
                     except Exception:
                         pass
-            usage = message.get("usage") or {}
-            if usage:
-                try:
-                    run_dir.append_tokens(
-                        input=int(usage.get("input_tokens") or 0),
-                        output=int(usage.get("output_tokens") or 0),
-                        thinking=0,
-                        cached=int(usage.get("cache_read_input_tokens") or 0),
-                    )
-                except Exception:
-                    pass
+            # NOTE: Claude Code spend is intentionally NOT recorded in the
+            # daemon's or parent's token ledger. Claude Code runs as an
+            # external process with its own billing path; counting its
+            # `usage` fields here would mix unrelated currencies (cache
+            # read/write semantics differ from the kernel's LLM adapters)
+            # and create a misleading "lifetime totals" number. Spend
+            # remains visible to the agent via daemon(check) — the
+            # `last_output` field, cli_output events, and stderr — but
+            # not in sum_token_ledger.
 
         def _handle_user_event(event: dict) -> None:
             # User events in stream-json mode carry tool_result blocks back
@@ -799,9 +803,13 @@ class DaemonManager:
         - ``{"type":"turn.started"}`` — marks an agent turn beginning.
         - ``{"type":"item.completed","item":{"type":"agent_message","text":"..."}}``
           — visible agent reply text.
-        - ``{"type":"turn.completed","usage":{"input_tokens","output_tokens",
-          "cached_input_tokens","reasoning_output_tokens"}}`` — terminal,
-          includes token accounting.
+        - ``{"type":"turn.completed","usage":{...}}`` — terminal event.
+          Codex reports token usage on this event, but we deliberately do
+          NOT forward it to ``append_tokens``: codex runs as an external
+          process with its own billing path, and counting its tokens
+          into the kernel's ledger would mix unrelated currencies. Spend
+          is visible to the agent via ``daemon(check)`` but not via
+          ``sum_token_ledger``.
         """
         def _exit_cancelled() -> str:
             if timeout_event is not None and timeout_event.is_set():
@@ -908,17 +916,15 @@ class DaemonManager:
                             run_dir.record_cli_output(text, stream="stdout")
                 elif etype == "turn.completed":
                     turn_completed = True
-                    usage = event.get("usage") or {}
-                    if usage:
-                        try:
-                            run_dir.append_tokens(
-                                input=int(usage.get("input_tokens") or 0),
-                                output=int(usage.get("output_tokens") or 0),
-                                thinking=int(usage.get("reasoning_output_tokens") or 0),
-                                cached=int(usage.get("cached_input_tokens") or 0),
-                            )
-                        except Exception:
-                            pass
+                    # NOTE: Codex spend is intentionally NOT recorded in
+                    # the daemon's or parent's token ledger. Codex runs
+                    # as an external process with its own billing path,
+                    # and its `cached_input_tokens` semantics differ
+                    # from the kernel's LLM adapters (codex `input_tokens`
+                    # already includes the cached portion). Mixing it in
+                    # would produce a misleading "lifetime totals" number.
+                    # Spend is visible to the agent via daemon(check),
+                    # not via sum_token_ledger.
 
             proc.wait()
         except Exception as e:
@@ -1605,17 +1611,9 @@ class DaemonManager:
                             run_dir.record_cli_output(text, stream="stdout")
                 elif etype == "turn.completed":
                     turn_completed = True
-                    usage = event.get("usage") or {}
-                    if usage:
-                        try:
-                            run_dir.append_tokens(
-                                input=int(usage.get("input_tokens") or 0),
-                                output=int(usage.get("output_tokens") or 0),
-                                thinking=int(usage.get("reasoning_output_tokens") or 0),
-                                cached=int(usage.get("cached_input_tokens") or 0),
-                            )
-                        except Exception:
-                            pass
+                    # Codex spend is intentionally NOT recorded in the
+                    # token ledger — see _run_codex_emanation for the
+                    # rationale.
 
             proc.wait(timeout=max(1.0, deadline - time.monotonic()))
         except subprocess.TimeoutExpired:
