@@ -43,6 +43,7 @@
   "psyche.keep_last_description": "可选整数（默认：二十）。凝蜕后保留近时对话条目之数（用户之言、助手之复、器之结果）。此等条目回放入新会话，使蜕后之我得近时对话之脉络，无须依 pad.md。传零则显式禁之（全数归档）。keep_last 与 keep_tool_calls 可并用——keep_last 以位置存全条目，keep_tool_calls 以 id 存特定器用之对。二者并用时，与 keep_tool_calls 对重叠之条目自去其重。",
   "tool.reasoning_description": "简述为何调此器（录于汝之私记）。",
   "system.molt_warning": "[系统] 文已达 {pressure}——宜凝蜕。详见《过程》之「凝蜕之行」一节（先理简、心印、典、藏经阁、本会之录，乃 `psyche(object=context, action=molt, summary=...)`）。凝蜕乃汝所为——趁文尚廉，自行而蜕。",
+  "system.molt_warning_urgent": "[系统] ⚠️ 危急——文已达 {pressure}。请即凝蜕。每多一度，皆更迟、更费；一逾百分之百，核之溢回即默截往事，自此每度皆或弃汝所欲存之物。手头之微务速毕，整四储与本会之录，呼 `psyche(object=context, action=molt, summary=...)`。系统不代汝蜕——此事属汝，迟则蜕地愈狭。详见《过程》之「凝蜕之行」。",
   "email.description": ".lingtai/ 网内器灵间之飞鸽——非真互联网之邮（Gmail/Outlook 用 imap 之具）。地址乃 .lingtai/ 下之裸路径，不含 @（如 'human' 指人类操使）。回书之规：必于来书之渠道上作复；优先用 reply 而非 send。切勿以文字输出作复——乃唯汝可见之私记也。必以 sender_nickname（有则用）或 sender_name 称之。",
   "email.action": "send：飞鸽传书，可附 cc/bcc（须 address、message）。check：列邮匣，含每书预览（至多五百字）。若截则示余字数——用 'read' 展全文。（可选 folder、n）。read：以 ID 展信（email_id=[id1, id2, ...]）。建议展阅多封乃至尽读未读书信，深思后再行动。reply：回书（须 email_id、message）。reply_all：群复（须 email_id、message）。search：以正则式搜信（须 query，可选 folder）。archive：将收信归入典藏（须 email_id）。delete：焚信（须 email_id，可选 folder）。contacts：列通讯录。add_contact：添友（须 address、name；可选 note）。remove_contact：删友（须 address）。edit_contact：改友（须 address；可选 name、note）。",
   "email.address": "传书目标之址",

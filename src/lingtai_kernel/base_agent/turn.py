@@ -595,13 +595,19 @@ def _handle_message(agent, msg: Message) -> None:
 def _check_molt_pressure(agent) -> None:
     """Check context pressure and publish/clear the molt notification.
 
-    Single threshold, no ladder: above ``molt_pressure`` publish one
-    notification telling the agent context is high and to consult
-    procedures.md for the molt recipe; below threshold clear it.
+    Two tones, no ladder:
+      - pressure ≥ ``molt_urgency`` (default 0.9, may exceed 1.0 when
+        the upstream model is in overflow trim): publish the urgent
+        variant — 🚨 header, "molt NOW" wording, mentions that >100%
+        means the kernel is already silently trimming history.
+      - ``molt_pressure`` ≤ pressure < ``molt_urgency``: publish the
+        gentle "consider molt" variant.
+      - pressure < ``molt_pressure``: clear the notification.
 
-    Safe to call from the tool loop and notification-wake paths — the
-    notification system fingerprints content and skips redundant wire
-    updates, so repeated calls at the same pressure are no-ops.
+    No counter, no flag, no force-wipe — the kernel does not molt the
+    agent for them at any pressure. The escalation is in the text and
+    header only. Safe to call repeatedly; the notification system
+    fingerprints content and skips redundant wire updates.
     """
     has_molt = "psyche" in agent._intrinsics
     if not has_molt:
@@ -609,25 +615,35 @@ def _check_molt_pressure(agent) -> None:
 
     pressure = agent._session.get_context_pressure()
 
-    if pressure >= agent._config.molt_pressure:
-        lang = agent._config.language
-        warning_text = agent._config.molt_prompt or _t(
-            lang, "system.molt_warning", pressure=f"{pressure:.0%}"
-        )
-        from ..intrinsics.system import publish_notification
-        publish_notification(
-            agent._working_dir, "molt",
-            header=f"context {pressure:.0%} — consider molt",
-            icon="⚠️",
-            priority="high",
-            data={
-                "pressure": pressure,
-                "warning_text": warning_text,
-            },
-        )
-    else:
+    if pressure < agent._config.molt_pressure:
         from ..intrinsics.system import clear_notification
         clear_notification(agent._working_dir, "molt")
+        return
+
+    lang = agent._config.language
+    urgent = pressure >= agent._config.molt_urgency
+    key = "system.molt_warning_urgent" if urgent else "system.molt_warning"
+    warning_text = agent._config.molt_prompt or _t(
+        lang, key, pressure=f"{pressure:.0%}"
+    )
+    header = (
+        f"context {pressure:.0%} — molt NOW"
+        if urgent
+        else f"context {pressure:.0%} — consider molt"
+    )
+    icon = "🚨" if urgent else "⚠️"
+    from ..intrinsics.system import publish_notification
+    publish_notification(
+        agent._working_dir, "molt",
+        header=header,
+        icon=icon,
+        priority="high",
+        data={
+            "pressure": pressure,
+            "urgent": urgent,
+            "warning_text": warning_text,
+        },
+    )
 
 
 def _handle_request(agent, msg: Message) -> None:

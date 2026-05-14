@@ -43,6 +43,7 @@
   "psyche.keep_last_description": "可选整数（默认：20）。凝蜕后保留的近期对话条目数（用户消息、助手回复、工具结果）。这些条目回放入新会话，使蜕后之我保留近期对话上下文，无需依赖 pad.md。传 0 则显式禁用（全部归档）。keep_last 与 keep_tool_calls 可同时使用——keep_last 按位置保留完整条目，keep_tool_calls 按 id 保留特定工具对。两者同时使用时，与 keep_tool_calls 对重叠的条目会自动去重。",
   "tool.reasoning_description": "简要说明为什么调用此工具（记录在你的日记中）。",
   "system.molt_warning": "[系统] 上下文已达 {pressure} —— 宜行凝蜕。详见过程文档中『凝蜕之行』一节（先理手记、修行志、典集、藏经阁、本会之录，然后 `psyche(object=context, action=molt, summary=...)`）。凝蜕乃汝所为——趁上下文尚廉，主动而行。",
+  "system.molt_warning_urgent": "[系统] ⚠️ 紧急 —— 上下文已达 {pressure}。请立即凝蜕。每多一轮，皆更慢、更昂；一旦逾百分百，内核之溢出回收即开始静默截断历史，此后每一轮皆可能丢弃汝本欲存之内容。手头之子务速收，整四储与本会之录，呼 `psyche(object=context, action=molt, summary=...)`。系统不代汝凝蜕——此事乃汝之责，迟则凝蜕之地愈窄。详见过程文档中『凝蜕之行』。",
   "email.description": ".lingtai/ 网络内部的文件系统邮件——非真互联网邮件（Gmail/Outlook 用 imap 工具）。地址为 .lingtai/ 下的裸路径，不含 @（如 'human' 指人类操作员）。回复规则：必须在来信渠道上回复；优先用 reply 而非 send。切勿以文字输出回复——那是只有你能看见的私记。始终以 sender_nickname（有则用）或 sender_name 称呼对方。",
   "email.action": "send：发送邮件，支持可选的 cc/bcc（需要 address、message）。check：列出邮箱，含每封邮件预览（最多 500 字符）。若截断则显示剩余字符数——用 'read' 查看完整内容。（可选 folder、n）。read：按 ID 列表阅读邮件（email_id=[id1, id2, ...]）。建议阅读多封甚至所有未读邮件，深思后再行动。reply：回复邮件（需要 email_id、message）。reply_all：回复所有收件人（需要 email_id、message）。search：正则搜索邮箱（需要 query，可选 folder）。archive：将邮件从 inbox 移至 archive（需要 email_id）。delete：从 inbox 或 archive 删除邮件（需要 email_id，可选 folder）。contacts：列出所有联系人。add_contact：添加/更新联系人（需要 address、name；可选 note）。remove_contact：删除联系人（需要 address）。edit_contact：更新联系人字段（需要 address；可选 name、note）。",
   "email.address": "发送目标地址",
