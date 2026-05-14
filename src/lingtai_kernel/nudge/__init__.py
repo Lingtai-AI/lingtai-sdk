@@ -9,7 +9,7 @@ the shared ``.notification/nudge.json`` payload.
 Channel ``.notification/nudge.json`` carries a list of active nudges:
 
     {
-      "header": "<rendered by _publish_nudges>",
+      "header": "<rendered by _render_header — e.g. '2 nudges'>",
       "icon": "🔔",
       "priority": "low",
       "instructions": "Call system(action='dismiss', channel='nudge') ...",
