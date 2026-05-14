@@ -129,7 +129,7 @@ The summary is not a recap of conversation. It is your charge to the self that c
 **The pressure notification.** Whenever your context usage crosses ~70%, a `molt` notification arrives. It has two tones:
 
 - **Gentle (⚠️, ~70%–90%)** — "context at NN% — consider molt." You have headroom; pick a clean stopping point, tend the stores, write the journal entry, draft the summary, then molt.
-- **Urgent (🚨, ≥90%, may read above 100%)** — "context at NN% — molt NOW." Pressure can climb past 100% when the upstream model is in overflow trim, which means each additional turn may be silently discarding chat history the kernel cannot recover. At this point you are losing data on every turn; finish the current sub-step, tend the stores, and molt.
+- **Urgent (🚨, ≥90%, may read above 100%)** — "context at NN% — molt NOW." Past 100% the upstream model may reject the request, at which point the kernel's overflow recovery silently trims history and retries — that recovery path can drop data you would have wanted to keep. The data loss is *possible*, not certain, on every urgent turn; the further you push past 100%, the more likely it becomes. Finish the current sub-step, tend the stores, and molt.
 
 There is no escalating ladder beyond these two tones and no forced wipe; the kernel will not molt you. Heeding the notification is your job. The earlier you act on the gentle warning, the less likely you ever see the urgent one — and the more breathing room you have to write a substantial journal entry and summary.
 

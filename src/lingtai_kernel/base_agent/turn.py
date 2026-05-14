@@ -603,14 +603,15 @@ _MOLT_WARNING_GENTLE = (
 _MOLT_WARNING_URGENT = (
     "[system] ⚠️ URGENT — Context at {pressure}. Please consider molting "
     "NOW. Every additional turn at this pressure is slower and more "
-    "expensive; once usage crosses 100% the kernel's overflow recovery "
-    "starts silently trimming history, so each turn at this point may be "
-    "discarding data you would have wanted to keep. Wrap up the current "
-    "sub-step if you must, then tend the stores (pad / lingtai / knowledge "
-    "/ skills / session journal) and call `psyche(object=context, "
-    "action=molt, summary=...)`. The kernel will not molt you — this is "
-    "yours to do, and the longer you wait the more cramped the molt "
-    "becomes. See 'Performing a Molt' in your procedures."
+    "expensive, and once usage crosses 100% the upstream model may reject "
+    "the request outright — at which point the kernel's overflow recovery "
+    "kicks in and silently trims history to retry, which can discard data "
+    "you would have wanted to keep. Wrap up the current sub-step if you "
+    "must, then tend the stores (pad / lingtai / knowledge / skills / "
+    "session journal) and call `psyche(object=context, action=molt, "
+    "summary=...)`. The kernel will not molt you — this is yours to do, "
+    "and the longer you wait the more cramped the molt becomes. See "
+    "'Performing a Molt' in your procedures."
 )
 
 
