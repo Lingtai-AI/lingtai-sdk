@@ -134,7 +134,7 @@ The `backend` parameter selects the execution engine for emanations. Default is 
 | Backend | CLI command | Session resume | Notes |
 |---------|------------|----------------|-------|
 | `lingtai` | (built-in) | N/A — in-process `ask` | Default. Uses preset resolution, tool surface curation, model routing. |
-| `claude-code` | `claude --print --dangerously-skip-permissions --name <em_id> <task>` | `claude --resume <session-id>` via `ask` | Discovers session ID from JSONL files after run. `ask` resumes that session. |
+| `claude-code` | `claude --print --dangerously-skip-permissions --output-format stream-json --verbose --name <em_id> <task>` | `claude --resume <session-id>` via `ask` | Session ID captured from the first event of the stream-json output (typically within ms of process start), so `ask` is usable as soon as `emanate` returns — even while the initial task is still running. |
 | `codex` | `codex exec <task>` | Not supported | One-shot execution. No session ID, no `--resume`. `ask` is not available for codex emanations. |
 
 **When to use CLI backends:** When the task benefits from a different agent runtime's tool surface (e.g., Claude Code's built-in file editing, Codex's sandboxed execution) rather than the lingtai emanation's curated tool set.
@@ -144,6 +144,14 @@ The `backend` parameter selects the execution engine for emanations. Default is 
 **Working directory:** Both CLI backends run in the parent agent's working directory (`_working_dir`), not in the emanation's `daemons/em-N-*/` folder. The `daemons/` folder is used for tracking state (`daemon.json`, logs) and terminal output (`result.txt`).
 
 **Progress delivery:** CLI stdout/stderr is persisted to the run directory as `cli_output` events and `daemon.json.last_output`; it is not injected into the parent as ordinary `[daemon:em-N]` request text. Completion/failure publishes one compact `system` notification telling the parent which daemon finished and to inspect it with `daemon(action="check", id="em-N")`.
+
+**Claude Code backend specifics.** The backend streams structured JSON events from Claude Code in real time (`--output-format stream-json --verbose`):
+
+- `daemon(check)` sees live progress as each assistant turn arrives — `last_output` updates per turn, `tokens` accumulate from the `usage` fields of each `assistant` event, and `current_tool` tracks Claude Code's own tool calls (`set` on `tool_use` blocks, `clear` on the matching `tool_result`).
+- `claude_session_id` is set on the first event that carries a session id (typically the system `init` event, within ms of process start). This means `daemon(action="ask", id="em-N", message="...")` works the moment `emanate` returns — you don't have to wait for the initial task to complete. (Earlier versions wrote the session id only post-hoc by scanning `~/.claude/projects/`; that scan is now a fallback for the unusual case where the stream never carried a session id.)
+- stderr is captured to its own pipe (no longer merged into stdout) and persisted as `cli_output` events with `stream="stderr"`, so API errors, auth failures, and rate limits are visible during the run rather than buried in a buffered stdout.
+- `turn` is not incremented for CLI backends — Claude Code runs its own LLM loop and we don't see "turns" in the same sense. Use `tokens` and `cli_output` events to gauge progress instead.
+- An `is_error=true` in the final `result` event is surfaced as a failed emanation even when the underlying process exited 0, so an error reported inside the LLM stream doesn't masquerade as success.
 
 ## What the manual does NOT cover
 

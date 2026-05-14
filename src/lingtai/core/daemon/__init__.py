@@ -532,10 +532,25 @@ class DaemonManager:
     ) -> str:
         """Run a Claude Code CLI session as the emanation backend.
 
-        Spawns ``claude --print --dangerously-skip-permissions --name <em_id> <task>``
-        and records stdout in the daemon run directory. After the process
-        finishes, discovers the session ID from the JSONL files and stores it
-        in run_dir's daemon.json as ``claude_session_id``.
+        Spawns Claude Code with ``--output-format stream-json --verbose`` so
+        events arrive in real time (vs ``--output-format text``, which
+        buffers everything until completion — see GH issues #99/#100).
+        Parses each event line and writes:
+
+        - ``claude_session_id`` to daemon.json on the first event that
+          carries one (typically the system ``init`` event, but any event
+          with ``session_id`` works as a fallback). This makes
+          ``daemon(ask)`` usable from the moment ``emanate`` returns,
+          rather than after the initial run completes.
+        - Per-turn ``text``/``tool_use`` blocks via
+          ``record_cli_output`` so ``daemon(check)`` shows live progress.
+        - Tool calls via ``set_current_tool`` / ``clear_current_tool``.
+        - Token deltas via ``append_tokens``.
+        - stderr to its own pipe so diagnostic messages aren't lost in
+          the stdout stream.
+
+        Falls back to the legacy JSONL scan if no ``session_id`` ever
+        appears in the stream.
         """
         def _exit_cancelled() -> str:
             if timeout_event is not None and timeout_event.is_set():
@@ -551,7 +566,8 @@ class DaemonManager:
             "claude",
             "--print",
             "--dangerously-skip-permissions",
-            "--output-format", "text",
+            "--output-format", "stream-json",
+            "--verbose",
             "--name", em_id,
             task,
         ]
@@ -561,7 +577,7 @@ class DaemonManager:
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
+                stderr=subprocess.PIPE,
                 text=True,
                 cwd=str(self._agent._working_dir),
             )
@@ -574,10 +590,98 @@ class DaemonManager:
             run_dir.mark_failed(exc)
             raise exc
 
-        output_lines: list[str] = []
+        # Drain stderr in a background thread so diagnostic messages reach
+        # the run dir even while the main thread is parsing stdout events.
+        # iLink-style daemons with a chatty stderr would otherwise block
+        # the pipe and stall the process.
+        stderr_lines: list[str] = []
+
+        def _drain_stderr() -> None:
+            assert proc.stderr is not None
+            for line in proc.stderr:
+                stripped = line.rstrip("\n")
+                if not stripped:
+                    continue
+                stderr_lines.append(stripped)
+                try:
+                    run_dir.record_cli_output(stripped, stream="stderr")
+                except Exception:
+                    pass
+
+        stderr_thread = threading.Thread(
+            target=_drain_stderr, daemon=True, name=f"daemon-claude-stderr-{em_id}",
+        )
+        stderr_thread.start()
+
+        final_result_text: str | None = None
+        final_is_error: bool = False
+        session_id_captured: str | None = None
+        # Active tool_use blocks awaiting their tool_result. Keyed by
+        # the tool_use id from the assistant message; value is the tool
+        # name so we can call clear_current_tool with a status string.
+        pending_tools: dict[str, str] = {}
+
+        def _store_session_id(sid: str) -> None:
+            nonlocal session_id_captured
+            if session_id_captured == sid:
+                return
+            session_id_captured = sid
+            run_dir._state["claude_session_id"] = sid
+            run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
+            self._log("daemon_claude_code_session",
+                      em_id=em_id, session_id=sid)
+
+        def _handle_assistant_event(event: dict) -> None:
+            message = event.get("message") or {}
+            content = message.get("content") or []
+            for block in content:
+                btype = block.get("type")
+                if btype == "text":
+                    text = block.get("text") or ""
+                    if text.strip():
+                        run_dir.record_cli_output(text, stream="stdout")
+                elif btype == "tool_use":
+                    tool_id = block.get("id") or ""
+                    tool_name = block.get("name") or "unknown"
+                    tool_input = block.get("input") or {}
+                    if tool_id:
+                        pending_tools[tool_id] = tool_name
+                    try:
+                        run_dir.set_current_tool(tool_name, tool_input)
+                    except Exception:
+                        pass
+            usage = message.get("usage") or {}
+            if usage:
+                try:
+                    run_dir.append_tokens(
+                        input=int(usage.get("input_tokens") or 0),
+                        output=int(usage.get("output_tokens") or 0),
+                        thinking=0,
+                        cached=int(usage.get("cache_read_input_tokens") or 0),
+                    )
+                except Exception:
+                    pass
+
+        def _handle_user_event(event: dict) -> None:
+            # User events in stream-json mode carry tool_result blocks back
+            # from tool executions performed by Claude Code itself.
+            message = event.get("message") or {}
+            content = message.get("content") or []
+            for block in content:
+                if block.get("type") != "tool_result":
+                    continue
+                tool_id = block.get("tool_use_id") or ""
+                status = "error" if block.get("is_error") else "ok"
+                if tool_id in pending_tools:
+                    pending_tools.pop(tool_id, None)
+                try:
+                    run_dir.clear_current_tool(status)
+                except Exception:
+                    pass
+
         try:
             assert proc.stdout is not None
-            for line in proc.stdout:
+            for raw_line in proc.stdout:
                 if cancel_event.is_set():
                     proc.terminate()
                     try:
@@ -585,10 +689,46 @@ class DaemonManager:
                     except subprocess.TimeoutExpired:
                         proc.kill()
                     return _exit_cancelled()
-                output_lines.append(line)
-                stripped = line.rstrip("\n")
-                if stripped:
-                    run_dir.record_cli_output(stripped, stream="combined")
+
+                line = raw_line.rstrip("\n")
+                if not line:
+                    continue
+
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    # Defensive: if Claude Code ever emits a non-JSON line
+                    # in stream-json mode (e.g. a startup banner), don't
+                    # crash the parse — surface it as raw stdout.
+                    run_dir.record_cli_output(line, stream="stdout")
+                    continue
+
+                # Capture session_id from the first event that has it. The
+                # very first system events (hook_started, init) already
+                # carry it, so this typically fires within the first few
+                # lines — well before the LLM produces any reply.
+                sid = event.get("session_id")
+                if sid and session_id_captured != sid:
+                    _store_session_id(sid)
+
+                etype = event.get("type")
+                if etype == "assistant":
+                    _handle_assistant_event(event)
+                elif etype == "user":
+                    _handle_user_event(event)
+                elif etype == "result":
+                    final_result_text = event.get("result") or ""
+                    final_is_error = bool(event.get("is_error"))
+                    # If there are still tool_use blocks pending without
+                    # a matching tool_result (shouldn't happen on success,
+                    # but be defensive), clear them so daemon.json's
+                    # current_tool doesn't stay stuck.
+                    while pending_tools:
+                        pending_tools.popitem()
+                        try:
+                            run_dir.clear_current_tool("ok")
+                        except Exception:
+                            pass
 
             proc.wait()
         except Exception as e:
@@ -596,26 +736,42 @@ class DaemonManager:
             proc.wait()
             run_dir.mark_failed(e)
             raise
+        finally:
+            # Give the stderr drainer a moment to finish reading any
+            # remaining bytes before the pipe closes on us.
+            stderr_thread.join(timeout=2.0)
 
-        full_output = "".join(output_lines)
+        stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
 
         if proc.returncode != 0:
+            detail = stderr_tail or (final_result_text or "")
             exc = RuntimeError(
                 f"claude CLI exited with code {proc.returncode}: "
-                f"{full_output[-500:]}"
+                f"{detail[-500:]}"
             )
             run_dir.mark_failed(exc)
             raise exc
 
-        # Discover the Claude Code session ID from the session JSONL files
-        session_id = self._find_claude_session_id(em_id)
-        if session_id:
-            run_dir._state["claude_session_id"] = session_id
-            run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
-            self._log("daemon_claude_code_session",
-                      em_id=em_id, session_id=session_id)
+        # If the result event signalled an error even though the process
+        # exited 0, surface that so the caller doesn't think the task
+        # succeeded.
+        if final_is_error:
+            exc = RuntimeError(
+                f"claude CLI reported is_error=true: "
+                f"{(final_result_text or stderr_tail)[-500:]}"
+            )
+            run_dir.mark_failed(exc)
+            raise exc
 
-        text = full_output.strip() or "[no output]"
+        # Fallback: if no event carried session_id (extremely unusual but
+        # possible if Claude Code changes its stream format), fall back to
+        # the legacy JSONL scan so daemon(ask) still works.
+        if not session_id_captured:
+            session_id = self._find_claude_session_id(em_id)
+            if session_id:
+                _store_session_id(session_id)
+
+        text = (final_result_text or "").strip() or "[no output]"
         run_dir.mark_done(text)
         return text
 
@@ -1114,7 +1270,14 @@ class DaemonManager:
         return {"status": "sent", "id": em_id}
 
     def _handle_ask_cli(self, em_id: str, entry: dict, message: str) -> dict:
-        """Send a follow-up message to a Claude Code session via --resume."""
+        """Send a follow-up message to a Claude Code session via --resume.
+
+        Same stream-json parse as ``_run_claude_code_emanation``: we get
+        live ``record_cli_output`` updates during the resumed turn,
+        capture stderr separately, and pull the final reply out of the
+        ``result`` event. ``daemon(check)`` therefore shows progress
+        on follow-up asks too.
+        """
         run_dir = entry.get("run_dir")
         if run_dir is None:
             return {"status": "error", "message": f"emanation {em_id} has no run_dir"}
@@ -1123,42 +1286,118 @@ class DaemonManager:
         if not session_id:
             return {"status": "error",
                     "message": f"No claude session ID found for {em_id}. "
-                               "The emanation may still be running its initial task."}
+                               "The emanation may still be initializing — "
+                               "wait a moment and retry."}
 
         cmd = [
             "claude",
             "--resume", session_id,
             "--print",
             "--dangerously-skip-permissions",
-            "--output-format", "text",
+            "--output-format", "stream-json",
+            "--verbose",
             message,
         ]
         self._log("daemon_claude_code_ask", em_id=em_id,
                   session_id=session_id, message_length=len(message))
 
         try:
-            result = subprocess.run(
+            proc = subprocess.Popen(
                 cmd,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
                 cwd=str(self._agent._working_dir),
-                timeout=self._timeout,
             )
         except FileNotFoundError:
             return {"status": "error",
                     "message": "'claude' CLI not found on PATH"}
+        except OSError as e:
+            return {"status": "error",
+                    "message": f"Failed to start claude CLI: {e}"}
+
+        stderr_lines: list[str] = []
+
+        def _drain_stderr() -> None:
+            assert proc.stderr is not None
+            for line in proc.stderr:
+                stripped = line.rstrip("\n")
+                if not stripped:
+                    continue
+                stderr_lines.append(stripped)
+                try:
+                    run_dir.record_cli_output(stripped, stream="stderr")
+                except Exception:
+                    pass
+
+        stderr_thread = threading.Thread(
+            target=_drain_stderr, daemon=True,
+            name=f"daemon-claude-ask-stderr-{em_id}",
+        )
+        stderr_thread.start()
+
+        final_result_text: str | None = None
+        final_is_error = False
+
+        try:
+            assert proc.stdout is not None
+            deadline = time.monotonic() + self._timeout
+            for raw_line in proc.stdout:
+                if time.monotonic() > deadline:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    return {"status": "error",
+                            "message": f"claude --resume timed out after "
+                                       f"{self._timeout}s"}
+                line = raw_line.rstrip("\n")
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    run_dir.record_cli_output(line, stream="stdout")
+                    continue
+
+                etype = event.get("type")
+                if etype == "assistant":
+                    message_obj = event.get("message") or {}
+                    for block in (message_obj.get("content") or []):
+                        if block.get("type") == "text":
+                            text = block.get("text") or ""
+                            if text.strip():
+                                run_dir.record_cli_output(text, stream="stdout")
+                elif etype == "result":
+                    final_result_text = event.get("result") or ""
+                    final_is_error = bool(event.get("is_error"))
+
+            proc.wait(timeout=max(1.0, deadline - time.monotonic()))
         except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
             return {"status": "error",
-                    "message": f"claude --resume timed out after {self._timeout}s"}
+                    "message": f"claude --resume timed out after "
+                               f"{self._timeout}s"}
+        finally:
+            stderr_thread.join(timeout=2.0)
 
-        output = result.stdout.strip()
-        if result.returncode != 0:
+        stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
+
+        if proc.returncode != 0:
+            detail = stderr_tail or (final_result_text or "")
             return {"status": "error",
-                    "message": f"claude CLI exited {result.returncode}: "
-                               f"{(result.stderr or output)[-500:]}"}
+                    "message": f"claude CLI exited {proc.returncode}: "
+                               f"{detail[-500:]}"}
 
+        if final_is_error:
+            return {"status": "error",
+                    "message": f"claude CLI reported is_error=true: "
+                               f"{(final_result_text or stderr_tail)[-500:]}"}
+
+        output = (final_result_text or "").strip()
         if output:
-            run_dir.record_cli_output(output, stream="combined")
             self._publish_daemon_notification(
                 em_id, status="follow-up completed", text=output, run_dir=run_dir
             )
