@@ -127,6 +127,35 @@ def _prepare_aed_retry_message(agent, err_desc: str) -> Message:
     return _make_message(MSG_REQUEST, "system", aed_msg)
 
 
+def _restore_tool_results_after_continuation_failure(
+    agent,
+    tool_results,
+    *,
+    ledger_source: str,
+) -> bool:
+    """Persist real tool results after post-tool LLM continuation failure.
+
+    The tools already executed locally before the continuation send. If an
+    adapter rolled back the attempted user tool-result entry on provider error,
+    the canonical interface tail still has pending assistant tool_calls. Restore
+    the real results before AED / notification heal can synthesize a placeholder
+    that lacks the actual result payload.
+    """
+    if (
+        not tool_results
+        or agent._chat is None
+        or not agent._chat.has_pending_tool_calls()
+    ):
+        return False
+    agent._chat.commit_tool_results(tool_results)
+    agent._save_chat_history(ledger_source=ledger_source)
+    agent._log(
+        "tool_results_restored_after_continuation_failure",
+        result_count=len(tool_results),
+    )
+    return True
+
+
 def _run_loop(agent) -> None:
     """Wait for messages, process them. Agent persists between messages."""
     from ..state import AgentState
@@ -916,7 +945,21 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
             break
 
         in_tool_loop = True
-        response = agent._session.send(tool_results)
+        try:
+            response = agent._session.send(tool_results)
+        except Exception:
+            # The local tools have already executed and returned results; only
+            # the post-tool LLM continuation failed. Some adapters append tool
+            # results as part of send(tool_results) and roll that user entry
+            # back on provider error. If AED / notification heal sees the tail
+            # assistant tool_calls as unanswered, it can only synthesize a
+            # completion notice and the real result payload is lost. Restore the
+            # real results before re-raising so recovery paths preserve truthful
+            # tool completion state.
+            _restore_tool_results_after_continuation_failure(
+                agent, tool_results, ledger_source=ledger_source,
+            )
+            raise
         agent._last_usage = response.usage
         agent._save_chat_history(ledger_source=ledger_source)
 
