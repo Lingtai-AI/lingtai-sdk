@@ -73,7 +73,7 @@ Read `daemon.json` once. The fields you want:
 - `current_tool` — `"read"` / `"bash"` / null. If null while `state=running`, the emanation is waiting on the LLM. If non-null, it's executing that tool.
 - `turn` — which LLM round the emanation is on
 - `tool_call_count` — how many tool dispatches it has done
-- `tokens` — running totals
+- `tokens` — running totals (lingtai backend only; stays at 0 for `claude-code` and `codex` backends — see "CLI backends" below)
 - `last_output` / `last_output_at` — recent stdout/stderr from CLI backends
 - `result_preview` / `result_path` — bounded terminal preview and full `result.txt` path after completion
 - `elapsed_s` — wall clock since start
@@ -134,8 +134,8 @@ The `backend` parameter selects the execution engine for emanations. Default is 
 | Backend | CLI command | Session resume | Notes |
 |---------|------------|----------------|-------|
 | `lingtai` | (built-in) | N/A — in-process `ask` | Default. Uses preset resolution, tool surface curation, model routing. |
-| `claude-code` | `claude --print --dangerously-skip-permissions --output-format stream-json --verbose --name <em_id> <task>` | `claude --resume <session-id>` via `ask` | Session ID captured from the first event of the stream-json output (typically within ms of process start), so `ask` is usable as soon as `emanate` returns — even while the initial task is still running. |
-| `codex` | `codex exec <task>` | Not supported | One-shot execution. No session ID, no `--resume`. `ask` is not available for codex emanations. |
+| `claude-code` | `claude --print --dangerously-skip-permissions --output-format stream-json --verbose --name <em_id> <task>` | `claude --resume <claude_session_id>` via `ask` | Session ID captured from the first event of the stream-json output (typically within ms of process start), so `ask` is usable as soon as `emanate` returns — even while the initial task is still running. |
+| `codex` | `codex exec --json --dangerously-bypass-approvals-and-sandbox <task>` | `codex exec resume <codex_session_id>` via `ask` | Mirrors claude-code. `thread.started` event carries the session id (codex internally calls it `thread_id`), captured immediately. `ask` resumes the same conversation context. |
 
 **When to use CLI backends:** When the task benefits from a different agent runtime's tool surface (e.g., Claude Code's built-in file editing, Codex's sandboxed execution) rather than the lingtai emanation's curated tool set.
 
@@ -147,11 +147,19 @@ The `backend` parameter selects the execution engine for emanations. Default is 
 
 **Claude Code backend specifics.** The backend streams structured JSON events from Claude Code in real time (`--output-format stream-json --verbose`):
 
-- `daemon(check)` sees live progress as each assistant turn arrives — `last_output` updates per turn, `tokens` accumulate from the `usage` fields of each `assistant` event, and `current_tool` tracks Claude Code's own tool calls (`set` on `tool_use` blocks, `clear` on the matching `tool_result`).
+- `daemon(check)` sees live progress as each assistant turn arrives — `last_output` updates per turn and `current_tool` tracks Claude Code's own tool calls (`set` on `tool_use` blocks, `clear` on the matching `tool_result`). Note that `tokens` stays at 0 — Claude Code runs through its own provider account and we deliberately don't merge its `usage` fields into the kernel's token ledger (they'd mix with native LLM-adapter accounting that has different cache semantics). Spend is visible to the human via Claude Code's own UI and the `cli_output` event stream.
 - `claude_session_id` is set on the first event that carries a session id (typically the system `init` event, within ms of process start). This means `daemon(action="ask", id="em-N", message="...")` works the moment `emanate` returns — you don't have to wait for the initial task to complete. (Earlier versions wrote the session id only post-hoc by scanning `~/.claude/projects/`; that scan is now a fallback for the unusual case where the stream never carried a session id.)
 - stderr is captured to its own pipe (no longer merged into stdout) and persisted as `cli_output` events with `stream="stderr"`, so API errors, auth failures, and rate limits are visible during the run rather than buried in a buffered stdout.
-- `turn` is not incremented for CLI backends — Claude Code runs its own LLM loop and we don't see "turns" in the same sense. Use `tokens` and `cli_output` events to gauge progress instead.
+- `turn` is not incremented for CLI backends — Claude Code runs its own LLM loop and we don't see "turns" in the same sense. Use `last_output` and `cli_output` events to gauge progress.
 - An `is_error=true` in the final `result` event is surfaced as a failed emanation even when the underlying process exited 0, so an error reported inside the LLM stream doesn't masquerade as success.
+
+**Codex backend specifics.** Identical observability + resumability story as claude-code, with codex's own event vocabulary (`--json`):
+
+- `daemon(check)` sees live progress: `last_output` updates as each `item.completed` event with `type=agent_message` arrives. Note that `tokens` stays at 0 — codex runs through its own provider account, and its `cached_input_tokens` semantics differ from the kernel's LLM adapters (codex's `input_tokens` already includes the cached portion, anthropic's doesn't), so we deliberately don't merge codex's `usage` into the token ledger. Spend is visible via the codex CLI's own output and the `cli_output` event stream.
+- `codex_session_id` (stored as `daemon.json.codex_session_id`) is set on the first event — `{"type":"thread.started","thread_id":"<uuid>"}` — within ms of process start. `daemon(action="ask", id="em-N", message="...")` runs `codex exec resume <codex_session_id> --json "<message>"` and surfaces the resumed turn's reply text the same way `emanate` does.
+- stderr is captured to its own pipe (was: merged into stdout via `--ephemeral` mode) and persisted as `cli_output` events with `stream="stderr"`.
+- Codex doesn't emit an `is_error` flag like Claude Code; the kernel treats absence of a `turn.completed` event (combined with no captured `agent_message` items) as failure even when the process exits 0.
+- `--ephemeral` is intentionally NOT passed: it would disable session persistence and break `daemon(ask)`. Sessions persist under `~/.codex/sessions/` and can be re-resumed by ID for the lifetime of the session record.
 
 ## What the manual does NOT cover
 
