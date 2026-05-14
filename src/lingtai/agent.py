@@ -652,9 +652,8 @@ class Agent(BaseAgent):
             self._log("cpr_no_init", path=str(target))
             return None
 
-        # Clean stale signal files. ``.llm_hang`` is included so a CPR'd
-        # agent doesn't wake into the LLM-hang refusal loop. See issue #35.
-        for sig in (".suspend", ".sleep", ".interrupt", ".llm_hang"):
+        # Clean stale signal files so a CPR'd agent boots cleanly.
+        for sig in (".suspend", ".sleep", ".interrupt"):
             sig_file = target / sig
             if sig_file.is_file():
                 sig_file.unlink(missing_ok=True)

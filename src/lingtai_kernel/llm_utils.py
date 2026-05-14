@@ -30,10 +30,6 @@ class WorkerStillRunningError(TimeoutError):
     This is stronger than an ordinary provider timeout: the provider adapter
     may still hold and mutate the shared ChatInterface, so AED must not repair
     or retry against that interface in-process.
-
-    Carries the orphaned ``Future`` so callers (e.g. ``_send_with_watchdog``)
-    can attach an ``add_done_callback`` to clear the ``.llm_hang`` sentinel
-    once the worker eventually exits — see issue #35.
     """
 
     def __init__(self, *, elapsed: float, grace: float, agent_name: str,

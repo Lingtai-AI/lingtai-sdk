@@ -4,9 +4,7 @@ The core message lifecycle: receive → route → LLM → process → persist.
 """
 from __future__ import annotations
 
-import json
 import queue
-import threading
 import time
 
 from ..message import Message, _make_message, MSG_REQUEST, MSG_USER_INPUT, MSG_TC_WAKE
@@ -19,17 +17,6 @@ from ..sent_message_tracker import SEND_TOOLS, SEND_ACTIONS, CHECK_ACTIONS
 from ..time_veil import now_iso
 
 logger = get_logger()
-
-# LLM hang watchdog threshold (seconds). If session.send() blocks for
-# this long, the agent transitions to STUCK and a signal file is written.
-_LLM_HANG_THRESHOLD_SECONDS = 120.0
-_LLM_SLOW_THRESHOLD_SECONDS = 60.0
-
-# TTL for the .llm_hang sentinel (seconds). Once written, the sentinel is
-# considered stale after this long and is auto-cleared at the wake-refusal
-# check so the agent can recover without manual filesystem surgery. See
-# issue #35.
-_LLM_HANG_SENTINEL_TTL_SECONDS = 300.0
 
 
 class EmptyLLMResponseError(RuntimeError):
@@ -140,157 +127,6 @@ def _prepare_aed_retry_message(agent, err_desc: str) -> Message:
     return _make_message(MSG_REQUEST, "system", aed_msg)
 
 
-def _on_llm_hang(agent) -> None:
-    """Watchdog callback: LLM has been unresponsive for too long."""
-    from ..state import AgentState
-
-    agent._log("llm_hang_detected",
-               seconds=_LLM_HANG_THRESHOLD_SECONDS,
-               state=agent._state.value)
-
-    # Write signal file for TUI/supervisor visibility.
-    _write_llm_hang_signal(agent)
-
-    # Transition to STUCK if not already in a terminal state
-    if agent._state not in (AgentState.STUCK, AgentState.ASLEEP, AgentState.SUSPENDED):
-        agent._set_state(AgentState.STUCK, reason="LLM API unresponsive")
-
-
-
-
-def _write_llm_hang_signal(agent, **extra) -> None:
-    """Write/update the .llm_hang signal file for TUI/supervisor visibility."""
-    try:
-        hang_file = agent._working_dir / ".llm_hang"
-        payload = {
-            "detected_at": time.time(),
-            "threshold_seconds": _LLM_HANG_THRESHOLD_SECONDS,
-            **extra,
-        }
-        hang_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    except OSError:
-        pass
-
-
-def _llm_hang_signal_exists(agent) -> bool:
-    try:
-        return (agent._working_dir / ".llm_hang").exists()
-    except OSError:
-        return False
-
-
-def _llm_hang_signal_age(agent) -> float | None:
-    """Return seconds since the sentinel's recorded ``detected_at``.
-
-    Falls back to file mtime when the JSON is unreadable or missing the key,
-    so a sentinel written by an older format never traps the agent. Returns
-    ``None`` only if the file is gone or both reads fail.
-    """
-    hang_file = agent._working_dir / ".llm_hang"
-    try:
-        raw = hang_file.read_text(encoding="utf-8")
-    except OSError:
-        raw = None
-    if raw:
-        try:
-            payload = json.loads(raw)
-            detected_at = payload.get("detected_at")
-            if isinstance(detected_at, (int, float)):
-                return max(0.0, time.time() - float(detected_at))
-        except (ValueError, TypeError):
-            pass
-    try:
-        return max(0.0, time.time() - hang_file.stat().st_mtime)
-    except OSError:
-        return None
-
-
-def _remove_llm_hang_signal(agent) -> None:
-    try:
-        (agent._working_dir / ".llm_hang").unlink(missing_ok=True)
-    except OSError:
-        pass
-
-
-def _mark_worker_still_running(agent, err) -> None:
-    """Record that the provider worker survived timeout+grace."""
-    _write_llm_hang_signal(
-        agent,
-        worker_still_running_at=time.time(),
-        error=str(err),
-    )
-
-
-def _handle_worker_still_running(agent, err) -> None:
-    """Fail closed after a provider worker outlives timeout+grace.
-
-    The adapter may still mutate the shared ChatInterface, so do not run AED
-    repair or retry in this process. Leave a .llm_hang signal requiring an
-    explicit refresh before mail can wake the agent into ACTIVE processing.
-    """
-    from ..state import AgentState
-
-    err_desc = str(err) or repr(err)
-    agent._log("llm_worker_still_running", error=err_desc)
-    _mark_worker_still_running(agent, err)
-    agent._set_state(AgentState.STUCK, reason=err_desc)
-    agent._asleep.set()
-    agent._set_state(AgentState.ASLEEP, reason="LLM worker still running; refresh required")
-
-def _send_with_watchdog(agent, content):
-    """Wrap session.send with a hang watchdog.
-
-    Used by both _handle_request and _handle_tc_wake. Arms a background
-    timer; if session.send() blocks past the threshold, the timer fires
-    and transitions the agent to STUCK with a signal file. The timer is
-    cancelled in the finally block when send returns (whether success or
-    failure).
-    """
-    hang_timer = threading.Timer(
-        _LLM_HANG_THRESHOLD_SECONDS,
-        _on_llm_hang,
-        args=(agent,),
-    )
-    hang_timer.daemon = True
-    hang_timer.start()
-    from ..llm_utils import WorkerStillRunningError
-
-    keep_hang_signal = False
-    try:
-        return agent._session.send(content)
-    except WorkerStillRunningError as err:
-        keep_hang_signal = True
-        _mark_worker_still_running(agent, err)
-        # When the orphaned worker future eventually settles (provider
-        # finally returns, raises, or its HTTP client drops the socket),
-        # clear the sentinel so the agent can wake without waiting out the
-        # TTL. The callback runs on the worker thread; only filesystem ops
-        # touch agent state, so this is safe. See issue #35.
-        future = getattr(err, "future", None)
-        if future is not None:
-            def _on_worker_exit(_fut, _agent=agent):
-                try:
-                    _remove_llm_hang_signal(_agent)
-                    _agent._log("llm_hang_cleared", reason="worker_exited")
-                except Exception:
-                    # Never let a cleanup callback raise into the pool.
-                    pass
-            try:
-                future.add_done_callback(_on_worker_exit)
-            except Exception:
-                # If the pool is gone or callback registration fails, fall
-                # back to TTL-based recovery at the wake-refusal site.
-                pass
-        raise
-    finally:
-        hang_timer.cancel()
-        # Clean up signal file only when the send resolved or failed with an
-        # ordinary, settled exception. If the worker is still alive, the
-        # signal remains as a wake-time refresh requirement.
-        if not keep_hang_signal:
-            _remove_llm_hang_signal(agent)
-
-
 def _run_loop(agent) -> None:
     """Wait for messages, process them. Agent persists between messages."""
     from ..state import AgentState
@@ -339,41 +175,6 @@ def _run_loop(agent) -> None:
                 if msg is None:
                     break  # shutdown was set — exit inner loop
 
-                if _llm_hang_signal_exists(agent):
-                    # TTL recovery: a sentinel older than the TTL is presumed
-                    # stale (the orphaned worker is long gone but its done
-                    # callback never fired, e.g. process restart in the
-                    # interim). Clear it and proceed with the wake instead
-                    # of leaving the agent stranded forever. See issue #35.
-                    age = _llm_hang_signal_age(agent)
-                    if age is not None and age > _LLM_HANG_SENTINEL_TTL_SECONDS:
-                        _remove_llm_hang_signal(agent)
-                        agent._log(
-                            "llm_hang_cleared",
-                            reason="ttl_expired",
-                            age_seconds=round(age, 1),
-                        )
-                    else:
-                        remaining = (
-                            _LLM_HANG_SENTINEL_TTL_SECONDS - age
-                            if age is not None
-                            else _LLM_HANG_SENTINEL_TTL_SECONDS
-                        )
-                        reason = (
-                            f"LLM hang detected. Sentinel auto-clears in "
-                            f"{int(max(0, remaining))} seconds, or use "
-                            f"system(action='refresh') to clear immediately."
-                        )
-                        agent._log(
-                            "wake_refused_llm_hang",
-                            trigger=msg.type,
-                            age_seconds=(round(age, 1) if age is not None else None),
-                            ttl_remaining_seconds=int(max(0, remaining)),
-                        )
-                        agent._asleep.set()
-                        agent._set_state(AgentState.ASLEEP, reason=reason)
-                        continue
-
                 # Wake up
                 agent._asleep.clear()
                 agent._cancel_event.clear()  # clear stale sleep/stamina signal
@@ -403,13 +204,23 @@ def _run_loop(agent) -> None:
                 except Exception as e:
                     from ..llm_utils import WorkerStillRunningError
 
+                    err_desc = str(e) or repr(e)
+
                     if isinstance(e, WorkerStillRunningError):
-                        _handle_worker_still_running(agent, e)
+                        # Worker future is still alive — ChatInterface is
+                        # unsafe to mutate from this thread. Skip chat
+                        # save and put the agent to sleep; a refresh will
+                        # bring up a fresh interface.
+                        agent._log("llm_worker_still_running", error=err_desc[:300])
+                        agent._set_state(AgentState.STUCK, reason=err_desc)
+                        agent._asleep.set()
+                        agent._set_state(
+                            AgentState.ASLEEP,
+                            reason="LLM worker still running; refresh recommended",
+                        )
                         sleep_state = AgentState.ASLEEP
                         skip_post_turn_save = True
                         break
-
-                    err_desc = str(e) or repr(e)
 
                     if _is_transient_provider_error(e):
                         if transient_attempts < _TRANSIENT_AED_RETRY_LIMIT:
@@ -713,7 +524,7 @@ def _handle_request(agent, msg: Message) -> None:
     if prefix:
         content = f"{prefix}\n\n{content}"
     agent._log("text_input", text=content)
-    response = _send_with_watchdog(agent, content)
+    response = agent._session.send(content)
     agent._last_usage = response.usage
     agent._save_chat_history()
     result = _process_response(agent, response)
@@ -793,7 +604,7 @@ def _handle_tc_wake(agent, msg: Message) -> None:
             agent._save_chat_history()
 
             agent._log("tc_wake_dispatch", source=item.source, call_id=item.call.id)
-            response = _send_with_watchdog(agent, [item.result])
+            response = agent._session.send([item.result])
             agent._last_usage = response.usage
             agent._save_chat_history(ledger_source="tc_wake")
             _process_response(agent, response, ledger_source="tc_wake")
@@ -842,7 +653,7 @@ def _handle_tc_wake(agent, msg: Message) -> None:
 
     try:
         agent._log("tc_wake_continue")
-        response = _send_with_watchdog(agent, None)
+        response = agent._session.send(None)
         agent._last_usage = response.usage
         agent._save_chat_history(ledger_source="tc_wake")
         _process_response(agent, response, ledger_source="tc_wake")
@@ -1060,7 +871,7 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         # turn. Commit the tool_results to the wire so the assistant turn
         # we just sent has matching pairs (no dangling tool_calls), then
         # return without re-sending to the LLM. Without this, the loop
-        # would call _send_with_watchdog(tool_results) below, get back a
+        # would call agent._session.send(tool_results) below, get back a
         # new assistant response with NEW tool_calls, save those to the
         # wire — and then the cancel check at the top of the next
         # iteration would return, leaving those new tool_calls dangling.
@@ -1105,7 +916,7 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
             break
 
         in_tool_loop = True
-        response = _send_with_watchdog(agent, tool_results)
+        response = agent._session.send(tool_results)
         agent._last_usage = response.usage
         agent._save_chat_history(ledger_source=ledger_source)
 

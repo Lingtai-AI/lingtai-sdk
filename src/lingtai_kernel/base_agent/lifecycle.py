@@ -202,8 +202,7 @@ def _heartbeat_loop(agent) -> None:
             except OSError:
                 pass
             # Delegate to _perform_refresh which handles the full flow:
-            # .llm_hang clear, save chat history, spawn watcher process,
-            # and deferred relaunch.
+            # save chat history, spawn watcher process, deferred relaunch.
             _perform_refresh(agent)
             # Signal shutdown so the heartbeat loop exits and the watcher
             # can detect the lock release.  The _shutdown gate above
@@ -385,7 +384,7 @@ def _heartbeat_loop(agent) -> None:
 
 
 def _perform_refresh(agent) -> None:
-    """Refresh = .llm_hang clear + .refresh handshake + deferred relaunch.
+    """Refresh = .refresh handshake + deferred relaunch.
 
     Self-sufficient across all call sites — heartbeat, tool-call (intrinsic
     ``system(action='refresh')``), and AED preset-fallback in ``turn.py`` all
@@ -404,17 +403,6 @@ def _perform_refresh(agent) -> None:
     import sys
 
     agent._log("refresh_start")
-    # Recovery path: refresh exists to unstick error states, so unconditionally
-    # drop the .llm_hang sentinel here. Without this, a hung-LLM agent that
-    # gets refreshed comes back up only to be re-stuck the moment it transitions
-    # to ASLEEP and tries to wake. See issue #35.
-    hang_file = agent._working_dir / ".llm_hang"
-    if hang_file.exists():
-        try:
-            hang_file.unlink(missing_ok=True)
-            agent._log("llm_hang_cleared", reason="refresh")
-        except OSError:
-            pass
     agent._save_chat_history()
     # Bound-method dispatch — _build_launch_cmd lives on BaseAgent (returns
     # None) and Agent (returns the real `lingtai-agent run` cmd). A prior version
