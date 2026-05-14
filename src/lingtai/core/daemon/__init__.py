@@ -785,10 +785,23 @@ class DaemonManager:
     ) -> str:
         """Run a Codex CLI session as the emanation backend.
 
-        Spawns ``codex exec <task>`` and records stdout in the daemon run
-        directory. Unlike Claude Code, Codex has no session
-        resumption or JSONL session discovery — each invocation is
-        one-shot.
+        Spawns Codex with ``--json`` so events arrive as JSONL (one event
+        per stdout line), and parses them so the daemon shows live
+        progress and captures a resumable session id — mirroring the
+        Claude Code backend. ``--ephemeral`` is intentionally **not**
+        passed: it would disable session persistence and break
+        ``daemon(ask, id=em-N)``.
+
+        Event shapes (codex-cli 0.128.0):
+        - ``{"type":"thread.started","thread_id":"<uuid>"}`` — first event,
+          carries the session id we'll later pass to
+          ``codex exec resume <id>``.
+        - ``{"type":"turn.started"}`` — marks an agent turn beginning.
+        - ``{"type":"item.completed","item":{"type":"agent_message","text":"..."}}``
+          — visible agent reply text.
+        - ``{"type":"turn.completed","usage":{"input_tokens","output_tokens",
+          "cached_input_tokens","reasoning_output_tokens"}}`` — terminal,
+          includes token accounting.
         """
         def _exit_cancelled() -> str:
             if timeout_event is not None and timeout_event.is_set():
@@ -803,8 +816,8 @@ class DaemonManager:
         cmd = [
             "codex",
             "exec",
+            "--json",
             "--dangerously-bypass-approvals-and-sandbox",
-            "--ephemeral",
             task,
         ]
         self._log("daemon_codex_start", em_id=em_id, cmd=" ".join(cmd))
@@ -813,7 +826,7 @@ class DaemonManager:
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
+                stderr=subprocess.PIPE,
                 text=True,
                 cwd=str(self._agent._working_dir),
             )
@@ -826,10 +839,41 @@ class DaemonManager:
             run_dir.mark_failed(exc)
             raise exc
 
-        output_lines: list[str] = []
+        stderr_lines: list[str] = []
+
+        def _drain_stderr() -> None:
+            assert proc.stderr is not None
+            for line in proc.stderr:
+                stripped = line.rstrip("\n")
+                if not stripped:
+                    continue
+                stderr_lines.append(stripped)
+                try:
+                    run_dir.record_cli_output(stripped, stream="stderr")
+                except Exception:
+                    pass
+
+        stderr_thread = threading.Thread(
+            target=_drain_stderr, daemon=True, name=f"daemon-codex-stderr-{em_id}",
+        )
+        stderr_thread.start()
+
+        session_id_captured: str | None = None
+        agent_message_texts: list[str] = []
+        turn_completed = False
+
+        def _store_session_id(sid: str) -> None:
+            nonlocal session_id_captured
+            if session_id_captured == sid:
+                return
+            session_id_captured = sid
+            run_dir._state["codex_session_id"] = sid
+            run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
+            self._log("daemon_codex_session", em_id=em_id, session_id=sid)
+
         try:
             assert proc.stdout is not None
-            for line in proc.stdout:
+            for raw_line in proc.stdout:
                 if cancel_event.is_set():
                     proc.terminate()
                     try:
@@ -837,10 +881,44 @@ class DaemonManager:
                     except subprocess.TimeoutExpired:
                         proc.kill()
                     return _exit_cancelled()
-                output_lines.append(line)
-                stripped = line.rstrip("\n")
-                if stripped:
-                    run_dir.record_cli_output(stripped, stream="combined")
+
+                line = raw_line.rstrip("\n")
+                if not line:
+                    continue
+
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    # Defensive: surface non-JSON lines as raw stdout
+                    # instead of crashing the parser.
+                    run_dir.record_cli_output(line, stream="stdout")
+                    continue
+
+                etype = event.get("type")
+                if etype == "thread.started":
+                    tid = event.get("thread_id")
+                    if tid:
+                        _store_session_id(tid)
+                elif etype == "item.completed":
+                    item = event.get("item") or {}
+                    if item.get("type") == "agent_message":
+                        text = item.get("text") or ""
+                        if text.strip():
+                            agent_message_texts.append(text)
+                            run_dir.record_cli_output(text, stream="stdout")
+                elif etype == "turn.completed":
+                    turn_completed = True
+                    usage = event.get("usage") or {}
+                    if usage:
+                        try:
+                            run_dir.append_tokens(
+                                input=int(usage.get("input_tokens") or 0),
+                                output=int(usage.get("output_tokens") or 0),
+                                thinking=int(usage.get("reasoning_output_tokens") or 0),
+                                cached=int(usage.get("cached_input_tokens") or 0),
+                            )
+                        except Exception:
+                            pass
 
             proc.wait()
         except Exception as e:
@@ -848,18 +926,33 @@ class DaemonManager:
             proc.wait()
             run_dir.mark_failed(e)
             raise
+        finally:
+            stderr_thread.join(timeout=2.0)
 
-        full_output = "".join(output_lines)
+        stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
 
         if proc.returncode != 0:
+            detail = stderr_tail or "\n".join(agent_message_texts[-3:])
             exc = RuntimeError(
                 f"codex CLI exited with code {proc.returncode}: "
-                f"{full_output[-500:]}"
+                f"{detail[-500:]}"
             )
             run_dir.mark_failed(exc)
             raise exc
 
-        text = full_output.strip() or "[no output]"
+        # Codex doesn't emit an `is_error` flag like Claude Code; the
+        # signal that the turn finished cleanly is a `turn.completed`
+        # event. If we never saw one AND captured no agent messages,
+        # treat that as a failure even though the process exited 0.
+        if not turn_completed and not agent_message_texts:
+            exc = RuntimeError(
+                f"codex CLI produced no turn.completed event: "
+                f"{(stderr_tail or '[no output]')[-500:]}"
+            )
+            run_dir.mark_failed(exc)
+            raise exc
+
+        text = "\n".join(agent_message_texts).strip() or "[no output]"
         run_dir.mark_done(text)
         return text
 
@@ -964,7 +1057,8 @@ class DaemonManager:
 
         # Clear completed emanations and stale pools.
         # Keep completed CLI emanations (backend != lingtai) so that `ask`
-        # can still route to `_handle_ask_cli` and `list` can show them.
+        # can still route to `_handle_ask_cli` / `_handle_ask_codex`
+        # and `list` can show them.
         self._emanations = {
             k: v for k, v in self._emanations.items()
             if not v["future"].done() or v.get("backend") not in (None, "lingtai")
@@ -1252,12 +1346,16 @@ class DaemonManager:
         if not entry:
             return {"status": "error", "message": f"Unknown emanation: {em_id}"}
 
-        # Claude Code backend: resume the session with --resume <session-id>
-        if entry.get("backend") == "claude-code":
+        # CLI backends with resumable sessions:
+        #   - claude-code: `claude --resume <claude_session_id>`
+        #   - codex:       `codex exec resume <codex_session_id>`
+        # Both stream JSONL events through the resumed turn so
+        # `daemon(check)` shows live progress.
+        backend = entry.get("backend")
+        if backend == "claude-code":
             return self._handle_ask_cli(em_id, entry, message)
-        if entry.get("backend") == "codex":
-            return {"status": "error",
-                    "message": "ask is not supported for codex backends (one-shot execution)"}
+        if backend == "codex":
+            return self._handle_ask_codex(em_id, entry, message)
 
         if entry["future"].done():
             return {"status": "error", "message": "not running"}
@@ -1397,6 +1495,152 @@ class DaemonManager:
                                f"{(final_result_text or stderr_tail)[-500:]}"}
 
         output = (final_result_text or "").strip()
+        if output:
+            self._publish_daemon_notification(
+                em_id, status="follow-up completed", text=output, run_dir=run_dir
+            )
+
+        return {"status": "sent", "id": em_id, "output": output}
+
+    def _handle_ask_codex(self, em_id: str, entry: dict, message: str) -> dict:
+        """Send a follow-up message to a Codex session via ``codex exec resume``.
+
+        Parallel of ``_handle_ask_cli`` but for the Codex JSONL event
+        vocabulary: ``thread.started`` carries the (re-)opened session
+        id, ``item.completed`` with ``type=agent_message`` carries the
+        reply text, ``turn.completed`` is the terminal event. Same
+        record_cli_output / separated-stderr / live-progress behavior
+        as the claude-code ask path.
+        """
+        run_dir = entry.get("run_dir")
+        if run_dir is None:
+            return {"status": "error", "message": f"emanation {em_id} has no run_dir"}
+
+        session_id = run_dir._state.get("codex_session_id")
+        if not session_id:
+            return {"status": "error",
+                    "message": f"No codex session ID found for {em_id}. "
+                               "The emanation may still be initializing — "
+                               "wait a moment and retry."}
+
+        cmd = [
+            "codex",
+            "exec",
+            "resume",
+            session_id,
+            "--json",
+            "--dangerously-bypass-approvals-and-sandbox",
+            message,
+        ]
+        self._log("daemon_codex_ask", em_id=em_id,
+                  session_id=session_id, message_length=len(message))
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=str(self._agent._working_dir),
+            )
+        except FileNotFoundError:
+            return {"status": "error",
+                    "message": "'codex' CLI not found on PATH"}
+        except OSError as e:
+            return {"status": "error",
+                    "message": f"Failed to start codex CLI: {e}"}
+
+        stderr_lines: list[str] = []
+
+        def _drain_stderr() -> None:
+            assert proc.stderr is not None
+            for line in proc.stderr:
+                stripped = line.rstrip("\n")
+                if not stripped:
+                    continue
+                stderr_lines.append(stripped)
+                try:
+                    run_dir.record_cli_output(stripped, stream="stderr")
+                except Exception:
+                    pass
+
+        stderr_thread = threading.Thread(
+            target=_drain_stderr, daemon=True,
+            name=f"daemon-codex-ask-stderr-{em_id}",
+        )
+        stderr_thread.start()
+
+        agent_message_texts: list[str] = []
+        turn_completed = False
+
+        try:
+            assert proc.stdout is not None
+            deadline = time.monotonic() + self._timeout
+            for raw_line in proc.stdout:
+                if time.monotonic() > deadline:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    return {"status": "error",
+                            "message": f"codex exec resume timed out after "
+                                       f"{self._timeout}s"}
+                line = raw_line.rstrip("\n")
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    run_dir.record_cli_output(line, stream="stdout")
+                    continue
+
+                etype = event.get("type")
+                if etype == "item.completed":
+                    item = event.get("item") or {}
+                    if item.get("type") == "agent_message":
+                        text = item.get("text") or ""
+                        if text.strip():
+                            agent_message_texts.append(text)
+                            run_dir.record_cli_output(text, stream="stdout")
+                elif etype == "turn.completed":
+                    turn_completed = True
+                    usage = event.get("usage") or {}
+                    if usage:
+                        try:
+                            run_dir.append_tokens(
+                                input=int(usage.get("input_tokens") or 0),
+                                output=int(usage.get("output_tokens") or 0),
+                                thinking=int(usage.get("reasoning_output_tokens") or 0),
+                                cached=int(usage.get("cached_input_tokens") or 0),
+                            )
+                        except Exception:
+                            pass
+
+            proc.wait(timeout=max(1.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            return {"status": "error",
+                    "message": f"codex exec resume timed out after "
+                               f"{self._timeout}s"}
+        finally:
+            stderr_thread.join(timeout=2.0)
+
+        stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
+
+        if proc.returncode != 0:
+            detail = stderr_tail or "\n".join(agent_message_texts[-3:])
+            return {"status": "error",
+                    "message": f"codex CLI exited {proc.returncode}: "
+                               f"{detail[-500:]}"}
+
+        if not turn_completed and not agent_message_texts:
+            return {"status": "error",
+                    "message": f"codex exec resume produced no turn.completed "
+                               f"event: {(stderr_tail or '[no output]')[-500:]}"}
+
+        output = "\n".join(agent_message_texts).strip()
         if output:
             self._publish_daemon_notification(
                 em_id, status="follow-up completed", text=output, run_dir=run_dir

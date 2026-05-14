@@ -134,8 +134,8 @@ The `backend` parameter selects the execution engine for emanations. Default is 
 | Backend | CLI command | Session resume | Notes |
 |---------|------------|----------------|-------|
 | `lingtai` | (built-in) | N/A — in-process `ask` | Default. Uses preset resolution, tool surface curation, model routing. |
-| `claude-code` | `claude --print --dangerously-skip-permissions --output-format stream-json --verbose --name <em_id> <task>` | `claude --resume <session-id>` via `ask` | Session ID captured from the first event of the stream-json output (typically within ms of process start), so `ask` is usable as soon as `emanate` returns — even while the initial task is still running. |
-| `codex` | `codex exec <task>` | Not supported | One-shot execution. No session ID, no `--resume`. `ask` is not available for codex emanations. |
+| `claude-code` | `claude --print --dangerously-skip-permissions --output-format stream-json --verbose --name <em_id> <task>` | `claude --resume <claude_session_id>` via `ask` | Session ID captured from the first event of the stream-json output (typically within ms of process start), so `ask` is usable as soon as `emanate` returns — even while the initial task is still running. |
+| `codex` | `codex exec --json --dangerously-bypass-approvals-and-sandbox <task>` | `codex exec resume <codex_session_id>` via `ask` | Mirrors claude-code. `thread.started` event carries the session id (codex internally calls it `thread_id`), captured immediately. `ask` resumes the same conversation context. |
 
 **When to use CLI backends:** When the task benefits from a different agent runtime's tool surface (e.g., Claude Code's built-in file editing, Codex's sandboxed execution) rather than the lingtai emanation's curated tool set.
 
@@ -152,6 +152,14 @@ The `backend` parameter selects the execution engine for emanations. Default is 
 - stderr is captured to its own pipe (no longer merged into stdout) and persisted as `cli_output` events with `stream="stderr"`, so API errors, auth failures, and rate limits are visible during the run rather than buried in a buffered stdout.
 - `turn` is not incremented for CLI backends — Claude Code runs its own LLM loop and we don't see "turns" in the same sense. Use `tokens` and `cli_output` events to gauge progress instead.
 - An `is_error=true` in the final `result` event is surfaced as a failed emanation even when the underlying process exited 0, so an error reported inside the LLM stream doesn't masquerade as success.
+
+**Codex backend specifics.** Identical observability + resumability story as claude-code, with codex's own event vocabulary (`--json`):
+
+- `daemon(check)` sees live progress: `last_output` updates as each `item.completed` event with `type=agent_message` arrives; `tokens` accumulate from the `turn.completed` event's `usage` block (`input_tokens`, `output_tokens`, `cached_input_tokens`, `reasoning_output_tokens`).
+- `codex_session_id` (stored as `daemon.json.codex_session_id`) is set on the first event — `{"type":"thread.started","thread_id":"<uuid>"}` — within ms of process start. `daemon(action="ask", id="em-N", message="...")` runs `codex exec resume <codex_session_id> --json "<message>"` and surfaces the resumed turn's reply text the same way `emanate` does.
+- stderr is captured to its own pipe (was: merged into stdout via `--ephemeral` mode) and persisted as `cli_output` events with `stream="stderr"`.
+- Codex doesn't emit an `is_error` flag like Claude Code; the kernel treats absence of a `turn.completed` event (combined with no captured `agent_message` items) as failure even when the process exits 0.
+- `--ephemeral` is intentionally NOT passed: it would disable session persistence and break `daemon(ask)`. Sessions persist under `~/.codex/sessions/` and can be re-resumed by ID for the lifetime of the session record.
 
 ## What the manual does NOT cover
 

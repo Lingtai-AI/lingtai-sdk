@@ -35,12 +35,13 @@ daemon/__init__.py
   ├── _build_emanation_prompt()     — composes the subagent's system prompt
   ├── _run_emanation()              — lingtai-backend worker tool loop (send → tool_calls → results)
   ├── _run_claude_code_emanation()  — claude-code backend; parses `--output-format stream-json --verbose` events in real time so `claude_session_id`, per-turn text, tool_use/tool_result, and token usage land in DaemonRunDir during the run (vs. post-hoc)
-  ├── _run_codex_emanation()        — codex backend; one-shot `codex exec`, stdout streamed to record_cli_output
+  ├── _run_codex_emanation()        — codex backend; parses `codex exec --json` JSONL events (thread.started → codex_session_id, item.completed → agent_message text, turn.completed → token usage). Symmetric with the claude-code backend.
   ├── _find_claude_session_id()     — legacy `~/.claude/projects/` JSONL scan; now only a fallback when the stream-json `session_id` capture fails
   ├── _handle_emanate()             — validates presets, creates DaemonRunDir, submits to pool
   ├── _handle_list/check/reclaim    — individual action handlers
-  ├── _handle_ask()                 — dispatcher: routes claude-code asks to _handle_ask_cli, lingtai asks to the followup buffer
-  ├── _handle_ask_cli()             — claude-code follow-up via `claude --resume <session-id>`; same stream-json parse as _run_claude_code_emanation, so `daemon(check)` sees progress on follow-ups too
+  ├── _handle_ask()                 — dispatcher: routes claude-code and codex asks to their stream-json followup handlers; routes lingtai asks to the in-process followup buffer
+  ├── _handle_ask_cli()             — claude-code follow-up via `claude --resume <claude_session_id>`; same stream-json parse as _run_claude_code_emanation
+  ├── _handle_ask_codex()           — codex follow-up via `codex exec resume <codex_session_id> --json`; same JSONL parse as _run_codex_emanation, so `daemon(check)` sees progress on follow-ups too
   ├── _watchdog()                   — timeout enforcement thread
   ├── _publish_daemon_notification() — publishes compact system notifications
   └── _drain_followup()             — drains per-emanation follow-up buffer (lingtai backend only)
@@ -69,7 +70,7 @@ daemon/run_dir.py
 - **Dual token ledger:** Token usage is written to both the daemon's own ledger and the parent's ledger with `source=daemon` attribution.
 - **CLI progress stays inspectable, not conversational:** Claude Code/Codex stdout is persisted as `cli_output` events plus `daemon.json.last_output`; completion/failure publishes a bounded `system` notification pointing the parent to `daemon(action="check", id=...)`.
 - **Full results live on disk:** `mark_done()` writes complete terminal output to `result.txt`; `daemon.json.result_preview` and notification bodies stay bounded.
-- **Claude Code backend streams structured events, not buffered text.** `_run_claude_code_emanation` and `_handle_ask_cli` use `--output-format stream-json --verbose` so each Claude Code event (`system`/`init`, `assistant`, `user`, `result`) arrives on its own stdout line and is parsed live. The first event that carries a `session_id` writes `claude_session_id` to `daemon.json` immediately, so `daemon(action="ask")` is usable from the moment `emanate` returns rather than after the initial task completes. stderr drains in a background thread to its own pipe (no longer merged into stdout), so API/auth/rate-limit errors surface as `cli_output` events with `stream="stderr"`. A final `result` event with `is_error=true` is surfaced as `mark_failed`, so an error inside the LLM stream doesn't masquerade as success even when the underlying process exits 0. See GH issues #99 / #100 / #101 for the prior buffered-text failure mode that motivated this design.
+- **CLI backends stream structured events, not buffered text.** Both `_run_claude_code_emanation` / `_handle_ask_cli` (using `claude --output-format stream-json --verbose`) and `_run_codex_emanation` / `_handle_ask_codex` (using `codex exec --json`) parse one JSON event per stdout line as it arrives. The first event that carries a session id writes it to `daemon.json` (`claude_session_id` or `codex_session_id`) immediately — typically within ms of process start, well before any LLM work — so `daemon(action="ask")` is usable from the moment `emanate` returns rather than after the initial task completes. stderr drains in a background thread to its own pipe (no longer merged into stdout), so API/auth/rate-limit errors surface as `cli_output` events with `stream="stderr"`. For claude-code: a final `result` event with `is_error=true` is surfaced as `mark_failed`, so an error inside the LLM stream doesn't masquerade as success even when the underlying process exits 0. For codex: absence of a `turn.completed` event (combined with no captured `agent_message`s) is treated as failure similarly. Codex's `--ephemeral` flag is intentionally NOT passed: it would disable session persistence and break `daemon(ask)`. See GH issues #99 / #100 / #101 for the prior buffered-text failure mode that motivated this design.
 
 ## Dependencies
 
