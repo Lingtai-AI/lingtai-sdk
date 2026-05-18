@@ -22,7 +22,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 
 ### Key functions / classes
 
-**`agent.py`** — `Agent(BaseAgent)`: `__init__` :33 (expand groups, decompress addons, setup caps, install manuals, load MCP) · `_setup_capability` :136 · `_persist_llm_config` :111 · `_install_intrinsic_manuals` :158 · `_load_mcp_from_workdir` :360 (also tracks specs in `_mcp_init_specs`) · `_retry_failed_mcps` :508 (re-spawn dead MCPs on `system(refresh)` — issue #34) · `_read_init` :818 (read + materialize preset + validate) · `_setup_from_init` :954 (**full reconstruct** — shared by boot and live refresh) · `_activate_preset` :880 (runtime swap, atomic write) · `_reload_prompt_sections` :1167 · `connect_mcp` :689 / `connect_mcp_http` :741 · `start` :682 / `stop` :787
+**`agent.py`** — `Agent(BaseAgent)`: `__init__` :33 (accept `capabilities=` + `disable=`, expand groups, `apply_core_defaults`, decompress addons, setup caps, install manuals, load MCP) · `_setup_capability` :148 · `_persist_llm_config` :123 · `_install_intrinsic_manuals` :170 · `_load_mcp_from_workdir` :372 (also tracks specs in `_mcp_init_specs`) · `_retry_failed_mcps` :520 (re-spawn dead MCPs on `system(refresh)` — issue #34) · `_read_init` :829 (read + materialize preset + validate) · `_setup_from_init` :965 (**full reconstruct** — shared by boot and live refresh; reads `manifest.disable` and re-applies `apply_core_defaults`) · `_activate_preset` :891 (runtime swap, atomic write) · `_reload_prompt_sections` :1200 · `connect_mcp` :700 / `connect_mcp_http` :752 · `start` :693 / `stop` :798
 
 **`cli.py`**: `load_init` :21 · `build_agent` :72 · `run` :200 · `main` :246
 
@@ -48,7 +48,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 
 **Agent → BaseAgent:** Three-layer hierarchy: `BaseAgent` (kernel) → `Agent` (capabilities) → `CustomAgent` (domain). Agent adds capability registration, MCP auto-loading, preset swap, full init.json reconstruct.
 
-**Capability registration:** `setup_capability()` in `capabilities/__init__.py`; `@register_capability` decorator. Agent calls `_setup_capability` (agent.py:136) during `__init__` and `_setup_from_init`.
+**Capability registration:** `setup_capability()` in `capabilities/__init__.py`; the registry is `_BUILTIN` (per-capability module paths) plus `CORE_DEFAULTS` (which boot automatically). Agent calls `apply_core_defaults` + `_setup_capability` (agent.py:148) during `__init__` and `_setup_from_init`. Hosts disable defaults via the `disable=[...]` kwarg or `manifest.disable` in init.json.
 
 **Preset materialization:** `materialize_active_preset` (`lingtai_kernel/presets.py:290`) called by `cli.load_init` (boot) and `Agent._read_init` (refresh). Reads `manifest.preset.active`, loads preset, substitutes `llm`+`capabilities` into manifest before validation.
 

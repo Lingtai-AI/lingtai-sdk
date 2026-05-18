@@ -49,6 +49,7 @@ MANIFEST_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     "agent_name": (str, type(None)),
     "language": str,
     "capabilities": dict,
+    "disable": list,
     "soul": dict,
     "stamina": (int, float),
     "context_limit": (int, type(None)),

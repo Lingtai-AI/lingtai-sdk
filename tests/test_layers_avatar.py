@@ -352,10 +352,16 @@ class TestAddCapability:
         assert isinstance(avatar_mgr, AvatarManager)
 
     def test_capabilities_log(self, tmp_path):
-        """Agent should record (name, kwargs) in _capabilities."""
+        """Agent should record (name, kwargs) in _capabilities.
+
+        Core defaults are recorded too — the assertions here verify that
+        explicit caller-supplied kwargs land in `_capabilities` with the
+        expected merged shape.
+        """
         from lingtai.agent import Agent
         agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
                            capabilities={"bash": {"yolo": True}, "avatar": {}})
-        assert len(agent._capabilities) == 2
-        assert agent._capabilities[0] == ("bash", {"yolo": True})
-        assert agent._capabilities[1] == ("avatar", {})
+        caps_by_name = {name: kwargs for name, kwargs in agent._capabilities}
+        # `bash` default is {"yolo": True}; explicit override merges → still yolo
+        assert caps_by_name.get("bash") == {"yolo": True}
+        assert caps_by_name.get("avatar") == {}

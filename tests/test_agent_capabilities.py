@@ -26,28 +26,71 @@ class FakeSearchService(SearchService):
         return [SearchResult(title="t", url="u", snippet="s")]
 
 
-def test_agent_no_capabilities(tmp_path):
-    """Agent with no capabilities works like BaseAgent."""
+def test_agent_no_capabilities_boots_core_floor(tmp_path):
+    """Agent with no explicit capabilities still boots the `lingtai.core.*` floor.
+
+    The default-on set covers knowledge/skills/bash/avatar/daemon/mcp + file caps.
+    Opt-in capabilities (vision, web_search) stay off until requested.
+    """
+    from lingtai.capabilities import CORE_DEFAULTS
     agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
-    assert agent._capabilities == []
-    assert agent._capability_managers == {}
+    registered = {name for name, _ in agent._capabilities}
+    assert registered == set(CORE_DEFAULTS), (
+        f"expected exactly the core defaults, got {registered - set(CORE_DEFAULTS)} extra / "
+        f"{set(CORE_DEFAULTS) - registered} missing"
+    )
+    assert "vision" not in registered
+    assert "web_search" not in registered
+    agent.stop(timeout=1.0)
+
+
+def test_agent_disable_strips_core_capability(tmp_path):
+    """`disable=[...]` opt-out drops a default-on capability."""
+    agent = Agent(
+        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
+        disable=["bash", "avatar"],
+    )
+    registered = {name for name, _ in agent._capabilities}
+    assert "bash" not in registered
+    assert "avatar" not in registered
+    assert "knowledge" in registered  # other defaults still on
+    agent.stop(timeout=1.0)
+
+
+def test_agent_capabilities_dict_kwarg_overrides_default(tmp_path):
+    """Passing kwargs for a default-on capability merges over the defaults.
+
+    `bash` defaults to {"yolo": True}; passing `policy_file` keeps yolo (since
+    the override is a merge, not a replace) — hosts wanting strict sandbox
+    should set `{"yolo": False, "policy_file": "..."}`.
+    """
+    agent = Agent(
+        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
+        capabilities={"bash": {"yolo": False}},
+    )
+    bash_entry = [(n, k) for n, k in agent._capabilities if n == "bash"]
+    assert bash_entry and bash_entry[0][1].get("yolo") is False
     agent.stop(timeout=1.0)
 
 
 def test_agent_capabilities_list(tmp_path):
-    """capabilities= as list of strings registers capabilities (using file caps that need no key)."""
+    """capabilities= as list of strings is honored alongside the core defaults."""
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         capabilities=["read", "write"],
     )
-    assert len(agent._capabilities) == 2
-    assert ("read", {}) in agent._capabilities
-    assert ("write", {}) in agent._capabilities
+    registered = {name for name, _ in agent._capabilities}
+    assert "read" in registered
+    assert "write" in registered
     agent.stop(timeout=1.0)
 
 
 def test_agent_capabilities_dict(tmp_path):
-    """capabilities= as dict registers capabilities with kwargs."""
+    """capabilities= as dict registers user-supplied capabilities with kwargs.
+
+    Core defaults still register alongside; the assertion focuses on the
+    opt-in tools getting their handler wired.
+    """
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         capabilities={
@@ -55,7 +98,9 @@ def test_agent_capabilities_dict(tmp_path):
             "web_search": {"search_service": FakeSearchService()},
         },
     )
-    assert len(agent._capabilities) == 2
+    registered = {name for name, _ in agent._capabilities}
+    assert "vision" in registered
+    assert "web_search" in registered
     assert "vision" in agent._tool_handlers
     assert "web_search" in agent._tool_handlers
     agent.stop(timeout=1.0)

@@ -36,6 +36,7 @@ class Agent(BaseAgent):
         capabilities: list[str] | dict[str, dict] | None = None,
         addons: list[str] | None = None,
         combo_name: str | None = None,
+        disable: list[str] | None = None,
         **kwargs: Any,
     ):
         # Default karma authority for the primary agent (本我)
@@ -67,11 +68,22 @@ class Agent(BaseAgent):
                     for sub in _GROUPS[name]:
                         expanded_dict[sub] = {}
                 elif cap_kwargs is None:
-                    expanded_dict[name] = {}
+                    expanded_dict[name] = None  # propagate disable-sentinel
                 else:
                     expanded_dict[name] = cap_kwargs
-            capabilities = normalize_capabilities(expanded_dict)
+            capabilities = normalize_capabilities(
+                {n: (v if v is not None else {}) for n, v in expanded_dict.items()}
+            )
+            # Preserve null sentinels for apply_core_defaults to interpret as opt-out.
+            for n, v in expanded_dict.items():
+                if v is None:
+                    capabilities[n] = None  # type: ignore[assignment]
 
+        # Apply core defaults — the `lingtai.core.*` floor boots on every agent
+        # unless explicitly disabled via `disable=[...]` or `"name": null` in
+        # the capabilities dict. init.json kwargs override default kwargs.
+        from .capabilities import apply_core_defaults
+        capabilities = apply_core_defaults(capabilities, disable=disable)
 
         # Track for avatar replay
         self._capabilities: list[tuple[str, dict]] = []
@@ -1111,20 +1123,42 @@ class Agent(BaseAgent):
             except Exception as e:
                 self._log("mcp_decompress_failed", reason=str(e))
 
-        # Re-run capability setup
-        capabilities = _resolve_capabilities(m.get("capabilities", {}))
+        # Re-run capability setup. init.json declares overrides/opt-ins;
+        # `apply_core_defaults` ensures the `lingtai.core.*` floor boots even
+        # when the manifest omits it. `manifest.disable` and `"name": null`
+        # entries are the opt-out channels.
+        raw_caps = m.get("capabilities", {}) or {}
+        resolved = _resolve_capabilities(raw_caps)
+        # Preserve null sentinels through env-resolution (it converts None to {}).
+        null_outs = {n for n, v in raw_caps.items() if v is None}
+
+        from .capabilities import (
+            _GROUPS,
+            apply_core_defaults,
+            normalize_capabilities,
+        )
+        expanded: dict[str, Any] = {}
+        for name, cap_kwargs in resolved.items():
+            if name in _GROUPS:
+                for sub in _GROUPS[name]:
+                    expanded[sub] = {}
+            elif name in null_outs:
+                expanded[name] = None
+            elif cap_kwargs is None:
+                expanded[name] = None
+            else:
+                expanded[name] = cap_kwargs
+        normalized = normalize_capabilities(
+            {n: (v if v is not None else {}) for n, v in expanded.items()}
+        )
+        for n, v in expanded.items():
+            if v is None:
+                normalized[n] = None  # type: ignore[assignment]
+
+        disable_list = m.get("disable") or []
+        capabilities = apply_core_defaults(normalized, disable=disable_list)
+
         if capabilities:
-            from .capabilities import _GROUPS, normalize_capabilities
-            expanded: dict[str, dict] = {}
-            for name, cap_kwargs in capabilities.items():
-                if name in _GROUPS:
-                    for sub in _GROUPS[name]:
-                        expanded[sub] = {}
-                elif cap_kwargs is None:
-                    expanded[name] = {}
-                else:
-                    expanded[name] = cap_kwargs
-            capabilities = normalize_capabilities(expanded)
             for name, cap_kwargs in capabilities.items():
                 try:
                     self._setup_capability(name, **cap_kwargs)

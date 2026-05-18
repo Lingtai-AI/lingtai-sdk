@@ -316,9 +316,15 @@ def test_custom_skills_appear_in_catalog(tmp_path):
 
 
 
-def test_former_library_config_no_longer_normalizes_to_skills(tmp_path):
-    workdir = tmp_path / "agent"
+# NOTE: `knowledge` and `skills` are now default-on (the `lingtai.core.*` floor
+# boots on every Agent). The tests below preserve the breaking-rename guarantee
+# at its remaining surface: legacy `library` / `codex` capability NAMES must not
+# themselves produce tool handlers. Whether `knowledge`/`skills` are present is
+# governed by core defaults, not by alias normalization.
 
+
+def test_former_library_config_does_not_register_library_tool(tmp_path):
+    workdir = tmp_path / "agent"
     agent = Agent(
         service=make_mock_service(),
         agent_name="test",
@@ -326,16 +332,13 @@ def test_former_library_config_no_longer_normalizes_to_skills(tmp_path):
         capabilities={"library": {}},
     )
     try:
-        assert "skills" not in agent._tool_handlers
-        assert "knowledge" not in agent._tool_handlers
         assert "library" not in agent._tool_handlers
     finally:
         agent.stop(timeout=1.0)
 
 
-def test_former_library_list_config_no_longer_normalizes_to_skills(tmp_path):
+def test_former_library_list_config_does_not_register_library_tool(tmp_path):
     workdir = tmp_path / "agent"
-
     agent = Agent(
         service=make_mock_service(),
         agent_name="test",
@@ -343,14 +346,13 @@ def test_former_library_list_config_no_longer_normalizes_to_skills(tmp_path):
         capabilities=["library"],
     )
     try:
-        assert "skills" not in agent._tool_handlers
-        assert "knowledge" not in agent._tool_handlers
         assert "library" not in agent._tool_handlers
     finally:
         agent.stop(timeout=1.0)
 
 
-def test_former_library_paths_config_no_longer_normalizes_to_skills(tmp_path):
+def test_former_library_paths_do_not_leak_into_skills_catalog(tmp_path):
+    """Skills extra paths must come from the `skills` cap, not `library` alias."""
     extra = tmp_path / "extra"
     _write_skill(extra / "old-shared", "old-shared")
     workdir = tmp_path / "agent"
@@ -362,14 +364,14 @@ def test_former_library_paths_config_no_longer_normalizes_to_skills(tmp_path):
         capabilities={"library": {"paths": [str(extra)]}},
     )
     try:
-        assert "skills" not in agent._tool_handlers
-        assert "knowledge" not in agent._tool_handlers
+        # `skills` is default-on, but the legacy `library.paths` must not be
+        # picked up as an extra skill path by alias normalization.
         assert "old-shared" not in (agent._prompt_manager.read_section("skills") or "")
     finally:
         agent.stop(timeout=1.0)
 
 
-def test_former_codex_library_pair_does_not_register_knowledge_or_skills(tmp_path):
+def test_former_codex_library_pair_does_not_register_legacy_tools(tmp_path):
     extra = tmp_path / "extra"
     _write_skill(extra / "paired-shared", "paired-shared")
     workdir = tmp_path / "agent"
@@ -381,8 +383,6 @@ def test_former_codex_library_pair_does_not_register_knowledge_or_skills(tmp_pat
         capabilities={"codex": {}, "library": {"paths": [str(extra)]}},
     )
     try:
-        assert "knowledge" not in agent._tool_handlers
-        assert "skills" not in agent._tool_handlers
         assert "codex" not in agent._tool_handlers
         assert "library" not in agent._tool_handlers
     finally:

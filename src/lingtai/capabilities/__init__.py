@@ -35,6 +35,63 @@ _GROUPS: dict[str, list[str]] = {
     "file": ["read", "write", "edit", "glob", "grep"],
 }
 
+# Capabilities that boot by default on every Agent — the `lingtai.core.*` floor.
+# init.json's `manifest.capabilities` only needs to declare overrides (kwargs)
+# or opt-ins beyond this set; `manifest.disable` is the opt-out channel.
+#
+# `bash` defaults to {"yolo": True} (unsandboxed). Hosts that want a sandbox
+# pass {"policy_file": "..."} in init.json, which overrides the default kwargs.
+# `vision` and `web_search` are NOT in this set — they require provider config
+# and API keys, so they stay explicit opt-in.
+CORE_DEFAULTS: dict[str, dict] = {
+    "knowledge": {},
+    "skills": {},
+    "bash": {"yolo": True},
+    "avatar": {},
+    "daemon": {},
+    "mcp": {},
+    "read": {},
+    "write": {},
+    "edit": {},
+    "glob": {},
+    "grep": {},
+}
+
+
+def apply_core_defaults(
+    capabilities: dict[str, dict] | None,
+    disable: list[str] | None = None,
+) -> dict[str, dict]:
+    """Merge `CORE_DEFAULTS` with user-supplied capabilities and remove disabled ones.
+
+    Resolution order (per capability name):
+    1. Start with `CORE_DEFAULTS`.
+    2. Overlay `capabilities` from init.json — init.json kwargs win on conflict.
+       Entries with name not in `CORE_DEFAULTS` (e.g. `vision`, `web_search`)
+       pass through unchanged.
+    3. Drop any name listed in `disable`.
+
+    Returns a fresh dict; does not mutate inputs.
+    """
+    out: dict[str, dict] = {name: dict(kwargs) for name, kwargs in CORE_DEFAULTS.items()}
+    if capabilities:
+        for name, kwargs in capabilities.items():
+            if kwargs is None:
+                # Explicit `"name": null` from JSON — disable without needing the
+                # `disable` list. Useful for one-off opt-outs in init.json.
+                out.pop(name, None)
+                continue
+            if name in out and isinstance(out[name], dict) and isinstance(kwargs, dict):
+                merged = dict(out[name])
+                merged.update(kwargs)
+                out[name] = merged
+            else:
+                out[name] = kwargs
+    if disable:
+        for name in disable:
+            out.pop(name, None)
+    return out
+
 
 def normalize_capabilities(capabilities: dict[str, dict]) -> dict[str, dict]:
     """Normalize capability configuration.
