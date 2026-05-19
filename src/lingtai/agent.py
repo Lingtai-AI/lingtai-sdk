@@ -14,7 +14,7 @@ from typing import Any
 from pathlib import Path
 
 from lingtai_kernel.base_agent import BaseAgent
-from lingtai.llm.service import LLMService
+from lingtai.llm.service import LLMService, build_provider_defaults_from_manifest_llm
 from lingtai_kernel.prompt import build_system_prompt
 
 
@@ -1039,24 +1039,19 @@ class Agent(BaseAgent):
         # init.json predates this field cooperatively share the network-wide
         # 60 RPM cap by default. Set to 0 in init.json to disable gating.
         new_max_rpm = m.get("max_rpm", 60)
-        new_provider_key = new_provider.lower()
-        new_per_provider: dict = {}
-        if new_max_rpm > 0:
-            new_per_provider["max_rpm"] = new_max_rpm
-        new_user_headers = llm.get("default_headers")
-        if isinstance(new_user_headers, dict) and new_user_headers:
-            new_per_provider["default_headers"] = dict(new_user_headers)
-        new_provider_defaults: dict | None = (
-            {new_provider_key: new_per_provider} if new_per_provider else None
+        new_provider_defaults = build_provider_defaults_from_manifest_llm(
+            llm, max_rpm=new_max_rpm
         )
 
+        cur_provider_defaults_bucket = getattr(
+            self.service, "_provider_defaults", {}
+        ).get(new_provider.lower(), {})
         if (
             new_provider != self.service.provider
             or new_model != self.service.model
             or new_base_url != getattr(self.service, "_base_url", None)
-            or new_max_rpm != getattr(self.service, "_provider_defaults", {}).get(
-                new_provider.lower(), {}
-            ).get("max_rpm", 0)
+            or new_max_rpm != cur_provider_defaults_bucket.get("max_rpm", 0)
+            or llm.get("api_compat") != cur_provider_defaults_bucket.get("api_compat")
         ):
             self.service = LLMService(
                 provider=new_provider, model=new_model,

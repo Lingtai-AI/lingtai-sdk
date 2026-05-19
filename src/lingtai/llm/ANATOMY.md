@@ -35,7 +35,7 @@ LLM adapter layer — multi-provider support with adapter registry, base classes
 
 - **Class-level** — `LLMService._adapter_registry` (shared across all instances); `LLMAdapter._gate` (per-adapter instance).
 - **Instance-level** — `LLMService._adapters` cache; `LLMService._sessions` registry; `APICallGate._timestamps` deque for RPM window.
-- **Provider defaults** — `LLMService._provider_defaults` dict injected at construction (`service.py:96`). Drives model, base_url, max_rpm, api_compat settings.
+- **Provider defaults** — `LLMService._provider_defaults` dict injected at construction (`service.py:96`). Drives model, base_url, max_rpm, api_compat settings. Build it from `manifest.llm` via `build_provider_defaults_from_manifest_llm()` (`service.py:50`) — opt-in safelist (`_PROVIDER_DEFAULTS_PASS_THROUGH_KEYS`) ensures fields adapter factories consult (notably `api_compat` for the custom-provider dispatch) are propagated. Both `cli.py:_load_init` and `agent.py:_setup_from_init` use this helper to stay in sync.
 - **Key resolution** — `LLMService._key_resolver` callable (`service.py:94`); defaults to `os.environ.get(f"{PROVIDER}_API_KEY")`.
 
 ## Notes
