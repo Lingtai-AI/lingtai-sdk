@@ -87,7 +87,14 @@ def _rerender_unread_digest(agent) -> str | None:
             "the IDs you have handled. Both 'read' and 'dismiss' accept "
             "a list, so process multiple mails in one call. Until you "
             "read or dismiss a mail, this notification will keep "
-            "reminding you about it."
+            "reminding you about it. "
+            "Note: this digest is a live mirror of current unread mail, "
+            "not a fixed arrival log. IDs can become stale if you "
+            "already read, dismissed, or archived a message through "
+            "another path (e.g. email.check → email.read). If read or "
+            "dismiss returns 'not_found', the mail was likely already "
+            "handled — call email(action=\"check\", unread_only=true) "
+            "to see what is still pending."
         ),
         data={
             "count": count,

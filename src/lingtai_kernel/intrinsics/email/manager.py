@@ -809,6 +809,11 @@ class EmailManager:
         result = {"status": "ok", "emails": results}
         if errors:
             result["not_found"] = errors
+            result["hint"] = ("not_found IDs were likely already read, dismissed, "
+                              "or archived via another path — this is normal when "
+                              "using stale digest IDs. Call "
+                              "email(action=\"check\", unread_only=true) to see "
+                              "current pending mail.")
 
         return result
 
@@ -847,6 +852,11 @@ class EmailManager:
         result: dict = {"status": "ok", "dismissed": dismissed}
         if not_found:
             result["not_found"] = not_found
+            result["hint"] = ("not_found IDs were likely already read, dismissed, "
+                              "or archived via another path — this is normal when "
+                              "using stale digest IDs. Call "
+                              "email(action=\"check\", unread_only=true) to see "
+                              "current pending mail.")
         return result
 
     def _lookup(self, email_id: str) -> dict | None:
@@ -991,6 +1001,9 @@ class EmailManager:
         result: dict = {"status": "ok", "archived": archived}
         if not_found:
             result["not_found"] = not_found
+            result["hint"] = ("not_found IDs were likely already read, dismissed, "
+                              "or archived via another path — this is normal when "
+                              "using stale digest IDs.")
         return result
 
     def _delete(self, args: dict) -> dict:
@@ -1029,6 +1042,9 @@ class EmailManager:
         result: dict = {"status": "ok", "deleted": deleted}
         if not_found:
             result["not_found"] = not_found
+            result["hint"] = ("not_found IDs were likely already read, dismissed, "
+                              "or deleted via another path — this is normal when "
+                              "using stale digest IDs.")
         return result
 
     # ------------------------------------------------------------------
