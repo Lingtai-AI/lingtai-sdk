@@ -13,7 +13,7 @@ from lingtai.config_resolve import (
     load_env_file,
 )
 from lingtai.init_schema import validate_init
-from lingtai.llm.service import LLMService
+from lingtai.llm.service import LLMService, build_provider_defaults_from_manifest_llm
 from lingtai.agent import Agent
 from lingtai_kernel.services.mail import FilesystemMailService
 
@@ -90,18 +90,9 @@ def build_agent(data: dict, working_dir: Path) -> Agent:
     # predates this field cooperatively share the network-wide 60 RPM cap
     # by default. Set to 0 in init.json to disable gating.
     max_rpm = m.get("max_rpm", 60)
-    provider_key = llm["provider"].lower()
-    per_provider: dict = {}
-    if max_rpm > 0:
-        per_provider["max_rpm"] = max_rpm
-    user_headers = llm.get("default_headers")
-    if isinstance(user_headers, dict) and user_headers:
-        # Pass-through; LLMService._default_headers_for honors caller-supplied
-        # headers and fills only the gaps with provider policy.
-        per_provider["default_headers"] = dict(user_headers)
-    # provider_defaults is dict[provider_name, defaults_dict]; scope to
-    # the agent's configured provider so other providers stay unaffected.
-    provider_defaults: dict | None = {provider_key: per_provider} if per_provider else None
+    provider_defaults = build_provider_defaults_from_manifest_llm(
+        llm, max_rpm=max_rpm
+    )
     service = LLMService(
         provider=llm["provider"],
         model=llm["model"],
