@@ -238,6 +238,45 @@ class TestCheckExternalSend:
         # Only the first send was recorded (dedup skips recording)
         assert len(agent._sent_tracker._entries) == 1
 
+    def test_dedup_warns_when_tool_result_content_is_dict(self):
+        """Regression for lingtai#117: dict content must not raise TypeError.
+
+        ToolResultBlock.content is Any (str or dict). The dedup-warning
+        path previously did `(content or "") + "..."` which crashed with
+        `unsupported operand type(s) for +: 'dict' and 'str'` whenever an
+        MCP tool (e.g. telegram) returned a structured result and the
+        send happened to match a recent one.
+        """
+        from lingtai_kernel.base_agent.turn import _check_external_send
+        agent = self._make_agent()
+        tc1 = self._make_tc("telegram", {
+            "action": "send",
+            "message": "hello human",
+            "chat_id": "12345",
+        })
+        _check_external_send(agent, [tc1])
+
+        tc2 = self._make_tc("telegram", {
+            "action": "send",
+            "message": "hello human",
+            "chat_id": "12345",
+        })
+        tc2.id = "call_dedup_dict"
+
+        tr = MagicMock()
+        tr.id = "call_dedup_dict"
+        tr.content = {"status": "sent", "message_id": "tg:1:42"}
+        tool_results = [tr]
+
+        _check_external_send(agent, [tc2], tool_results)
+        assert isinstance(tr.content, dict)
+        assert tr.content.get("_duplicate_warning", "").startswith(
+            "Recently sent similar message"
+        )
+        # Original fields preserved
+        assert tr.content["status"] == "sent"
+        assert tr.content["message_id"] == "tg:1:42"
+
     def test_dedup_without_tool_results(self):
         """Dedup still skips recording when tool_results not passed."""
         from lingtai_kernel.base_agent.turn import _check_external_send

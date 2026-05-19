@@ -744,13 +744,23 @@ def _check_external_send(agent, tool_calls, tool_results=None) -> None:
                         recipient=recipient,
                     )
                     if tool_results:
+                        warning = (
+                            "Recently sent similar message to this recipient."
+                            " Skipping duplicate."
+                        )
                         for tr in tool_results:
                             if tr.id == tc.id:
-                                tr.content = (
-                                    (tr.content or "")
-                                    + "\n⚠️ Recently sent similar message"
-                                    " to this recipient. Skipping duplicate."
-                                )
+                                if isinstance(tr.content, dict):
+                                    # ToolResultBlock.content is Any (str or dict);
+                                    # dict + str raises TypeError. Attach as a
+                                    # structured field instead — adapters render
+                                    # the whole dict to the LLM as JSON.
+                                    tr.content["_duplicate_warning"] = warning
+                                else:
+                                    tr.content = (
+                                        (tr.content or "")
+                                        + f"\n⚠️ {warning}"
+                                    )
                                 break
                     continue
                 tracker.record_sent(content, recipient, tc.name)
