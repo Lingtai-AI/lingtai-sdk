@@ -139,6 +139,11 @@ def setup(
             if provider == "zhipu" and "z_ai_mode" not in kwargs:
                 from .._zhipu_mode import resolve_z_ai_mode
                 kwargs["z_ai_mode"] = resolve_z_ai_mode(agent)
+            # Dedicated vision services do not consume the LLM adapter's
+            # transport selector. ``expand_inherit`` copies it for capability
+            # routing, but forwarding it into service constructors breaks
+            # providers such as MiniMax that only accept provider-native args.
+            kwargs.pop("api_compat", None)
             kwargs.pop("base_url", None)
             vision_service = create_vision_service(provider, api_key=api_key, **kwargs)
     elif vision_service is None:

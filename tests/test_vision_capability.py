@@ -239,3 +239,33 @@ def test_vision_setup_no_provider_raises(tmp_path):
     agent = make_mock_agent(tmp_path)
     with pytest.raises(ValueError, match="vision capability requires"):
         setup(agent)
+
+
+def test_minimax_vision_setup_filters_inherited_api_compat(tmp_path):
+    """MiniMax vision should ignore LLM transport kwargs inherited from presets.
+
+    Regression: presets.expand_inherit copies api_compat from the main LLM into
+    `vision: {provider: inherit}`. MiniMaxVisionService accepts api_host, not
+    api_compat, so setup must filter provider-specific kwargs before factory
+    construction.
+    """
+    with patch("lingtai.capabilities.vision.create_vision_service") as mock_factory:
+        mock_svc = MagicMock(spec=VisionService)
+        mock_factory.return_value = mock_svc
+
+        agent = make_mock_agent(tmp_path)
+        agent.service._base_url = "https://api.minimaxi.com/anthropic"
+        mgr = setup(
+            agent,
+            provider="minimax",
+            api_key="sk-test",
+            api_compat="anthropic",
+            base_url="https://api.minimaxi.com/anthropic",
+        )
+
+        mock_factory.assert_called_once_with(
+            "minimax",
+            api_key="sk-test",
+            api_host="https://api.minimaxi.com",
+        )
+        assert isinstance(mgr, VisionManager)
