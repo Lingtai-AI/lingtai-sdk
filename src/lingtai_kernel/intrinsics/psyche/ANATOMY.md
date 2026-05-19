@@ -7,10 +7,10 @@ Agent identity, working notes, and context lifecycle — the "bare essentials of
 ## Components
 
 - `__init__.py` — Package surface. Re-exports all public API for backward compatibility. Contains:
-  - `get_description` / `get_schema` (`__init__.py:41-93`) — tool registration.
-  - `_VALID_ACTIONS` / `_DISPATCH` (`__init__.py:97-112`) — action→handler dispatch table replacing the former `globals().get()` pattern.
-  - `handle()` (`__init__.py:114-140`) — main dispatcher.
-  - `boot()` (`__init__.py:142-151`) — boot-time hook: loads lingtai + pad, registers post-molt reload callback.
+  - `get_description` / `get_schema` (`__init__.py:41-84`) — tool registration; schema intentionally avoids top-level JSON Schema combinators for strict-mode provider compatibility.
+  - `_VALID_ACTIONS` / `_DISPATCH` (`__init__.py:91-105`) — action→handler dispatch table replacing the former `globals().get()` pattern; preserves per-object action validation that is not encoded with schema combinators.
+  - `handle()` (`__init__.py:108-128`) — main dispatcher.
+  - `boot()` (`__init__.py:136-145`) — boot-time hook: loads lingtai + pad, registers post-molt reload callback.
 
 - `_snapshots.py` — Snapshot and summary persistence for the molt machinery.
   - `SNAPSHOT_SCHEMA_VERSION` (`_snapshots.py:16`) — schema version tag for snapshots.

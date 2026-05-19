@@ -186,8 +186,14 @@ def test_deep_refresh_invalid_init_keeps_old_config(tmp_path):
 
 
 def test_deep_refresh_removes_old_capabilities(tmp_path):
-    """Capabilities removed from init.json are gone after refresh."""
-    init = _make_init(capabilities={"read": {}, "write": {}})
+    """Capabilities removed from init.json are gone after refresh.
+
+    Tested against opt-in (non-core) capabilities so the assertion is about
+    the refresh path, not about the core-defaults floor. Core capabilities
+    persist across refresh regardless of init.json — that is by design;
+    `manifest.disable` is the opt-out channel for those.
+    """
+    init = _make_init(capabilities={"web_search": {"provider": "duckduckgo"}})
     agent = _make_agent(tmp_path, init)
     agent._setup_from_init()  # initial setup
 
@@ -197,17 +203,17 @@ def test_deep_refresh_removes_old_capabilities(tmp_path):
     mock_session.chat.interface = MagicMock()
     agent._session = mock_session
 
-    assert len(agent._capabilities) == 2
+    cap_names_before = {name for name, _ in agent._capabilities}
+    assert "web_search" in cap_names_before
 
-    # Remove "write" from init.json
-    new_init = _make_init(capabilities={"read": {}})
+    # Drop web_search from init.json
+    new_init = _make_init(capabilities={})
     (tmp_path / "init.json").write_text(json.dumps(new_init))
 
     agent._setup_from_init()
 
-    cap_names = [name for name, _ in agent._capabilities]
-    assert "read" in cap_names
-    assert "write" not in cap_names
+    cap_names_after = {name for name, _ in agent._capabilities}
+    assert "web_search" not in cap_names_after
 
 
 def test_deep_refresh_preserves_chat_history(tmp_path):

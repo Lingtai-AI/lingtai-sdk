@@ -363,6 +363,24 @@ def test_expand_inherit_handles_missing_main_llm_creds():
     assert caps["web_search"].get("api_key_env") is None
 
 
+def test_expand_inherit_propagates_api_compat():
+    # Custom anthropic-compat proxy (e.g. local GLM-5.1 via JoyCodeProxy).
+    # Vision capability fallback dispatches on api_compat — if it isn't
+    # inherited, the capability silently routes through the OpenAI adapter
+    # and chokes on the response shape.
+    main_llm = {
+        "provider": "custom",
+        "api_compat": "anthropic",
+        "model": "GLM-5.1",
+        "api_key_env": "CUSTOM_6_API_KEY",
+        "base_url": "http://127.0.0.1:34891",
+    }
+    caps = {"vision": {"provider": "inherit"}}
+    expand_inherit(caps, main_llm)
+    assert caps["vision"]["api_compat"] == "anthropic"
+    assert caps["vision"]["base_url"] == "http://127.0.0.1:34891"
+
+
 # ---------------------------------------------------------------------------
 # resolve_preset_name
 # ---------------------------------------------------------------------------

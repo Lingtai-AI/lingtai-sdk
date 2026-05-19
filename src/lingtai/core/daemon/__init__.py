@@ -33,6 +33,23 @@ PROVIDERS = {"providers": [], "default": "builtin"}
 # Tools emanations can never use (no recursion, no spawning, no identity mutation)
 EMANATION_BLACKLIST = {"daemon", "avatar", "psyche", "skills", "knowledge"}
 
+# Env vars that force Claude Code CLI onto an API-key billing path instead of
+# the user's Claude Code subscription (OAuth). LingTai loads ``.env`` from
+# ``~/.lingtai-tui/`` early, so an ``ANTHROPIC_API_KEY`` meant for the lingtai
+# LLM adapter silently leaks into spawned ``claude`` subprocesses and bills
+# them through API credits — surfacing as "Credit balance is too low" even
+# when the subscription is healthy. We strip these for claude-code spawns
+# only; other backends (codex, lingtai) are unaffected. See GH #107.
+_CLAUDE_CODE_STRIP_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+
+
+def _claude_code_env() -> dict[str, str]:
+    """Return os.environ minus auth vars that override Claude Code's OAuth."""
+    env = os.environ.copy()
+    for key in _CLAUDE_CODE_STRIP_ENV:
+        env.pop(key, None)
+    return env
+
 
 class _ToolCollector:
     """Captures add_tool calls during preset-driven capability setup.
@@ -579,6 +596,11 @@ class DaemonManager:
         ]
         self._log("daemon_claude_code_start", em_id=em_id, cmd=" ".join(cmd))
 
+        spawn_env = _claude_code_env()
+        if len(spawn_env) != len(os.environ):
+            self._log("daemon_claude_code_env_stripped", em_id=em_id,
+                      stripped=[k for k in _CLAUDE_CODE_STRIP_ENV if k in os.environ])
+
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -586,6 +608,7 @@ class DaemonManager:
                 stderr=subprocess.PIPE,
                 text=True,
                 cwd=str(self._agent._working_dir),
+                env=spawn_env,
             )
         except FileNotFoundError:
             exc = RuntimeError("'claude' CLI not found on PATH")
@@ -1412,6 +1435,7 @@ class DaemonManager:
                 stderr=subprocess.PIPE,
                 text=True,
                 cwd=str(self._agent._working_dir),
+                env=_claude_code_env(),
             )
         except FileNotFoundError:
             return {"status": "error",

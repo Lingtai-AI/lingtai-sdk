@@ -170,30 +170,44 @@ def _scan(directory: Path) -> tuple[list[dict], list[dict]]:
 # ---------------------------------------------------------------------------
 
 def _escape_xml(s: str) -> str:
+    """Escape only the characters XML actually requires in element text.
+
+    `"` and `'` only need escaping inside attribute values; escaping them in
+    element bodies just adds `&quot;`/`&apos;` noise to the rendered prompt
+    without making the catalog any more parseable.
+    """
     return (
         s.replace("&", "&amp;")
         .replace("<", "&lt;")
         .replace(">", "&gt;")
-        .replace('"', "&quot;")
-        .replace("'", "&apos;")
     )
+
+
+def _indent_block(text: str, indent: str) -> str:
+    """Indent every line of ``text`` by ``indent``. Empty input → empty string."""
+    if not text:
+        return ""
+    return "\n".join(indent + line for line in text.splitlines())
 
 
 def _build_catalog_xml(skills: list[dict], lang: str) -> str:
     if not skills:
         return ""
 
-    lines = [
+    lines: list[str] = [
         t(lang, "skills.preamble"),
         "",
         "<available_skills>",
     ]
     for sk in skills:
+        lines.append("")
         lines.append("  <skill>")
-        lines.append(f"    <name>{_escape_xml(sk['name'])}</name>")
-        lines.append(f"    <description>{_escape_xml(sk['description'])}</description>")
-        lines.append(f"    <location>{_escape_xml(sk['path'])}</location>")
+        lines.append(f"    name: {_escape_xml(sk['name'])}")
+        lines.append(f"    location: {_escape_xml(sk['path'])}")
+        lines.append("    description:")
+        lines.append(_indent_block(_escape_xml(sk["description"]), "      "))
         lines.append("  </skill>")
+    lines.append("")
     lines.append("</available_skills>")
     return "\n".join(lines)
 

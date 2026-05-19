@@ -40,10 +40,14 @@ def test_file_sugar_dict_form(tmp_path):
 
 
 def test_individual_file_capability(tmp_path):
-    """Each file capability can be loaded individually."""
+    """Each file capability can be disabled individually via `disable=[...]`.
+
+    The `lingtai.core.*` file caps are default-on; `disable` is the opt-out
+    channel for hosts that want a narrower surface.
+    """
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities=["read", "write"],
+        disable=["edit", "glob", "grep"],
     )
     assert "read" in agent._tool_handlers
     assert "write" in agent._tool_handlers

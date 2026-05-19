@@ -48,6 +48,48 @@ def _generate_tool_call_id() -> str:
     return f"tc_{int(time.time())}_{uuid.uuid4().hex[:4]}"
 
 
+# Fields from manifest.llm that adapter factories may consult via
+# LLMService._provider_defaults. Keep this list opt-in (rather than
+# splatting the whole manifest.llm dict) so the surface area between
+# init.json and adapter construction stays auditable.
+#
+# api_compat in particular MUST propagate: the custom-provider factory
+# (lingtai/llm/_register.py:_custom) dispatches between OpenAI/Anthropic/
+# Gemini wire protocols based on it. Dropping it silently routes
+# api_compat="anthropic" custom providers (e.g. local GLM proxies) to
+# OpenAIAdapter, which then explodes on raw.choices access. See
+# Lingtai-AI/lingtai#112 for the full failure trace.
+_PROVIDER_DEFAULTS_PASS_THROUGH_KEYS = ("api_compat",)
+
+
+def build_provider_defaults_from_manifest_llm(
+    llm: dict,
+    *,
+    max_rpm: int,
+) -> dict | None:
+    """Convert a manifest.llm block into LLMService.provider_defaults.
+
+    Returns ``{provider_name: defaults_dict}`` (scoped to the agent's
+    configured provider so other providers stay unaffected), or ``None``
+    when no fields are set — preserving the historical behavior where
+    callers passed ``provider_defaults=None`` for the unconfigured case.
+    """
+    provider_key = llm["provider"].lower()
+    per_provider: dict = {}
+    if max_rpm > 0:
+        per_provider["max_rpm"] = max_rpm
+    user_headers = llm.get("default_headers")
+    if isinstance(user_headers, dict) and user_headers:
+        # Pass-through; LLMService._default_headers_for honors caller-supplied
+        # headers and fills only the gaps with provider policy.
+        per_provider["default_headers"] = dict(user_headers)
+    for key in _PROVIDER_DEFAULTS_PASS_THROUGH_KEYS:
+        value = llm.get(key)
+        if value is not None:
+            per_provider[key] = value
+    return {provider_key: per_provider} if per_provider else None
+
+
 class LLMService(LLMServiceABC):
     """Concrete LLM service — adapter registry, session management, generation.
 

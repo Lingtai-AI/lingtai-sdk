@@ -180,18 +180,26 @@ def test_psyche_molt_rejects_missing_summary(tmp_path):
 
 
 def test_eigen_schema_has_context_molt(tmp_path):
-    """Schema exposes context/molt/summary for agent-callable molt."""
+    """Schema exposes context/summary without strict-incompatible combinators."""
     from lingtai_kernel.intrinsics.psyche import get_schema
     s = get_schema("en")
     assert "context" in s["properties"]["object"]["enum"]
-    # action enum is per-object via allOf, not a flat enum
-    context_actions = next(
-        rule["then"]["properties"]["action"]["enum"]
-        for rule in s["allOf"]
-        if rule["if"]["properties"]["object"]["const"] == "context"
-    )
-    assert "molt" in context_actions
     assert "summary" in s["properties"]
+    assert {"object", "action"}.issubset(set(s["required"]))
+    for keyword in ("allOf", "oneOf", "anyOf", "not"):
+        assert keyword not in s
+
+
+def test_psyche_rejects_invalid_object_action_pair(tmp_path):
+    """Runtime validation still enforces per-object actions without schema allOf."""
+    agent = BaseAgent(
+        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
+    )
+    result = agent._intrinsics["psyche"]({"object": "context", "action": "load"})
+    assert "error" in result
+    assert "Invalid action" in result["error"]
+    assert "molt" in result["error"]
+    agent.stop(timeout=1.0)
 
 
 # ---------------------------------------------------------------------------

@@ -14,7 +14,7 @@ from typing import Any
 from pathlib import Path
 
 from lingtai_kernel.base_agent import BaseAgent
-from lingtai.llm.service import LLMService
+from lingtai.llm.service import LLMService, build_provider_defaults_from_manifest_llm
 from lingtai_kernel.prompt import build_system_prompt
 
 
@@ -36,6 +36,7 @@ class Agent(BaseAgent):
         capabilities: list[str] | dict[str, dict] | None = None,
         addons: list[str] | None = None,
         combo_name: str | None = None,
+        disable: list[str] | None = None,
         **kwargs: Any,
     ):
         # Default karma authority for the primary agent (本我)
@@ -67,11 +68,22 @@ class Agent(BaseAgent):
                     for sub in _GROUPS[name]:
                         expanded_dict[sub] = {}
                 elif cap_kwargs is None:
-                    expanded_dict[name] = {}
+                    expanded_dict[name] = None  # propagate disable-sentinel
                 else:
                     expanded_dict[name] = cap_kwargs
-            capabilities = normalize_capabilities(expanded_dict)
+            capabilities = normalize_capabilities(
+                {n: (v if v is not None else {}) for n, v in expanded_dict.items()}
+            )
+            # Preserve null sentinels for apply_core_defaults to interpret as opt-out.
+            for n, v in expanded_dict.items():
+                if v is None:
+                    capabilities[n] = None  # type: ignore[assignment]
 
+        # Apply core defaults — the `lingtai.core.*` floor boots on every agent
+        # unless explicitly disabled via `disable=[...]` or `"name": null` in
+        # the capabilities dict. init.json kwargs override default kwargs.
+        from .capabilities import apply_core_defaults
+        capabilities = apply_core_defaults(capabilities, disable=disable)
 
         # Track for avatar replay
         self._capabilities: list[tuple[str, dict]] = []
@@ -1027,24 +1039,19 @@ class Agent(BaseAgent):
         # init.json predates this field cooperatively share the network-wide
         # 60 RPM cap by default. Set to 0 in init.json to disable gating.
         new_max_rpm = m.get("max_rpm", 60)
-        new_provider_key = new_provider.lower()
-        new_per_provider: dict = {}
-        if new_max_rpm > 0:
-            new_per_provider["max_rpm"] = new_max_rpm
-        new_user_headers = llm.get("default_headers")
-        if isinstance(new_user_headers, dict) and new_user_headers:
-            new_per_provider["default_headers"] = dict(new_user_headers)
-        new_provider_defaults: dict | None = (
-            {new_provider_key: new_per_provider} if new_per_provider else None
+        new_provider_defaults = build_provider_defaults_from_manifest_llm(
+            llm, max_rpm=new_max_rpm
         )
 
+        cur_provider_defaults_bucket = getattr(
+            self.service, "_provider_defaults", {}
+        ).get(new_provider.lower(), {})
         if (
             new_provider != self.service.provider
             or new_model != self.service.model
             or new_base_url != getattr(self.service, "_base_url", None)
-            or new_max_rpm != getattr(self.service, "_provider_defaults", {}).get(
-                new_provider.lower(), {}
-            ).get("max_rpm", 0)
+            or new_max_rpm != cur_provider_defaults_bucket.get("max_rpm", 0)
+            or llm.get("api_compat") != cur_provider_defaults_bucket.get("api_compat")
         ):
             self.service = LLMService(
                 provider=new_provider, model=new_model,
@@ -1111,20 +1118,42 @@ class Agent(BaseAgent):
             except Exception as e:
                 self._log("mcp_decompress_failed", reason=str(e))
 
-        # Re-run capability setup
-        capabilities = _resolve_capabilities(m.get("capabilities", {}))
+        # Re-run capability setup. init.json declares overrides/opt-ins;
+        # `apply_core_defaults` ensures the `lingtai.core.*` floor boots even
+        # when the manifest omits it. `manifest.disable` and `"name": null`
+        # entries are the opt-out channels.
+        raw_caps = m.get("capabilities", {}) or {}
+        resolved = _resolve_capabilities(raw_caps)
+        # Preserve null sentinels through env-resolution (it converts None to {}).
+        null_outs = {n for n, v in raw_caps.items() if v is None}
+
+        from .capabilities import (
+            _GROUPS,
+            apply_core_defaults,
+            normalize_capabilities,
+        )
+        expanded: dict[str, Any] = {}
+        for name, cap_kwargs in resolved.items():
+            if name in _GROUPS:
+                for sub in _GROUPS[name]:
+                    expanded[sub] = {}
+            elif name in null_outs:
+                expanded[name] = None
+            elif cap_kwargs is None:
+                expanded[name] = None
+            else:
+                expanded[name] = cap_kwargs
+        normalized = normalize_capabilities(
+            {n: (v if v is not None else {}) for n, v in expanded.items()}
+        )
+        for n, v in expanded.items():
+            if v is None:
+                normalized[n] = None  # type: ignore[assignment]
+
+        disable_list = m.get("disable") or []
+        capabilities = apply_core_defaults(normalized, disable=disable_list)
+
         if capabilities:
-            from .capabilities import _GROUPS, normalize_capabilities
-            expanded: dict[str, dict] = {}
-            for name, cap_kwargs in capabilities.items():
-                if name in _GROUPS:
-                    for sub in _GROUPS[name]:
-                        expanded[sub] = {}
-                elif cap_kwargs is None:
-                    expanded[name] = {}
-                else:
-                    expanded[name] = cap_kwargs
-            capabilities = normalize_capabilities(expanded)
             for name, cap_kwargs in capabilities.items():
                 try:
                     self._setup_capability(name, **cap_kwargs)

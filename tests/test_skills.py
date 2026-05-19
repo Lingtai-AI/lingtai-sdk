@@ -262,6 +262,41 @@ def test_catalog_injected_into_skills_section(tmp_path):
         agent.stop(timeout=1.0)
 
 
+def test_catalog_rendering_is_readable_without_xml_quote_noise(tmp_path):
+    # The catalog goes straight into the system prompt; humans (and the model)
+    # have complained that the prior shape was XML-escape soup. Pin the new
+    # shape: per-skill block with indented `description:` body, no `&quot;` /
+    # `&apos;` noise from over-escaping element text.
+    workdir = tmp_path / "agent"
+    _write_skill(
+        workdir / ".library" / "custom" / "fancy-tool",
+        "fancy-tool",
+        'Handles "quoted" args and \'apostrophes\' — keep them raw.',
+    )
+
+    agent = Agent(
+        service=make_mock_service(),
+        agent_name="test",
+        working_dir=workdir,
+        capabilities={"skills": {}},
+    )
+    try:
+        prompt = agent._prompt_manager.read_section("skills") or ""
+        # No spurious escape entities for `"` and `'` in element text.
+        assert "&quot;" not in prompt
+        assert "&apos;" not in prompt
+        # The new shape uses indented `description:` blocks.
+        assert "    description:" in prompt
+        assert "      Handles \"quoted\" args" in prompt
+        # The outer wrapper still exists (consumers grep for it).
+        assert "<available_skills>" in prompt
+        assert "</available_skills>" in prompt
+        # The skill block keeps clean field labels rather than inline tags.
+        assert "    name: fancy-tool" in prompt
+    finally:
+        agent.stop(timeout=1.0)
+
+
 def test_custom_skills_appear_in_catalog(tmp_path):
     workdir = tmp_path / "agent"
     _write_skill(workdir / ".library" / "custom" / "my-tool", "my-tool", "my desc")
@@ -281,9 +316,15 @@ def test_custom_skills_appear_in_catalog(tmp_path):
 
 
 
-def test_former_library_config_no_longer_normalizes_to_skills(tmp_path):
-    workdir = tmp_path / "agent"
+# NOTE: `knowledge` and `skills` are now default-on (the `lingtai.core.*` floor
+# boots on every Agent). The tests below preserve the breaking-rename guarantee
+# at its remaining surface: legacy `library` / `codex` capability NAMES must not
+# themselves produce tool handlers. Whether `knowledge`/`skills` are present is
+# governed by core defaults, not by alias normalization.
 
+
+def test_former_library_config_does_not_register_library_tool(tmp_path):
+    workdir = tmp_path / "agent"
     agent = Agent(
         service=make_mock_service(),
         agent_name="test",
@@ -291,16 +332,13 @@ def test_former_library_config_no_longer_normalizes_to_skills(tmp_path):
         capabilities={"library": {}},
     )
     try:
-        assert "skills" not in agent._tool_handlers
-        assert "knowledge" not in agent._tool_handlers
         assert "library" not in agent._tool_handlers
     finally:
         agent.stop(timeout=1.0)
 
 
-def test_former_library_list_config_no_longer_normalizes_to_skills(tmp_path):
+def test_former_library_list_config_does_not_register_library_tool(tmp_path):
     workdir = tmp_path / "agent"
-
     agent = Agent(
         service=make_mock_service(),
         agent_name="test",
@@ -308,14 +346,13 @@ def test_former_library_list_config_no_longer_normalizes_to_skills(tmp_path):
         capabilities=["library"],
     )
     try:
-        assert "skills" not in agent._tool_handlers
-        assert "knowledge" not in agent._tool_handlers
         assert "library" not in agent._tool_handlers
     finally:
         agent.stop(timeout=1.0)
 
 
-def test_former_library_paths_config_no_longer_normalizes_to_skills(tmp_path):
+def test_former_library_paths_do_not_leak_into_skills_catalog(tmp_path):
+    """Skills extra paths must come from the `skills` cap, not `library` alias."""
     extra = tmp_path / "extra"
     _write_skill(extra / "old-shared", "old-shared")
     workdir = tmp_path / "agent"
@@ -327,14 +364,14 @@ def test_former_library_paths_config_no_longer_normalizes_to_skills(tmp_path):
         capabilities={"library": {"paths": [str(extra)]}},
     )
     try:
-        assert "skills" not in agent._tool_handlers
-        assert "knowledge" not in agent._tool_handlers
+        # `skills` is default-on, but the legacy `library.paths` must not be
+        # picked up as an extra skill path by alias normalization.
         assert "old-shared" not in (agent._prompt_manager.read_section("skills") or "")
     finally:
         agent.stop(timeout=1.0)
 
 
-def test_former_codex_library_pair_does_not_register_knowledge_or_skills(tmp_path):
+def test_former_codex_library_pair_does_not_register_legacy_tools(tmp_path):
     extra = tmp_path / "extra"
     _write_skill(extra / "paired-shared", "paired-shared")
     workdir = tmp_path / "agent"
@@ -346,8 +383,6 @@ def test_former_codex_library_pair_does_not_register_knowledge_or_skills(tmp_pat
         capabilities={"codex": {}, "library": {"paths": [str(extra)]}},
     )
     try:
-        assert "knowledge" not in agent._tool_handlers
-        assert "skills" not in agent._tool_handlers
         assert "codex" not in agent._tool_handlers
         assert "library" not in agent._tool_handlers
     finally:

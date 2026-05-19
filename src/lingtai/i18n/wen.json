@@ -19,7 +19,7 @@
   "grep.path": "欲搜之文卷或目录",
   "grep.glob": "文卷 glob 过滤器（如'*.py'）",
   "grep.max_matches": "至多返回之匹配数",
-  "bash.description": "执行指令，返 stdout/stderr。可运行系统上一切可用之程——脚本、git、curl、pip、数据管道等。支持异步：设 async=true 取 job_id，后以 poll/cancel 查之。详见 bash-manual 技（定时之设与进阶之用）。",
+  "bash.description": "执行指令，返 stdout/stderr。可运行系统上一切可用之程——脚本、git、curl、pip、数据管道等。支持异步：设 async=true 取 job_id，后以 poll/cancel 查之。用此器前，必先读 `bash-manual` 一技（含定时之设、异步之规、进阶之用），无所例外。",
   "bash.action": "所行之事：'run'（默认）执行指令，'poll' 查异步任务之状，'cancel' 斩异步任务",
   "bash.command": "欲执行之指令",
   "bash.timeout": "超时秒数（默认：30，唯同步执行时生效）",
@@ -38,9 +38,9 @@
   "vision.description": "观象之器——以 LLM 之视觉能力析图。支 JPEG、PNG 与 WebP。可对图发任何问——述其内容、识其文字、解其图表、辨其物象、评其风格与气韵。结合绘相可先生图再析之。",
   "vision.image_path": "图像之路径",
   "vision.question": "关于图像之问",
-  "web_search.description": "游历之器——搜寻大千世界之最新信息。用于实时数据、近期事件、文档或超出训练所知之内容。返排序后之搜索结果，含题、URL 与摘要。欲取并阅一具体 URL，或求精深之策（PDF 之取、JS 动渲之页、隐身抓取、备用之径），可参 `web-browsing` 之技。",
+  "web_search.description": "游历之器——搜寻大千世界之最新信息。用于实时数据、近期事件、文档或超出训练所知之内容。返排序后之搜索结果，含题、URL 与摘要。用此器前，必先读 `web-browsing` 一技（含具体 URL 之取、PDF 之取、JS 动渲之页、隐身抓取、备用之径），无所例外。",
   "web_search.query": "搜寻之问",
-  "daemon.description": "神識——遣短暂之分神以隔上下文。分神者，一次性 LLM 会话，自具上下文窗，共享汝之工作目录然毕后不存记忆。以分神将嘈杂、耗上下文之事剥离己身：大规模文件扫描、探索之搜、多步之研、批量之转——凡所求唯结论者。默 4 并发（可于每灵之 init.json 中配；daemon(action=\"list\") 报实之上限）。要：分神之果截至约 2000 字。如需详出，令分神书报告于文卷，毕后自取。操作：emanate（分），list（观），ask（问），reclaim（收）。详见 daemon-manual 技。",
+  "daemon.description": "神識——遣短暂之分神以隔上下文。分神者，一次性 LLM 会话，自具上下文窗，共享汝之工作目录然毕后不存记忆。以分神将嘈杂、耗上下文之事剥离己身：大规模文件扫描、探索之搜、多步之研、批量之转——凡所求唯结论者。默 4 并发（可于每灵之 init.json 中配；daemon(action=\"list\") 报实之上限）。要：分神之果截至约 2000 字。如需详出，令分神书报告于文卷，毕后自取。操作：emanate（分），list（观），ask（问），check（察），reclaim（收）。毕则系统自报，无须屡问「成否」。用此器前，必先读 `daemon-manual` 一技（含察法、节度与预设、能之承袭），无所例外。",
   "daemon.action": "所执之操作：'emanate'（分，遣出分神），'list'（观，显诸状），'ask'（问，跟进），'check'（察，览某分神近事），'reclaim'（收，尽数终止）",
   "daemon.last": "'check' 之操作：自 events.jsonl 返还几条近事。默二十。每轮约生事二（tool_call 与 tool_result），故 last=20 约涵十次工具之遣。",
   "daemon.truncate": "'check' 之操作：返事所含字符串字段之至长，过此则以省略缀之。默五百。设为零则不截。",
@@ -50,10 +50,10 @@
   "daemon.tasks.preset": "可省之预设文件路径。必以 .json/.jsonc 结尾，用 system(action='presets') 所返之 name 字段。勿以简写名——当用 presets 列表中之完整 name。示例：'~/.lingtai-tui/presets/saved/cheap.json'。省则承父灵之工具面。",
   "daemon.id": "'ask' 操作所用分神之 ID（如 'em-1'）",
   "daemon.message": "'ask' 操作之跟进之言",
-  "knowledge.description": "汝跨凝蜕长存之私有知识目录——所习、所断、所悟之记。每经卷皆为 knowledge/<名>/ 一匣，内置 KNOWLEDGE.md（YAML frontmatter 须有 name 与 description），可附副件（script、素材、笔记、原始日志）。系统提示中 <knowledge> 一典列每经之 name + description + location；正文按需以 read 工具取之，与 skills 同律。知识乃汝私藏：经卷可引本地之路、邮件之 id、日志之记——此皆 skills 所不可依也。新经以 write/edit 直书 knowledge/<名>/KNOWLEDGE.md；修订同此。呼 info 可重扫目录、验其康。",
+  "knowledge.description": "汝跨凝蜕长存之私有知识目录——所习、所断、所悟之记。每经卷皆为 knowledge/<名>/ 一匣，内置 KNOWLEDGE.md（YAML frontmatter 须有 name 与 description），可附副件（script、素材、笔记、原始日志）。系统提示中 <knowledge> 一典列每经之 name + description + location；正文按需以 read 工具取之，与 skills 同律。知识乃汝私藏：经卷可引本地之路、邮件之 id、日志之记——此皆 skills 所不可依也。新经以 write/edit 直书 knowledge/<名>/KNOWLEDGE.md；修订同此。呼 info 可重扫目录、验其康。用此器前，必先读 `knowledge-manual` 一技，无所例外。",
   "knowledge.action_info": "info：重扫 knowledge/，返当时之康状（卷数、根径、损经之记）。",
   "knowledge.preamble": "下列诸卷，汝跨凝蜕之私藏长记也。欲忆昔之所习、所断、所悟者，以 read 取其 location 所指之 KNOWLEDGE.md，循而依之。每卷之匣或附副件（script、素材、原始之日志）——KNOWLEDGE.md 自有所引。常用之卷可以 psyche({object:'pad', action:'append', files:[location]}) 固于 pad，跨轮常存。知识乃汝私藏；若无可取者，勿妄载。",
   "skills.action_info": "info：还 skills-manual 之文，并录当时之康状（技数、解径、患记）。",
   "skills.preamble": "下列诸技，各司其事。凡所遇事与技之描合者，以 read 取其 location 所指之 SKILL.md，循而行之。每技之匣，或含副件（script、template、data），SKILL.md 自有所引。常用之技，可以 psyche({object:'pad', action:'append', files:[location]}) 固于 pad，跨轮常存。若无可取者，勿妄载。",
-  "skills.description": "尔之器灵技能目录。系统之中 <available_skills> 所列，皆此时可取之技。呼 info 以得 skills-manual 全文（藏用、出新、以 pad.append 载入），兼验技能目录康否。详参 .library/intrinsic/ 中 skills-manual 一技。"
+  "skills.description": "尔之器灵技能目录。系统之中 <available_skills> 所列，皆此时可取之技。用此器前（凡藏用、固定、出新、料理技能之事），必先读 `skills-manual` 一技——呼 `info` 即得其文与当时之康状，无所例外。"
 }

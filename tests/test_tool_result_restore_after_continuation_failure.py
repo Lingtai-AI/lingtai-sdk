@@ -38,9 +38,6 @@ class _FakeChat:
         )
         self.committed: list[list[ToolResultBlock]] = []
 
-    def has_pending_tool_calls(self) -> bool:
-        return self.interface.has_pending_tool_calls()
-
     def commit_tool_results(self, results: list[ToolResultBlock]) -> None:
         self.committed.append(list(results))
         self.interface.add_tool_results(results)
@@ -72,7 +69,7 @@ def test_restores_real_tool_results_when_adapter_rolled_back_user_entry():
     )
 
     assert restored is True
-    assert not agent._chat.has_pending_tool_calls()
+    assert not agent._chat.interface.has_pending_tool_calls()
     assert agent._chat.committed == [[real_result]]
     assert agent.saved == 1
     assert agent.logs == [("tool_results_restored_after_continuation_failure", {"result_count": 1})]
@@ -112,7 +109,7 @@ def test_restoration_skips_empty_results():
     )
 
     assert restored is False
-    assert agent._chat.has_pending_tool_calls()
+    assert agent._chat.interface.has_pending_tool_calls()
     assert agent.saved == 0
 
 
@@ -175,7 +172,7 @@ def test_process_response_restores_real_results_when_continuation_send_fails():
 
     assert agent._session.sent == [[real_result]]
     assert agent._chat.committed == [[real_result]]
-    assert not agent._chat.has_pending_tool_calls()
+    assert not agent._chat.interface.has_pending_tool_calls()
     assert agent._chat.interface.entries[-1].content == [real_result]
     assert not agent._chat.interface.entries[-1].content[0].synthesized
     assert agent.saved == 1

@@ -57,7 +57,13 @@ def test_knowledge_setup_registers_only_knowledge_tool(tmp_path):
         agent.stop(timeout=1.0)
 
 
-def test_former_alias_capabilities_do_not_register_knowledge(tmp_path):
+def test_former_alias_capabilities_are_not_tools(tmp_path):
+    """Legacy `library` / `codex` capability names must not register as tools.
+
+    `knowledge` itself is now default-on, so it WILL be available — but the
+    breaking-rename guarantee is still that the legacy names produce no
+    `library(...)` / `codex(...)` tool handler.
+    """
     for cap in ("library", "codex"):
         agent = Agent(
             service=make_mock_service(),
@@ -66,8 +72,6 @@ def test_former_alias_capabilities_do_not_register_knowledge(tmp_path):
             capabilities=[cap],
         )
         try:
-            assert agent.get_capability("knowledge") is None
-            assert "knowledge" not in agent._tool_handlers
             assert cap not in agent._tool_handlers
         finally:
             agent.stop(timeout=1.0)

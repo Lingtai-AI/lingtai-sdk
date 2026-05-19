@@ -8,7 +8,7 @@ Root capabilities package — registry, capability normalization, and setup disp
 
 | File | Role |
 |---|---|
-| `__init__.py` | Static registry (`_BUILTIN`, `_GROUPS`), normalization helper (`normalize_capabilities`), `setup_capability()`, and `get_all_providers()` |
+| `__init__.py` | Static registry (`_BUILTIN`, `_GROUPS`, `CORE_DEFAULTS`), normalization (`normalize_capabilities`, `apply_core_defaults`), `setup_capability()`, and `get_all_providers()` |
 | `_media_host.py` | `resolve_media_host()` — extracts origin from the agent LLM `base_url` |
 | `_zhipu_mode.py` | `resolve_z_ai_mode()` — returns `"ZHIPU"` (bigmodel.cn) or `"ZAI"` (international) |
 
@@ -27,13 +27,15 @@ Root capabilities package — registry, capability normalization, and setup disp
 
 ## State
 
-- `_BUILTIN` is static capability name → module path (`__init__.py:15-34`). `knowledge` resolves to `lingtai.core.knowledge`; former durable-memory names `library` and `codex` are not registered.
-- `_GROUPS` is static group name → list of capabilities; currently only `"file"` expands to `[read, write, edit, glob, grep]` (`__init__.py:36-39`).
+- `_BUILTIN` is static capability name → module path. `knowledge` resolves to `lingtai.core.knowledge`; former durable-memory names `library` and `codex` are not registered.
+- `_GROUPS` is static group name → list of capabilities; currently only `"file"` expands to `[read, write, edit, glob, grep]`.
+- `CORE_DEFAULTS` is the static set of capability-name → default-kwargs pairs that boot automatically on every `Agent`: `knowledge`, `skills`, `bash` (`{yolo: true}`), `avatar`, `daemon`, `mcp`, and the file group (`read`/`write`/`edit`/`glob`/`grep`). `vision` and `web_search` are NOT in this set — they require provider config / API keys and stay opt-in.
 - `normalize_capabilities()` is intentionally small after the breaking rename: it does not map former `library`/`codex` names, and only preserves deterministic merges such as duplicate `skills.paths`.
 - No mutable runtime state is held by this package.
 
 ## Notes
 
-- `setup_capability()` imports the target module and calls its `setup()` (`__init__.py:122-143`). Unknown names raise `ValueError` with available capabilities and groups.
+- `setup_capability()` imports the target module and calls its `setup()`. Unknown names raise `ValueError` with available capabilities and groups.
+- `apply_core_defaults(capabilities, disable)` overlays `CORE_DEFAULTS` with user-supplied kwargs (init.json wins on merge), then strips names listed in `disable`. A `"name": None` entry in `capabilities` is an inline opt-out equivalent to including the name in `disable`. The function is the single seam where init.json's `manifest.capabilities` becomes the effective set; called from `Agent.__init__` and `Agent._setup_from_init`.
 - `get_all_providers()` returns user-facing capability/provider metadata for `lingtai-agent check-caps`; it intentionally lists canonical `knowledge` and `skills`, not former `library`/`codex` durable-memory names.
 - `knowledge`/`skills` is a flat tool namespace split, not a nested taxonomy: private durable memory is `knowledge`; portable procedures are `skills`.

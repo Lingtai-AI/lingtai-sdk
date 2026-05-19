@@ -144,7 +144,7 @@ def _restore_tool_results_after_continuation_failure(
     if (
         not tool_results
         or agent._chat is None
-        or not agent._chat.has_pending_tool_calls()
+        or not agent._chat.interface.has_pending_tool_calls()
     ):
         return False
     agent._chat.commit_tool_results(tool_results)

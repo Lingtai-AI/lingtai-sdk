@@ -1008,3 +1008,36 @@ def test_emanate_without_preset_inherits_parent(tmp_path, monkeypatch):
     assert len(folders) == 1
     data = json.loads((folders[0] / "daemon.json").read_text())
     assert data.get("preset_name") is None
+
+
+def test_claude_code_env_strips_anthropic_auth(monkeypatch):
+    """Spawned claude-code processes must not inherit ANTHROPIC_API_KEY /
+    ANTHROPIC_AUTH_TOKEN — they force the CLI off the user's Claude Code
+    subscription onto API billing. See GH #107."""
+    from lingtai.core.daemon import _claude_code_env, _CLAUDE_CODE_STRIP_ENV
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-leaked")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "oauth-leaked")
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")  # sentinel non-stripped var
+    monkeypatch.setenv("HOME", "/tmp/home")
+
+    env = _claude_code_env()
+
+    for key in _CLAUDE_CODE_STRIP_ENV:
+        assert key not in env, f"{key} should be stripped from claude-code env"
+    # Non-auth vars must pass through unchanged so claude can still find HOME,
+    # PATH, CLAUDE_CONFIG_DIR, etc.
+    assert env.get("PATH") == "/usr/bin:/bin"
+    assert env.get("HOME") == "/tmp/home"
+
+
+def test_claude_code_env_noop_when_unset(monkeypatch):
+    """When no anthropic auth vars are set, the sanitized env equals os.environ."""
+    import os
+    from lingtai.core.daemon import _claude_code_env, _CLAUDE_CODE_STRIP_ENV
+
+    for key in _CLAUDE_CODE_STRIP_ENV:
+        monkeypatch.delenv(key, raising=False)
+
+    env = _claude_code_env()
+    assert env == os.environ

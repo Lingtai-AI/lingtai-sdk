@@ -329,30 +329,44 @@ def _migrate_legacy_json(working_dir: Path, knowledge_dir: Path) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def _escape_xml(s: str) -> str:
+    """Escape only the characters XML actually requires in element text.
+
+    `"` and `'` only need escaping inside attribute values; escaping them in
+    element bodies just adds `&quot;`/`&apos;` noise to the rendered prompt
+    without making the catalog any more parseable.
+    """
     return (
         s.replace("&", "&amp;")
         .replace("<", "&lt;")
         .replace(">", "&gt;")
-        .replace('"', "&quot;")
-        .replace("'", "&apos;")
     )
+
+
+def _indent_block(text: str, indent: str) -> str:
+    """Indent every line of ``text`` by ``indent``. Empty input → empty string."""
+    if not text:
+        return ""
+    return "\n".join(indent + line for line in text.splitlines())
 
 
 def _build_catalog_xml(entries: list[dict], lang: str) -> str:
     if not entries:
         return ""
 
-    lines = [
+    lines: list[str] = [
         t(lang, "knowledge.preamble"),
         "",
         "<knowledge>",
     ]
     for e in entries:
+        lines.append("")
         lines.append("  <entry>")
-        lines.append(f"    <name>{_escape_xml(e['name'])}</name>")
-        lines.append(f"    <description>{_escape_xml(e['description'])}</description>")
-        lines.append(f"    <location>{_escape_xml(e['path'])}</location>")
+        lines.append(f"    name: {_escape_xml(e['name'])}")
+        lines.append(f"    location: {_escape_xml(e['path'])}")
+        lines.append("    description:")
+        lines.append(_indent_block(_escape_xml(e["description"]), "      "))
         lines.append("  </entry>")
+    lines.append("")
     lines.append("</knowledge>")
     return "\n".join(lines)
 

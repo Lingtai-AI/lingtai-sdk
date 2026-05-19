@@ -35,6 +35,7 @@
   "system_tool.preset_description": "可选。配 action='refresh' 用：刷新前换行囊中之一预设（{胎光, 肉身} 之合也）。action='presets' 浏览可用预设。轻巧、可逆。若当下之文超目标预设之限，换被拒——请先更衣。",
   "system_tool.revert_preset_description": "可选。配 action='refresh' 用，传 true 则换归你的默认预设（manifest.preset.default —— 多即创建时所选者也）。不可与 'preset' 同用。此乃归家之钥——尝他预设之后，无须记默认之名即可一键复原。若无默认预设则报错。",
   "system_tool.sleep_message": "入寐矣。身、简与对话之史俱在。邮匣中凡有书信至（飞鸽、系统之告、同侪之言），皆能唤汝。",
+  "system_tool.sleep_refused_pending_notifications": "寐止——此回合中有讯至，未及理。仍居 ACTIVE；俟此回合毕、入 IDLE 时，未理之讯自现。如必欲入寐，传 force=true。",
   "system_tool.refresh_message": "更衣已启——汝将假死而重生。勿再调器。",
   "system.refresh_successful": "[system] 更衣已成。器用与配置俱已重载。可续前事。",
   "psyche.context_forget_summary": "[系统] 凝蜕毕。工作记忆已空。近时对话之条已存于上下文中——先阅之以复位。欲寻更多前事，查 logs/events.jsonl——其文浩繁，宜 grep、tail、按类筛之，勿整取。",

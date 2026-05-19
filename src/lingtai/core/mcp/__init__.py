@@ -348,10 +348,12 @@ def _reconcile(agent: "BaseAgent") -> dict:
 
 _DESCRIPTION = (
     "Your per-agent MCP server registry. The <registered_mcp> catalog in your "
-    "system prompt lists every MCP server currently registered. Call show to "
-    "read the full mcp-manual skill body (registration contract, file paths, "
-    "schema) plus a runtime health snapshot. To register, deregister, or update "
-    "MCPs, edit mcp_registry.jsonl directly with write/edit and call "
+    "system prompt lists every MCP server currently registered. Before using "
+    "this tool (registering, deregistering, updating, or troubleshooting MCP "
+    "servers), read the `mcp-manual` skill — call `show` to fetch its body "
+    "(registration contract, file paths, schema) plus a runtime health "
+    "snapshot; no exceptions. To register, deregister, or update MCPs, edit "
+    "mcp_registry.jsonl directly with write/edit and call "
     "system(action=\"refresh\")."
 )
 
