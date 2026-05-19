@@ -34,10 +34,53 @@ def _check_karma_gate(agent, action: str, args: dict) -> dict | None:
 
 
 def _sleep(agent, args: dict) -> dict:
-    """Self-sleep — any agent can put itself to sleep, no karma needed."""
+    """Self-sleep — any agent can put itself to sleep, no karma needed.
+
+    Sleep is idempotent against the notification queue: if `.notification/`
+    has an unprocessed payload on disk (fingerprint diverges from the
+    agent's last-committed fingerprint), we refuse the transition rather
+    than going ASLEEP with mail already waiting. This handles the race
+    where mail arrives during the same ACTIVE turn that decides to sleep —
+    the LLM's "no unread mail, sleep" decision was made against the
+    pre-call snapshot, but by the time the tool fires the queue has
+    changed. Without this guard the first email looks dropped to the
+    human (only a SECOND email wakes the agent). See lingtai-kernel#112.
+
+    `force=True` overrides the guard — escape hatch for the rare case
+    where the agent explicitly wants to sleep anyway.
+    """
     from ...i18n import t
     from ...state import AgentState
+    from ...notifications import notification_fingerprint
+
     reason = args.get("reason", "")
+    force = bool(args.get("force", False))
+
+    pending_fp = notification_fingerprint(agent._working_dir)
+    has_pending = pending_fp != agent._notification_fp
+
+    if has_pending and not force:
+        agent._log(
+            "sleep_refused_pending_notifications",
+            reason=reason,
+            pending_fp=list(pending_fp),
+            committed_fp=list(agent._notification_fp or ()),
+        )
+        return {
+            "status": "ok",
+            "message": t(
+                agent._config.language,
+                "system_tool.sleep_refused_pending_notifications",
+            ),
+        }
+
+    if has_pending and force:
+        agent._log(
+            "sleep_forced_with_pending_notifications",
+            reason=reason,
+            pending_fp=list(pending_fp),
+        )
+
     agent._log("self_sleep", reason=reason)
     agent._set_state(AgentState.ASLEEP, reason="self-sleep")
     agent._asleep.set()

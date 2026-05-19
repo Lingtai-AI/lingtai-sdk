@@ -35,6 +35,7 @@
   "system_tool.preset_description": "可选。配 action='refresh' 使用：在刷新前换上行囊中的另一套预设（{胎光, 肉身}组合）。用 action='presets' 浏览可用预设。轻巧、可逆。若当前上下文超出目标预设之限，换被拒——请先更衣。",
   "system_tool.revert_preset_description": "可选。配 action='refresh' 使用，传 true 即换回你的默认预设（manifest.preset.default —— 通常是你创建时所选的那个）。不可与 'preset' 参数同时使用。这是一个'回家按钮'——尝试其他预设后无需记住默认的名字即可一键还原。若未配置默认预设则报错。",
   "system_tool.sleep_message": "进入睡眠。身份、手记与对话历史均已保存。任何抵达收件箱的消息（邮件、系统通知、同伴消息）都会将你唤醒。",
+  "system_tool.sleep_refused_pending_notifications": "睡眠已拒绝——本回合中收到了通知，尚未处理。仍保持 ACTIVE；待回合结束进入 IDLE 时，待处理的通知将自动浮现。如确要入眠，请传入 force=true。",
   "system_tool.refresh_message": "刷新已启动——你将被挂起并立即重新启动。请勿再进行任何工具调用。",
   "system.refresh_successful": "[system] 沐浴成功。工具与配置已重新加载。可以继续。",
   "psyche.context_forget_summary": "[系统] 凝蜕毕。工作记忆已空。近期对话条目已保留在上下文中——先阅读以重新定位。若需更多前事，查 logs/events.jsonl——其文甚巨，宜 grep / tail / 按类筛，切勿整取。",
