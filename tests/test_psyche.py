@@ -309,15 +309,14 @@ def test_psyche_schema_has_correct_objects():
 
 
 def test_psyche_schema_has_correct_actions():
-    from lingtai_kernel.intrinsics.psyche import get_schema
+    # Schema is intentionally flat (no allOf) for strict-mode provider
+    # compatibility — see #114. Per-(object, action) constraints live in
+    # the runtime _VALID_ACTIONS table.
+    from lingtai_kernel.intrinsics.psyche import _VALID_ACTIONS, get_schema
     SCHEMA = get_schema("en")
     assert "enum" not in SCHEMA["properties"]["action"]
-    action_sets = {}
-    for rule in SCHEMA["allOf"]:
-        obj = rule["if"]["properties"]["object"]["const"]
-        acts = set(rule["then"]["properties"]["action"]["enum"])
-        action_sets[obj] = acts
-    assert action_sets == {
+    assert "allOf" not in SCHEMA
+    assert _VALID_ACTIONS == {
         "lingtai": {"update", "load"},
         "pad": {"edit", "load", "append"},
         "context": {"molt"},
