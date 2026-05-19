@@ -21,14 +21,14 @@ System intrinsic — runtime, lifecycle, and synchronization. Provides the agent
 
 - `karma.py` — Karma-gated lifecycle actions.
   - `_KARMA_ACTIONS` / `_NIRVANA_ACTIONS` (`karma.py:13-14`) — gate mapping sets.
-  - `_check_karma_gate()` (`karma.py:17-36`) — authorization gate: validates karma/nirvana admin flags, resolves target address, rejects self-targeting.
-  - `_sleep()` (`karma.py:39-51`) — self-sleep (no karma needed).
-  - `_lull()` (`karma.py:54-64`) — put another agent to sleep.
-  - `_suspend()` (`karma.py:67-77`) — suspend another agent.
-  - `_cpr()` (`karma.py:80-92`) — resuscitate a suspended agent.
-  - `_interrupt()` (`karma.py:95-105`) — interrupt a running agent's current turn.
-  - `_clear()` (`karma.py:108-128`) — force a full molt on another agent.
-  - `_nirvana()` (`karma.py:131-149`) — permanently destroy an agent's working directory.
+  - `_check_karma_gate()` (`karma.py:15-33`) — authorization gate: validates karma/nirvana admin flags, resolves target address, rejects self-targeting.
+  - `_sleep()` (`karma.py:36-91`) — self-sleep (no karma needed). Guards the ACTIVE→ASLEEP transition against a divergent `.notification/` fingerprint: if mail/system payloads arrived during the same turn (so `notification_fingerprint(workdir) != agent._notification_fp`) and `force` is not set, refuses sleep and returns a status-ok refusal message rather than transitioning state. `force=True` bypasses the guard. Fixes kernel#112.
+  - `_lull()` (`karma.py:94-107`) — put another agent to sleep.
+  - `_suspend()` (`karma.py:109-121`) — suspend another agent.
+  - `_cpr()` (`karma.py:124-137`) — resuscitate a suspended agent.
+  - `_interrupt()` (`karma.py:140-151`) — interrupt a running agent's current turn.
+  - `_clear()` (`karma.py:154-174`) — force a full molt on another agent.
+  - `_nirvana()` (`karma.py:177-198`) — permanently destroy an agent's working directory.
 
 - `notification.py` — agent-facing generic dismiss. The `.notification/` filesystem-as-protocol uses one file per producer channel; `_dismiss()` (`notification.py:12-39`) accepts `channel` + optional `force` and calls `notifications.dismiss_channel(agent, ...)`. Legacy `ids=` calls are accepted for one release, log `system_dismiss_legacy_ids_ignored`, and clear nothing.
   - Producer-side notification submission lives in `notifications.py` at the kernel root and is re-exported by this package's `__init__.py` as `publish_notification` / `clear_notification`. See root `ANATOMY.md` "Notifications" for the full architecture and dismissal taxonomy.
