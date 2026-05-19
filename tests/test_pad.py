@@ -31,20 +31,14 @@ def test_psyche_in_all_intrinsics():
     info = ALL_INTRINSICS["psyche"]
     mod = info["module"]
     schema = mod.get_schema()
-    # Schema uses allOf per-object action constraints, not a flat action.enum.
-    pad_actions = next(
-        rule["then"]["properties"]["action"]["enum"]
-        for rule in schema["allOf"]
-        if rule["if"]["properties"]["object"]["const"] == "pad"
-    )
-    context_actions = next(
-        rule["then"]["properties"]["action"]["enum"]
-        for rule in schema["allOf"]
-        if rule["if"]["properties"]["object"]["const"] == "context"
-    )
-    assert "edit" in pad_actions
-    assert "load" in pad_actions
-    assert "molt" in context_actions
+    # Schema is intentionally flat (no allOf) for strict-mode provider
+    # compatibility — see #114. Per-(object, action) constraints live in
+    # the runtime _VALID_ACTIONS table instead.
+    assert "allOf" not in schema
+    assert schema["properties"]["object"]["enum"] == ["pad", "context", "name", "lingtai"]
+    valid = mod._VALID_ACTIONS
+    assert {"edit", "load"} <= valid["pad"]
+    assert "molt" in valid["context"]
 
 
 def test_psyche_wired_in_agent(tmp_path):
