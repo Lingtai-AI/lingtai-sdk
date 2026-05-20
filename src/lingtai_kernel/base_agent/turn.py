@@ -838,12 +838,24 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
             and not response.tool_calls
             and not response.thoughts
         ):
+            # Extract diagnostic metadata from provider response.
+            raw = response.raw
+            _diag: dict = {}
+            if raw is not None:
+                _diag["response_id"] = getattr(raw, "id", None)
+                _diag["response_model"] = getattr(raw, "model", None)
+                choices = getattr(raw, "choices", None)
+                if choices:
+                    _diag["finish_reason"] = getattr(
+                        choices[0], "finish_reason", None
+                    )
             agent._log(
                 "empty_llm_response",
                 ledger_source=ledger_source,
                 in_tool_loop=in_tool_loop,
                 output_tokens=response.usage.output_tokens,
                 thinking_tokens=response.usage.thinking_tokens,
+                **_diag,
             )
             raise EmptyLLMResponseError(
                 ledger_source=ledger_source,
