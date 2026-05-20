@@ -4,6 +4,7 @@ The core message lifecycle: receive → route → LLM → process → persist.
 """
 from __future__ import annotations
 
+import json
 import queue
 import time
 
@@ -804,24 +805,26 @@ def _check_poll_backoff(agent, tool_calls, tool_results=None) -> bool:
             continue
         if action not in CHECK_ACTIONS:
             continue
-        # Check if this read/check actually returned messages.
+        # Check if this read/check actually returned items. Different
+        # providers use different keys: imap→"emails", telegram/wechat→
+        # "messages", feishu→"conversations" (check) or "messages" (read).
         found_new = False
         tr = result_by_tc_id.get(tc.id)
         if tr:
             content = getattr(tr, "content", None)
+            payload = None
             if isinstance(content, dict):
-                messages = content.get("messages")
-                if messages:
-                    found_new = True
-            # Also check for stringified JSON content.
-            elif isinstance(content, str) and '"messages"' in content:
+                payload = content
+            elif isinstance(content, str):
                 try:
-                    import json
-                    parsed = json.loads(content)
-                    if parsed.get("messages"):
-                        found_new = True
+                    payload = json.loads(content)
                 except (json.JSONDecodeError, TypeError):
-                    pass
+                    payload = None
+            if isinstance(payload, dict):
+                for key in ("messages", "emails", "conversations"):
+                    if payload.get(key):
+                        found_new = True
+                        break
         # Record the poll attempt with found_new status.
         tracker.record_poll(tc.name, found_new=found_new)
         if tracker.should_stop_polling(tc.name):
