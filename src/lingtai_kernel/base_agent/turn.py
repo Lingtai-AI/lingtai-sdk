@@ -772,16 +772,25 @@ def _check_external_send(agent, tool_calls, tool_results=None) -> None:
                 )
 
 
-def _check_poll_backoff(agent, tool_calls) -> bool:
+def _check_poll_backoff(agent, tool_calls, tool_results=None) -> bool:
     """Check if polling actions should trigger idle-after-backoff.
 
     Counts consecutive check/read calls on external channel tools within
     the same turn. After ``max_poll_retries`` consecutive checks on the
     same channel, returns True to signal the agent should go IDLE.
 
-    The counter resets when a send action occurs or when new messages
-    arrive via the notification system.
+    The counter resets when a send action occurs, when new messages
+    arrive via the notification system, or when a check/read action
+    actually returns messages (found_new=True).
     """
+    # Build a lookup from tool_call_id to result for found-new detection.
+    result_by_tc_id: dict = {}
+    if tool_results:
+        for tr in tool_results:
+            tc_id = getattr(tr, "tool_call_id", None)
+            if tc_id:
+                result_by_tc_id[tc_id] = tr
+
     tracker = agent._sent_tracker
     should_idle = False
     for tc in tool_calls:
@@ -795,10 +804,26 @@ def _check_poll_backoff(agent, tool_calls) -> bool:
             continue
         if action not in CHECK_ACTIONS:
             continue
-        # Record a poll attempt (assume no new messages — the conservative
-        # default). If new messages actually arrived, the notification
-        # system will wake the agent via a separate path.
-        tracker.record_poll(tc.name, found_new=False)
+        # Check if this read/check actually returned messages.
+        found_new = False
+        tr = result_by_tc_id.get(tc.id)
+        if tr:
+            content = getattr(tr, "content", None)
+            if isinstance(content, dict):
+                messages = content.get("messages")
+                if messages:
+                    found_new = True
+            # Also check for stringified JSON content.
+            elif isinstance(content, str) and '"messages"' in content:
+                try:
+                    import json
+                    parsed = json.loads(content)
+                    if parsed.get("messages"):
+                        found_new = True
+                except (json.JSONDecodeError, TypeError):
+                    pass
+        # Record the poll attempt with found_new status.
+        tracker.record_poll(tc.name, found_new=found_new)
         if tracker.should_stop_polling(tc.name):
             agent._log(
                 "poll_backoff_exhausted",
@@ -941,7 +966,7 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
 
         # Issue #63: poll backoff — if the agent is repeatedly checking
         # for new messages without finding any, go IDLE after max retries.
-        if _check_poll_backoff(agent, response.tool_calls):
+        if _check_poll_backoff(agent, response.tool_calls, tool_results):
             if tool_results and agent._chat:
                 agent._chat.commit_tool_results(tool_results)
             agent._log("idle_after_poll_backoff",
