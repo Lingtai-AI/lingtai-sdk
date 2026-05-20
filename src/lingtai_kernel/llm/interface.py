@@ -60,7 +60,10 @@ class ToolResultBlock:
     synthesized: bool = False
 
     def to_dict(self) -> dict:
-        return {"type": "tool_result", "id": self.id, "name": self.name, "content": self.content}
+        d: dict = {"type": "tool_result", "id": self.id, "name": self.name, "content": self.content}
+        if self.synthesized:
+            d["synthesized"] = True
+        return d
 
 
 def _tool_call_context(tool_call: "ToolCallBlock | None") -> str:
@@ -178,7 +181,12 @@ def content_block_from_dict(d: dict) -> ContentBlock:
     elif btype == "tool_call":
         return ToolCallBlock(id=d["id"], name=d["name"], args=d["args"])
     elif btype == "tool_result":
-        return ToolResultBlock(id=d["id"], name=d["name"], content=d["content"])
+        return ToolResultBlock(
+            id=d["id"],
+            name=d["name"],
+            content=d["content"],
+            synthesized=d.get("synthesized", False),
+        )
     elif btype == "thinking":
         return ThinkingBlock(text=d["text"], provider_data=d.get("provider_data", {}))
     else:

@@ -969,6 +969,12 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         if _check_poll_backoff(agent, response.tool_calls, tool_results):
             if tool_results and agent._chat:
                 agent._chat.commit_tool_results(tool_results)
+                # Issue #126: save immediately so the in-memory and on-disk
+                # interface agree that tool results are committed. Without
+                # this, a notification heartbeat tick between the return
+                # and the post-turn save in _run_loop can see a stale wire
+                # and heal the (already-committed) tool calls.
+                agent._save_chat_history(ledger_source=ledger_source)
             agent._log("idle_after_poll_backoff",
                        reason="poll_retries_exhausted")
             return {

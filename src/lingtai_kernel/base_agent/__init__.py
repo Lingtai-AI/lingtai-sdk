@@ -1070,9 +1070,20 @@ class BaseAgent:
         # If the wire has unanswered tool_calls, appending a user-role
         # result entry would violate the alternation invariant.  Defer.
         if iface.has_pending_tool_calls():
+            # Issue #126 diagnostic: log the tail shape so we can trace
+            # why tool results were not detected as committed.
+            tail_info = ""
+            if iface._entries:
+                last = iface._entries[-1]
+                tail_info = f" tail_role={last.role} tail_blocks={len(last.content)}"
+                if last.role == "assistant":
+                    tc_ids = [b.id[:20] for b in last.content
+                              if hasattr(b, 'id') and hasattr(b, 'name')]
+                    tail_info += f" tc_ids={tc_ids}"
             self._log("notification_inject_aborted",
                       reason="pending_tool_calls",
-                      sources=list(notifications.keys()))
+                      sources=list(notifications.keys()),
+                      _tail=tail_info)
             return False
 
         call_id = f"notif_{int(time.time()*1000):x}_{secrets.token_hex(2)}"
