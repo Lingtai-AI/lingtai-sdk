@@ -1482,6 +1482,7 @@ class DaemonManager:
                 text=True,
                 cwd=str(self._agent._working_dir),
                 env=_claude_code_env(),
+                start_new_session=True,  # own process group for reliable cleanup
             )
         except FileNotFoundError:
             return {"status": "error",
@@ -1489,6 +1490,8 @@ class DaemonManager:
         except OSError as e:
             return {"status": "error",
                     "message": f"Failed to start claude CLI: {e}"}
+        with self._cli_lock:
+            self._cli_procs.append(proc)
 
         stderr_lines: list[str] = []
 
@@ -1518,11 +1521,7 @@ class DaemonManager:
             deadline = time.monotonic() + self._timeout
             for raw_line in proc.stdout:
                 if time.monotonic() > deadline:
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
+                    _kill_process_group(proc)
                     return {"status": "error",
                             "message": f"claude --resume timed out after "
                                        f"{self._timeout}s"}
@@ -1549,13 +1548,17 @@ class DaemonManager:
 
             proc.wait(timeout=max(1.0, deadline - time.monotonic()))
         except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
+            _kill_process_group(proc)
             return {"status": "error",
                     "message": f"claude --resume timed out after "
                                f"{self._timeout}s"}
         finally:
             stderr_thread.join(timeout=2.0)
+            with self._cli_lock:
+                try:
+                    self._cli_procs.remove(proc)
+                except ValueError:
+                    pass  # already removed by reclaim/watchdog
 
         stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
 
@@ -1618,6 +1621,7 @@ class DaemonManager:
                 stderr=subprocess.PIPE,
                 text=True,
                 cwd=str(self._agent._working_dir),
+                start_new_session=True,  # own process group for reliable cleanup
             )
         except FileNotFoundError:
             return {"status": "error",
@@ -1625,6 +1629,8 @@ class DaemonManager:
         except OSError as e:
             return {"status": "error",
                     "message": f"Failed to start codex CLI: {e}"}
+        with self._cli_lock:
+            self._cli_procs.append(proc)
 
         stderr_lines: list[str] = []
 
@@ -1654,11 +1660,7 @@ class DaemonManager:
             deadline = time.monotonic() + self._timeout
             for raw_line in proc.stdout:
                 if time.monotonic() > deadline:
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
+                    _kill_process_group(proc)
                     return {"status": "error",
                             "message": f"codex exec resume timed out after "
                                        f"{self._timeout}s"}
@@ -1687,13 +1689,17 @@ class DaemonManager:
 
             proc.wait(timeout=max(1.0, deadline - time.monotonic()))
         except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
+            _kill_process_group(proc)
             return {"status": "error",
                     "message": f"codex exec resume timed out after "
                                f"{self._timeout}s"}
         finally:
             stderr_thread.join(timeout=2.0)
+            with self._cli_lock:
+                try:
+                    self._cli_procs.remove(proc)
+                except ValueError:
+                    pass  # already removed by reclaim/watchdog
 
         stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
 
