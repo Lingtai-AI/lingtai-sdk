@@ -255,18 +255,17 @@ def test_catalog_injected_into_skills_section(tmp_path):
     agent, _ = _mk_agent(tmp_path, {"paths": [str(extra)]})
     try:
         prompt = agent._prompt_manager.read_section("skills") or ""
-        assert "<available_skills>" in prompt
-        assert "skills-manual" in prompt
-        assert "shared-thing" in prompt
+        assert "- name: skills-manual" in prompt
+        assert "- name: shared-thing" in prompt
     finally:
         agent.stop(timeout=1.0)
 
 
 def test_catalog_rendering_is_readable_without_xml_quote_noise(tmp_path):
     # The catalog goes straight into the system prompt; humans (and the model)
-    # have complained that the prior shape was XML-escape soup. Pin the new
-    # shape: per-skill block with indented `description:` body, no `&quot;` /
-    # `&apos;` noise from over-escaping element text.
+    # complained that the prior XML shape was escape soup. Pin the YAML shape:
+    # per-skill block with a `description:` block scalar carrying raw quotes
+    # and apostrophes, no `&quot;` / `&apos;` over-escaping noise.
     workdir = tmp_path / "agent"
     _write_skill(
         workdir / ".library" / "custom" / "fancy-tool",
@@ -285,14 +284,11 @@ def test_catalog_rendering_is_readable_without_xml_quote_noise(tmp_path):
         # No spurious escape entities for `"` and `'` in element text.
         assert "&quot;" not in prompt
         assert "&apos;" not in prompt
-        # The new shape uses indented `description:` blocks.
-        assert "    description:" in prompt
-        assert "      Handles \"quoted\" args" in prompt
-        # The outer wrapper still exists (consumers grep for it).
-        assert "<available_skills>" in prompt
-        assert "</available_skills>" in prompt
-        # The skill block keeps clean field labels rather than inline tags.
-        assert "    name: fancy-tool" in prompt
+        # YAML shape: `- name:` entry with a `description: |` block scalar.
+        assert "- name: fancy-tool" in prompt
+        assert "  description: |" in prompt
+        # Body sits one level deeper than the `description:` field.
+        assert "    Handles \"quoted\" args" in prompt
     finally:
         agent.stop(timeout=1.0)
 

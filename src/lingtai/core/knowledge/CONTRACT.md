@@ -49,7 +49,7 @@ The two capabilities are structurally isomorphic but physically separate:
 | Manifest file | `SKILL.md` | `KNOWLEDGE.md` |
 | Tool name | `skills` | `knowledge` |
 | Tool surface | `info` | `info` |
-| Prompt section | protected `skills` (`<available_skills>` XML) | protected `knowledge` (`<knowledge>` XML) |
+| Prompt section | protected `skills` (YAML catalog) | protected `knowledge` (YAML catalog) |
 | Extra path sources | `manifest.capabilities.skills.paths` | none — strictly per-agent |
 | Visibility | portable / shareable | private / agent-owned |
 | May reference local paths, mail ids, logs | no | yes |
@@ -123,9 +123,9 @@ write is a one-time legacy migration: if `knowledge/knowledge.json` or old `code
 On setup and on every `info` call, the capability rewrites protected prompt
 section `knowledge`:
 
-- If there are entries, the section contains a preamble plus a
-  `<knowledge>` XML block. Each `<entry>` carries `<name>`, `<description>`,
-  and `<location>` (the absolute `KNOWLEDGE.md` path).
+- If there are entries, the section contains a preamble plus a YAML
+  catalog. Each entry is rendered as a `- name:` block with `location:`
+  (absolute `KNOWLEDGE.md` path) and a `description:` block scalar.
 - If there are no entries, the section is cleared.
 
 Only `name`, `description`, and `path` are ever injected. Bodies and supporting

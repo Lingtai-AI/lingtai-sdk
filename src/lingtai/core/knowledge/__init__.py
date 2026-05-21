@@ -4,7 +4,7 @@ Filesystem-backed catalog. Each agent has its own ``<agent>/knowledge/``
 directory; every immediate subdirectory with a ``KNOWLEDGE.md`` file is a
 knowledge entry. The capability is pure presentation: it scans the directory,
 parses each ``KNOWLEDGE.md``'s YAML frontmatter for ``name`` + ``description``,
-and injects a compact ``<knowledge>`` XML catalog into the system prompt's
+and injects a compact YAML catalog into the system prompt's
 ``knowledge`` section. Bodies, supporting files, scripts, and assets live next
 to ``KNOWLEDGE.md`` and are loaded on demand through the regular ``read`` tool.
 
@@ -325,7 +325,7 @@ def _migrate_legacy_json(working_dir: Path, knowledge_dir: Path) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# XML catalog builder
+# YAML catalog builder
 # ---------------------------------------------------------------------------
 
 def _escape_xml(s: str) -> str:

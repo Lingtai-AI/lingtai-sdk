@@ -2,7 +2,7 @@
 name: skills-manual
 description: >
   Operational guide for the `skills` capability — your skill catalog's
-  on-disk layout, how the `<available_skills>` XML in your system prompt
+  on-disk layout, how the YAML skill catalog in your system prompt
   is built, and the full authoring/publishing workflow for new skills.
 
   Reach for this manual when:
@@ -36,7 +36,7 @@ version: 1.1.0
 
 # The Skills Capability
 
-This is the skills capability's own manual. It documents how the skill catalog works from your side: the on-disk layout, the XML catalog, and the authoring/publishing workflow. The skills capability scans `.library/` plus any extra paths declared in `init.json`, builds the `<available_skills>` XML catalog, and injects it into your system prompt.
+This is the skills capability's own manual. It documents how the skill catalog works from your side: the on-disk layout, the YAML catalog, and the authoring/publishing workflow. The skills capability scans `.library/` plus any extra paths declared in `init.json`, builds the YAML skill catalog, and injects it into your system prompt.
 
 ## On-disk layout
 
@@ -59,11 +59,11 @@ Your skill catalog lives at `<agent>/.library/`:
 
 Additional paths come from `init.json` at `manifest.capabilities.skills.paths` — typically `../.library_shared/` (the network-shared library) and `~/.lingtai-tui/utilities/` (operational utilities shipped by the TUI).
 
-If the skills capability is NOT loaded, the files still exist on disk — you just don't get an XML catalog in your prompt. You can still reach the manuals via `read`, `grep`, `ls`.
+If the skills capability is NOT loaded, the files still exist on disk — you just don't get a catalog in your prompt. You can still reach the manuals via `read`, `grep`, `ls`.
 
 ## How the catalog works
 
-Every skill listed in `<available_skills>` in your system prompt is reachable right now. Each entry has `name`, `description`, and `location`. To read a skill's body, use `read` on the file at `<location>`. That gives you the full Markdown for that one turn.
+The `skills` section of your system prompt is a YAML list. Each skill is one `- name: <name>` block with a `location:` (absolute path to the skill's `SKILL.md`) and a `description:` block scalar. To read a skill's body, use `read` on the file at that `location`. That gives you the full Markdown for that one turn.
 
 ## Loading a skill into active working memory
 

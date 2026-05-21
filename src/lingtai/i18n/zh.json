@@ -26,7 +26,7 @@
   "bash.working_dir": "命令的工作目录（可选）。必须位于 agent 工作目录沙箱内；沙箱外路径会被拒绝。若要操作外部仓库/路径，请将 working_dir 保持为 agent 目录，并在 command 中显式 cd，例如 cd /absolute/path && ...",
   "bash.async": "后台运行命令并立即返回 job_id（默认：false，仅 action='run' 时生效）",
   "bash.job_id": "异步任务 ID，用于 poll/cancel（由异步 run 返回）",
-  "knowledge.description": "你的跨凝蜕长存私有知识目录——所学、所断、所悟之记。每条目皆为 knowledge/<名>/ 下之一夹，内含 KNOWLEDGE.md（YAML frontmatter 须有 name 与 description），可附脚本、素材、笔记、原始日志等支撑文件。系统提示中之 <knowledge> 目录列出每条目之 name + description + location；正文按需以 read 工具取之，与 skills 同。知识为汝私有：条目可引本地路径、邮件 ID、日志——此皆为 skills 所不可依赖之物。新条目以 write/edit 直接写入 knowledge/<名>/KNOWLEDGE.md；修订同法。调 info 可刷新目录并查看健康状态。用此工具前，必先读 `knowledge-manual` 技能，无例外。",
+  "knowledge.description": "你的跨凝蜕长存私有知识目录——所学、所断、所悟之记。每条目皆为 knowledge/<名>/ 下之一夹，内含 KNOWLEDGE.md（YAML frontmatter 须有 name 与 description），可附脚本、素材、笔记、原始日志等支撑文件。系统提示中之知识目录为 YAML 列表——每条目为一 `- name:` 块，附 `location:` 与 `description:` 字段；正文按需以 read 工具取之，与 skills 同。知识为汝私有：条目可引本地路径、邮件 ID、日志——此皆为 skills 所不可依赖之物。新条目以 write/edit 直接写入 knowledge/<名>/KNOWLEDGE.md；修订同法。调 info 可刷新目录并查看健康状态。用此工具前，必先读 `knowledge-manual` 技能，无例外。",
   "knowledge.action_info": "info：重新扫描 knowledge/，返回运行时健康快照（目录大小、根路径、损坏条目）。",
   "knowledge.preamble": "下列为汝跨凝蜕之私有长存记忆条目。欲回想昔日所学、所断、所悟者，用 read 工具读取该条目 location 字段所示 KNOWLEDGE.md 之路径，依其所言行之。每条目夹内或附脚本、素材、原始日志——KNOWLEDGE.md 会指明其用法。常用之条目可以 psyche({object:'pad', action:'append', files:[location]}) 钉入手记以跨轮持存。知识乃汝私有；若无相应条目，则不必加载。",
   "avatar.description": "化出独立他我。继承 init.json，用默认预设启动。详见 avatar-manual 技能。",
@@ -53,7 +53,7 @@
   "daemon.tasks.preset": "可选预设文件路径。必须是 .json/.jsonc 路径，使用 system(action='presets') 返回的 name 字段。不要用简写名——用 presets 列表里的完整 name。示例：'~/.lingtai-tui/presets/saved/cheap.json'。省略则继承父灵工具面。",
   "daemon.id": "'ask' 操作的分神 ID（如 'em-1'）",
   "daemon.message": "'ask' 操作的跟进消息",
-  "skills.description": "你的器灵专属技能目录。系统提示词中的 <available_skills> 目录列出了当前所有可用的技能。用此工具前（编写、固定、发布或管理技能），必先读 `skills-manual` 技能——调用 `info` 即可获取其正文与运行时健康快照，无例外。",
+  "skills.description": "你的器灵专属技能目录。系统提示词中的技能目录为 YAML 列表——每项技能为一 `- name:` 块，附 `location:` 与 `description:` 字段——涵盖当前所有可用的技能。用此工具前（编写、固定、发布或管理技能），必先读 `skills-manual` 技能——调用 `info` 即可获取其正文与运行时健康快照，无例外。",
   "skills.action_info": "info：返回 skills-manual 技能正文，以及运行时健康快照（目录规模、解析后的路径、问题列表）。",
   "skills.preamble": "以下技能为特定任务提供专门指导。当任务匹配某个技能的描述时，使用 read 工具读取 location 字段所示路径下的 SKILL.md 文件，然后遵循其中指示。每个技能文件夹可能包含支持文件（脚本、模板、数据）——SKILL.md 会引用它们。经常使用的技能可通过 psyche({object:'pad', action:'append', files:[location]}) 固定到 pad 中，使其跨轮次持久存在。若没有明显匹配的技能，则不加载任何技能。"
 }
