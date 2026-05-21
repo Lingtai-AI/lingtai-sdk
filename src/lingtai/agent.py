@@ -1229,30 +1229,30 @@ class Agent(BaseAgent):
         # the agent's architecture to itself (tool tiers, data-flow
         # topology, life states, channel discipline, attention model).
         #
-        # Resolution precedence:
-        #   1. data["substrate"]          — inline init.json string
-        #   2. system/substrate.md        — agent's own copy (editable)
-        #   3. packaged prompts/substrate.md — kernel default (v1)
+        # Resolution precedence (issue #133 — refresh-time refresh):
+        #   1. data["substrate"]          — inline init.json string (operator override)
+        #   2. packaged prompts/substrate.md — kernel default, always wins on every boot
+        #   3. system/substrate.md        — fallback only if package missing
         #
-        # Every agent gets the section populated by default. To opt out,
-        # set `"substrate": " "` (a single space, written to system/
-        # substrate.md and rendered as effectively blank).
+        # The packaged default overwrites the on-disk file on every boot so
+        # that `pip install -e .` + `system(refresh)` actually propagates
+        # kernel updates. To opt out, set `"substrate": " "` (a single
+        # space, treated as an explicit operator value by step 1).
         substrate = data.get("substrate", "")
         substrate_file = system_dir / "substrate.md"
         if substrate:
             substrate_file.write_text(substrate)
-        elif substrate_file.is_file():
-            substrate = substrate_file.read_text()
         else:
-            # Packaged default — write to system_dir so the agent has its
-            # own editable copy on disk going forward.
             try:
                 from importlib.resources import files
                 packaged = files("lingtai.prompts").joinpath("substrate.md").read_text()
                 substrate_file.write_text(packaged)
                 substrate = packaged
             except (FileNotFoundError, ModuleNotFoundError, OSError):
-                substrate = ""
+                if substrate_file.is_file():
+                    substrate = substrate_file.read_text()
+                else:
+                    substrate = ""
         if substrate:
             self._prompt_manager.write_section("substrate", substrate, protected=True)
         else:
@@ -1291,20 +1291,19 @@ class Agent(BaseAgent):
             self._prompt_manager.write_section("principle", principle, protected=True)
 
         # --- Procedures ---
-        # Resolution precedence (mirrors substrate above):
-        #   1. data["procedures"]          — inline init.json string
-        #   2. system/procedures.md        — agent's own copy (editable)
-        #   3. packaged prompts/procedures.md — kernel default
+        # Resolution precedence (mirrors substrate above; issue #133):
+        #   1. data["procedures"]          — inline init.json string (operator override)
+        #   2. packaged prompts/procedures.md — kernel default, always wins on every boot
+        #   3. system/procedures.md        — fallback only if package missing
         #
-        # Every agent gets the section populated by default. To opt out,
-        # set `"procedures": " "` (a single space, written to system/
-        # procedures.md and rendered as effectively blank).
+        # The packaged default overwrites the on-disk file on every boot so
+        # that `pip install -e .` + `system(refresh)` actually propagates
+        # kernel updates. To opt out, set `"procedures": " "` (a single
+        # space, treated as an explicit operator value by step 1).
         procedures = data.get("procedures", "")
         procedures_file = system_dir / "procedures.md"
         if procedures:
             procedures_file.write_text(procedures)
-        elif procedures_file.is_file():
-            procedures = procedures_file.read_text()
         else:
             try:
                 from importlib.resources import files
@@ -1312,7 +1311,10 @@ class Agent(BaseAgent):
                 procedures_file.write_text(packaged)
                 procedures = packaged
             except (FileNotFoundError, ModuleNotFoundError, OSError):
-                procedures = ""
+                if procedures_file.is_file():
+                    procedures = procedures_file.read_text()
+                else:
+                    procedures = ""
         if procedures:
             self._prompt_manager.write_section("procedures", procedures, protected=True)
         else:
