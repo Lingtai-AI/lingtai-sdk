@@ -1,6 +1,6 @@
 # core/skills
 
-Skills capability — per-agent skill catalog and skill-manual surface. This is the renamed successor of the old `library` capability. It scans the existing `.library/` directory plus configured extra paths, renders `<available_skills>` XML, and injects it into the `skills` prompt section. It never writes skill files; installation remains the Agent initializer's job.
+Skills capability — per-agent skill catalog and skill-manual surface. This is the renamed successor of the old `library` capability. It scans the existing `.library/` directory plus configured extra paths, renders a YAML catalog (one `- name:` block per skill with `location:` and a `description:` block scalar), and injects it into the `skills` prompt section. It never writes skill files; installation remains the Agent initializer's job.
 
 ## Components
 

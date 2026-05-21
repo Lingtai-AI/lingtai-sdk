@@ -11,7 +11,7 @@ Every agent has its own ``<agent>/.library/``:
 Additional paths come from ``init.json``:
 
 ``manifest.capabilities.skills.paths``: list[str] — each entry is scanned
-recursively and contributes to the ``<available_skills>`` XML injected into the
+recursively and contributes to the YAML skill catalog injected into the
 system prompt's ``skills`` section. Paths may be absolute, relative to the
 agent working dir, or tilde-prefixed.
 
@@ -166,7 +166,7 @@ def _scan(directory: Path) -> tuple[list[dict], list[dict]]:
 
 
 # ---------------------------------------------------------------------------
-# XML catalog builder
+# YAML catalog builder
 # ---------------------------------------------------------------------------
 
 def _escape_xml(s: str) -> str:
@@ -329,7 +329,7 @@ def setup(agent: "BaseAgent", paths: list[str] | None = None, **_ignored) -> Non
 
     The capability itself does not create or populate ``.library/``; the Agent
     initializer's ``_install_intrinsic_manuals`` step handles that. Setup just
-    scans whatever is on disk and injects the XML catalog so the first turn
+    scans whatever is on disk and injects the YAML catalog so the first turn
     sees a ready catalog.
     """
     lang = agent._config.language

@@ -193,10 +193,9 @@ def test_prompt_catalog_only_metadata_not_body(tmp_path):
     )
     try:
         prompt = agent._prompt_manager.read_section("knowledge") or ""
-        # name + description + location are present.
-        assert "important-finding" in prompt
+        # name + description + location are present in the YAML catalog.
+        assert "- name: important-finding" in prompt
         assert "Short prompt-visible description." in prompt
-        assert "<knowledge>" in prompt
         # Body and supporting file content are absent.
         assert body_sentinel not in prompt
         assert support_sentinel not in prompt

@@ -3,14 +3,14 @@
 Knowledge capability — private durable knowledge across molts. The catalog is
 filesystem-backed: each immediate subdirectory of `<agent>/knowledge/` with a
 `KNOWLEDGE.md` file is one entry. The frontmatter `name` + `description` are
-injected as a compact `<knowledge>` XML catalog in the system prompt's
+injected as a compact YAML catalog in the system prompt's
 `knowledge` section. Bodies and supporting files are loaded on demand through
 the regular `read` tool.
 
 ## Components
 
 - `knowledge/__init__.py` — the capability implementation. `_parse_frontmatter`,
-  `_scan`, `_build_catalog_xml`, `_reconcile`, `get_description`, `get_schema`,
+  `_scan`, `_build_catalog_yaml`, `_reconcile`, `get_description`, `get_schema`,
   and `setup` live here.
 - `knowledge/CONTRACT.md` — public behavior contract: tool surface, on-disk
   layout, prompt injection, knowledge/skill directionality, anchored claims,
@@ -34,8 +34,8 @@ the regular `read` tool.
 - Entry layout: `<agent>/knowledge/<name>/KNOWLEDGE.md` plus arbitrary
   supporting files (scripts, assets, notes, raw logs).
 - Required frontmatter: `name`, `description`. Optional: `version`.
-- Prompt state: protected `knowledge` section holds the preamble + `<knowledge>`
-  XML block.
+- Prompt state: protected `knowledge` section holds the preamble + YAML catalog
+  (one `- name:` block per entry, with `location:` and `description:` fields).
 - No JSON store and no per-entry size cap. A one-time legacy migration
   converts `knowledge/knowledge.json` and old `codex/codex.json` entries into `KNOWLEDGE.md` folders, writes old `supplementary` text to `references/supplementary.md`, and renames the source JSON to `<name>.json.migrated`.
 
