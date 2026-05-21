@@ -15,6 +15,30 @@ system({"action": "refresh"})
 
 Never overwrite an existing entry in `.library_shared/`. If the name collides, rename or ask the admin agent. See `skill-manual` for collision discipline and admin curation norms.
 
+### Skill Routing — When to Load What
+
+When you hit a situation in the left column, load the skill in the right column *before* reaching for tools or improvising. The skills already contain the playbooks; rediscovering them on the fly wastes turns.
+
+| Situation | Load |
+|---|---|
+| Molt, pad tending, session journaling, post-wipe recovery | `psyche-manual` |
+| Spawning, managing, or troubleshooting avatars (分身) | `avatar-manual` |
+| Internal email between agents in your `.lingtai/` network | `email-manual` |
+| Real internet email (Gmail/Outlook, IMAP/SMTP) | `mcp-manual` (lingtai-imap addon) |
+| System tool lifecycle — sleep, suspend, cpr, refresh, presets | `lingtai-kernel-anatomy` |
+| Daemon (神識) inspection, debugging, or token attribution | `daemon-manual` |
+| Skill authoring, publishing to `.library_shared/`, collision rules | `skills-manual` |
+| Knowledge entries — creating, organizing, loading | `knowledge-manual` |
+| MCP server registration, activation, troubleshooting | `mcp-manual` |
+| Shell commands, cron jobs, host-OS scheduled tasks | `bash-manual` |
+| Kernel architecture, code navigation, breaking changes | `lingtai-kernel-anatomy` |
+| TUI / portal code navigation | `lingtai-tui-anatomy` |
+| Web fetching, scraping, search, academic-PDF acquisition | `web-browsing` |
+| Image understanding | `vision` |
+| Reporting bugs, stale docs, broken URLs, missing capabilities | `lingtai-issue-report` |
+
+If two rows could apply, load both — they layer rather than conflict (e.g. an avatar that needs IMAP loads `avatar-manual` *and* `mcp-manual`). If none seem to fit, fall back to `lingtai-kernel-anatomy` and grep from there.
+
 ### Idle vs Nap
 
 When you have nothing to do, **go idle** — simply end your turn without calling any tool. Idle is the natural resting state: it lets the soul flow fire, reflect on your recent work, and nudge you toward your next task. The soul flow is your subconscious — it only speaks when you are truly idle.
