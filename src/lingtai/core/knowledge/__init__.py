@@ -349,25 +349,20 @@ def _indent_block(text: str, indent: str) -> str:
     return "\n".join(indent + line for line in text.splitlines())
 
 
-def _build_catalog_xml(entries: list[dict], lang: str) -> str:
+def _build_catalog_yaml(entries: list[dict], lang: str) -> str:
     if not entries:
         return ""
 
     lines: list[str] = [
         t(lang, "knowledge.preamble"),
         "",
-        "<knowledge>",
     ]
     for e in entries:
-        lines.append("")
-        lines.append("  <entry>")
-        lines.append(f"    name: {_escape_xml(e['name'])}")
-        lines.append(f"    location: {_escape_xml(e['path'])}")
-        lines.append("    description:")
-        lines.append(_indent_block(_escape_xml(e["description"]), "      "))
-        lines.append("  </entry>")
-    lines.append("")
-    lines.append("</knowledge>")
+        lines.append(f"- name: {e['name']}")
+        lines.append(f"  location: {e['path']}")
+        lines.append("  description: |")
+        for dl in e["description"].splitlines():
+            lines.append(f"    {dl}" if dl else "    ")
     return "\n".join(lines)
 
 
@@ -389,9 +384,9 @@ def _reconcile(agent: "BaseAgent") -> dict:
     problems = migration_problems + problems
 
     lang = agent._config.language
-    catalog_xml = _build_catalog_xml(entries, lang)
-    if catalog_xml:
-        agent.update_system_prompt("knowledge", catalog_xml, protected=True)
+    catalog_yaml = _build_catalog_yaml(entries, lang)
+    if catalog_yaml:
+        agent.update_system_prompt("knowledge", catalog_yaml, protected=True)
     else:
         agent.update_system_prompt("knowledge", "", protected=True)
 

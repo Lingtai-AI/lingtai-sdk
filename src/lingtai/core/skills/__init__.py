@@ -190,25 +190,20 @@ def _indent_block(text: str, indent: str) -> str:
     return "\n".join(indent + line for line in text.splitlines())
 
 
-def _build_catalog_xml(skills: list[dict], lang: str) -> str:
+def _build_catalog_yaml(skills: list[dict], lang: str) -> str:
     if not skills:
         return ""
 
     lines: list[str] = [
         t(lang, "skills.preamble"),
         "",
-        "<available_skills>",
     ]
     for sk in skills:
-        lines.append("")
-        lines.append("  <skill>")
-        lines.append(f"    name: {_escape_xml(sk['name'])}")
-        lines.append(f"    location: {_escape_xml(sk['path'])}")
-        lines.append("    description:")
-        lines.append(_indent_block(_escape_xml(sk["description"]), "      "))
-        lines.append("  </skill>")
-    lines.append("")
-    lines.append("</available_skills>")
+        lines.append(f"- name: {sk['name']}")
+        lines.append(f"  location: {sk['path']}")
+        lines.append("  description: |")
+        for dl in sk["description"].splitlines():
+            lines.append(f"    {dl}" if dl else "    ")
     return "\n".join(lines)
 
 
@@ -268,9 +263,9 @@ def _reconcile(
 
     # Build and inject catalog.
     lang = agent._config.language
-    catalog_xml = _build_catalog_xml(all_skills, lang)
-    if catalog_xml:
-        agent.update_system_prompt("skills", catalog_xml, protected=True)
+    catalog_yaml = _build_catalog_yaml(all_skills, lang)
+    if catalog_yaml:
+        agent.update_system_prompt("skills", catalog_yaml, protected=True)
     else:
         agent.update_system_prompt("skills", "", protected=True)
 
