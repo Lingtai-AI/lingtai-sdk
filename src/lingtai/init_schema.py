@@ -78,6 +78,16 @@ def strip_deprecated(data: dict) -> list[str]:
         if key in data:
             del data[key]
             removed.append(key)
+
+    # Migration: remove procedures_file if it points to the old
+    # ~/.lingtai-tui/procedures/procedures.md path.  The packaged
+    # default is now the sole source; the on-disk file was a stale
+    # leftover that overwrote the packaged default on every boot.
+    pf = data.get("procedures_file")
+    if isinstance(pf, str) and "procedures/procedures.md" in pf:
+        data.pop("procedures_file", None)
+        removed.append("procedures_file")
+
     if removed:
         log.debug("stripped deprecated init.json fields: %s", ", ".join(sorted(removed)))
     return removed
