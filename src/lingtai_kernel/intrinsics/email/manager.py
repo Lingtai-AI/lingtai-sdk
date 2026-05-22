@@ -526,8 +526,21 @@ class EmailManager:
                 if now < due_at:
                     continue
 
+            # Claim this tick BEFORE the slow ``_send``: stamp
+            # ``last_sent_at = now`` and persist atomically. Without this,
+            # a second scheduler thread (one leaked across refresh — see
+            # issue #154 — or a future duplicate manager) that reads
+            # ``schedule.json`` while we're inside ``_send`` would see the
+            # previous tick's stale ``last_sent_at`` and decide "still
+            # due", firing the same tick twice. Semantic shift:
+            # ``last_sent_at`` now means "tick we *claimed*", not "tick
+            # we *finished sending*" — but the error / blocked branch
+            # below already writes ``now`` here anyway, so this is
+            # consistent with how the field is already used.
             seq = sent + 1
+            now_stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
             record["sent"] = seq
+            record["last_sent_at"] = now_stamp
             self._write_schedule(sched_file, record)
 
             send_payload = record.get("send_payload", {})
@@ -541,15 +554,15 @@ class EmailManager:
                 "seq": seq,
                 "total": count,
                 "interval": interval,
-                "scheduled_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "scheduled_at": now_stamp,
                 "estimated_finish": estimated_finish,
             }
             send_args = {**send_payload, "_schedule": schedule_meta}
             result = self._send(send_args)
 
             if result.get("error") or result.get("status") == "blocked":
-                record["last_sent_at"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-                self._write_schedule(sched_file, record)
+                # ``last_sent_at`` was already claimed above; nothing to
+                # update here.
                 continue
 
             to_label = send_payload.get("address", "")
@@ -580,10 +593,11 @@ class EmailManager:
             msg = _make_message(MSG_REQUEST, "system", note)
             self._agent.inbox.put(msg)
 
-            record["last_sent_at"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+            # ``last_sent_at`` was already stamped before _send; only
+            # flip status if the schedule is now complete.
             if seq >= count:
                 record["status"] = "completed"
-            self._write_schedule(sched_file, record)
+                self._write_schedule(sched_file, record)
 
     # ------------------------------------------------------------------
     # Send — deliver + save to sent/

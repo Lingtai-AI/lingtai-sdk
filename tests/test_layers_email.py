@@ -1947,3 +1947,126 @@ def test_email_archive_rerenders_notification(tmp_path):
 
     mgr.handle({"action": "archive", "email_id": [eid]})
     assert not notif_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Regression: issue #154 — refresh leaks scheduler threads, ticks double-send
+# ---------------------------------------------------------------------------
+
+def test_email_boot_stops_previous_scheduler(tmp_path):
+    """Re-running email.boot on the same agent must stop the prior
+    EmailManager's scheduler thread; otherwise two daemon threads
+    race on schedule.json (issue #154).
+    """
+    from lingtai_kernel.intrinsics import email as _email
+
+    agent = Agent(service=make_mock_service(), agent_name="test",
+                  working_dir=tmp_path / "test")
+    first_mgr = agent._email_manager
+    first_thread = first_mgr._scheduler_thread
+    assert first_thread is not None
+    assert first_thread.is_alive()
+
+    # Simulate the molt/refresh path that re-boots email on a live agent.
+    _email.boot(agent)
+
+    # The previous scheduler MUST have been stopped.
+    first_thread.join(timeout=5.0)
+    assert not first_thread.is_alive(), (
+        "Old EmailManager scheduler thread still running after refresh — "
+        "two threads will race on schedule.json (issue #154)."
+    )
+    assert agent._email_manager is not first_mgr
+
+
+def test_scheduler_tick_is_idempotent_under_concurrent_threads(tmp_path):
+    """Two scheduler ticks for the same due window must produce exactly
+    one extra send (sent advances by 1, not 2). Regression for the
+    intra-process race between leaked scheduler threads in issue #154.
+
+    Reproduces the exact interleaving from the bug: thread A reads the
+    schedule, claims seq=N by writing sent=N (but ``last_sent_at`` is
+    still the previous tick's old stamp), then enters ``_send``. While
+    A is inside ``_send``, thread B reads the schedule — sees stale
+    ``last_sent_at`` and not-yet-finalised state, decides "still due",
+    fires seq=N+1. After fix #2 (claim ``last_sent_at`` before
+    ``_send``), B's read sees a fresh stamp and skips.
+    """
+    agent = Agent(service=make_mock_service(), agent_name="test",
+                  working_dir=tmp_path / "test")
+    mail_svc = MagicMock()
+    mail_svc.address = "me"
+    mail_svc.send.return_value = None
+    agent._mail_service = mail_svc
+
+    mgr = agent._email_manager
+    # Drive _scheduler_tick by hand — stop the background loop so it
+    # doesn't fire its own ticks concurrently.
+    mgr.stop_scheduler()
+
+    result = mgr.handle({
+        "address": "me",
+        "subject": "tick",
+        "message": "x",
+        "schedule": {"action": "create", "interval": 1, "count": 5},
+    })
+    sid = result["schedule_id"]
+    sched_path = (agent.working_dir / "mailbox" / "schedules"
+                  / sid / "schedule.json")
+
+    # Force "due now" with last_sent_at well in the past.
+    rec = json.loads(sched_path.read_text())
+    rec["sent"] = 1
+    rec["last_sent_at"] = "2020-01-01T00:00:00Z"
+    sched_path.write_text(json.dumps(rec))
+
+    # Force the exact race interleaving: pause thread A inside _send so
+    # thread B can observe the in-flight state (sent advanced but
+    # last_sent_at not yet updated by the post-send write at line 583).
+    in_send = threading.Event()
+    release_send = threading.Event()
+    original_send = mgr._send
+    send_call_count = {"n": 0}
+
+    def slow_send(args):
+        send_call_count["n"] += 1
+        # Only block on the first _send so thread B can race in.
+        if send_call_count["n"] == 1:
+            in_send.set()
+            release_send.wait(timeout=5.0)
+        return original_send(args)
+
+    mgr._send = slow_send
+
+    errors: list[BaseException] = []
+
+    def worker():
+        try:
+            mgr._scheduler_tick()
+        except BaseException as e:  # noqa: BLE001
+            errors.append(e)
+
+    t1 = threading.Thread(target=worker, name="tick-A")
+    t1.start()
+    assert in_send.wait(timeout=5.0), "thread A never entered _send"
+
+    t2 = threading.Thread(target=worker, name="tick-B")
+    t2.start()
+    # Give B time to run _scheduler_tick to completion — without fix #2,
+    # B sees stale last_sent_at and fires; with fix #2, B sees the
+    # tentative claim and skips.
+    t2.join(timeout=10.0)
+
+    release_send.set()
+    t1.join(timeout=10.0)
+
+    assert not errors, f"worker errors: {errors!r}"
+    # The bug: thread B saw the stale ``last_sent_at`` (the post-_send
+    # finalize hadn't happened yet) and fired a second ``_send`` for
+    # the same due window. After fix #2 (claim ``last_sent_at`` before
+    # _send), B's pre-tick read sees the fresh stamp and skips, so
+    # ``_send`` is called exactly once.
+    assert send_call_count["n"] == 1, (
+        f"_send was called {send_call_count['n']} times for one due "
+        f"tick — concurrent scheduler ticks double-fired (issue #154)"
+    )

@@ -100,7 +100,20 @@ def boot(agent) -> None:
     done by _wire_intrinsics + ALL_INTRINSICS — this hook does the runtime
     setup that the registry can't: create the manager, wire it into the
     agent so module-level handle() can find it, and kick the scheduler.
+
+    Idempotent on re-boot: if a previous EmailManager was already wired
+    onto ``agent`` (the molt / refresh / cpr path goes through
+    ``_setup_from_init`` which re-runs ``boot``), stop its scheduler
+    thread first. Otherwise the abandoned daemon keeps polling the same
+    ``mailbox/schedules/*/schedule.json`` and races the new thread on
+    read-modify-write — issue #154.
     """
+    prev = getattr(agent, "_email_manager", None)
+    if prev is not None:
+        try:
+            prev.stop_scheduler()
+        except Exception:
+            pass
     mgr = EmailManager(agent)
     agent._email_manager = mgr
     agent._mailbox_name = "email box"

@@ -1102,8 +1102,10 @@ class Agent(BaseAgent):
         _psyche.boot(self)
 
         # Re-boot email so a fresh EmailManager + scheduler thread are wired.
-        # The previous manager's scheduler thread is daemon and was abandoned
-        # by the _intrinsics.clear() above; this starts a clean one.
+        # ``email.boot`` stops the previous manager's scheduler before
+        # starting a new one — without that, the prior daemon thread keeps
+        # polling ``mailbox/schedules/*/schedule.json`` and races the new
+        # thread, double-sending the same due tick (issue #154).
         from lingtai_kernel.intrinsics import email as _email
         _email.boot(self)
 
