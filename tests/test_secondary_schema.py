@@ -34,11 +34,16 @@ def test_secondary_schema_injected_into_eligible_dynamic_tool(tmp_path):
     assert secondary["properties"]["tool"]["enum"] == ["email", "feishu", "telegram", "wechat"]
     assert "timely human replies" in secondary["description"]
     assert "Do not use for routine short calls" in secondary["description"]
+    assert "action=read" in secondary["description"]
     assert secondary["properties"]["args"]["required"] == ["action"]
-    assert secondary["properties"]["args"]["properties"]["action"]["enum"] == ["send", "reply"]
+    assert secondary["properties"]["args"]["properties"]["action"]["enum"] == [
+        "send", "reply", "read",
+    ]
     assert "chat_id" in secondary["properties"]["args"]["properties"]
     assert "text" in secondary["properties"]["args"]["properties"]
+    assert "limit" in secondary["properties"]["args"]["properties"]
     assert "telegram.send needs chat_id+text" in secondary["properties"]["args"]["description"]
+    assert "telegram.read needs chat_id" in secondary["properties"]["args"]["description"]
     assert "reasoning" in schemas["long_work"]["properties"]
     agent.stop(timeout=1.0)
 

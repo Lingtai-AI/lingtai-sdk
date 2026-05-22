@@ -274,7 +274,7 @@ def test_secondary_disallowed_action_does_not_block_primary():
         args={
             "secondary": {
                 "tool": "telegram",
-                "args": {"action": "read", "chat_id": 123},
+                "args": {"action": "delete", "message_id": "abc"},
             }
         },
         id="tc1",
@@ -287,7 +287,7 @@ def test_secondary_disallowed_action_does_not_block_primary():
     payload = results[0]["result"]
     assert payload["_secondary"]["status"] == "error"
     assert payload["_secondary"]["tool"] == "telegram"
-    assert payload["_secondary"]["action"] == "read"
+    assert payload["_secondary"]["action"] == "delete"
     assert "action" in payload["_secondary"]["message"]
 
 
@@ -652,3 +652,215 @@ def test_secondary_survives_canonical_tool_result_block_wire_shape():
     assert isinstance(block, ToolResultBlock)
     assert block.content["_secondary"] == {"status": "success", "tool": "telegram", "action": "send"}
     assert block.to_dict()["content"]["_secondary"]["status"] == "success"
+
+
+def test_secondary_read_action_forwards_result_under_secondary():
+    """A valid secondary read should run before the primary and the read
+    payload should be forwarded under _secondary.result so the primary turn
+    can act on the content without an extra round-trip."""
+    seen = []
+
+    def dispatch(tc):
+        seen.append((tc.name, dict(tc.args)))
+        if tc.name == "telegram":
+            return {
+                "status": "ok",
+                "messages": [
+                    {"id": "m1", "text": "hi"},
+                    {"id": "m2", "text": "what's up"},
+                ],
+            }
+        return {"status": "ok", "echo": tc.args}
+
+    executor = make_executor(dispatch_fn=dispatch, known_tools={"read", "telegram"})
+    calls = [ToolCall(
+        name="read",
+        args={
+            "path": "/tmp",
+            "secondary": {
+                "tool": "telegram",
+                "args": {"action": "read", "chat_id": 123, "limit": 5},
+            },
+        },
+        id="tc1",
+    )]
+
+    results, intercepted, _ = executor.execute(calls)
+
+    assert not intercepted
+    # secondary runs first, then primary
+    assert [name for name, _ in seen] == ["telegram", "read"]
+    # secondary args reach the comm handler intact (limit included)
+    assert seen[0][1] == {"action": "read", "chat_id": 123, "limit": 5}
+    payload = results[0]["result"]
+    assert payload["status"] == "ok"
+    sec = payload["_secondary"]
+    assert sec["status"] == "success"
+    assert sec["tool"] == "telegram"
+    assert sec["action"] == "read"
+    # the read body is forwarded under _secondary.result
+    assert sec["result"]["status"] == "ok"
+    assert sec["result"]["messages"][0]["id"] == "m1"
+
+
+def test_secondary_read_for_email_with_email_id_list():
+    """email.read takes email_id as a list — secondary policy must allow it
+    and the read payload must be forwarded under _secondary.result."""
+    seen = []
+
+    def dispatch(tc):
+        seen.append((tc.name, dict(tc.args)))
+        if tc.name == "email":
+            return {
+                "status": "ok",
+                "emails": [{"id": "e1", "subject": "hello", "body": "full body"}],
+            }
+        return {"status": "ok"}
+
+    executor = make_executor(dispatch_fn=dispatch, known_tools={"read", "email"})
+    calls = [ToolCall(
+        name="read",
+        args={
+            "secondary": {
+                "tool": "email",
+                "args": {"action": "read", "email_id": ["e1"]},
+            },
+        },
+        id="tc1",
+    )]
+
+    results, intercepted, _ = executor.execute(calls)
+
+    assert not intercepted
+    assert [name for name, _ in seen] == ["email", "read"]
+    sec = results[0]["result"]["_secondary"]
+    assert sec["status"] == "success"
+    assert sec["action"] == "read"
+    assert sec["result"]["emails"][0]["id"] == "e1"
+
+
+def test_secondary_read_result_is_truncated_under_payload_cap():
+    """Read results that exceed SECONDARY_READ_RESULT_MAX_BYTES must be
+    truncated before being attached under _secondary.result, so a chatty
+    secondary read can never balloon the primary tool message."""
+    from lingtai_kernel.secondary_tools import SECONDARY_READ_RESULT_MAX_BYTES
+
+    big_text = "x" * (SECONDARY_READ_RESULT_MAX_BYTES * 3)
+
+    def dispatch(tc):
+        if tc.name == "telegram":
+            return {"status": "ok", "body": big_text}
+        return {"status": "ok"}
+
+    executor = make_executor(dispatch_fn=dispatch, known_tools={"read", "telegram"})
+    calls = [ToolCall(
+        name="read",
+        args={
+            "secondary": {
+                "tool": "telegram",
+                "args": {"action": "read", "chat_id": 1},
+            },
+        },
+        id="tc1",
+    )]
+
+    results, intercepted, _ = executor.execute(calls)
+
+    assert not intercepted
+    sec = results[0]["result"]["_secondary"]
+    assert sec["status"] == "success"
+    forwarded_body = sec["result"]["body"]
+    # The truncator slices oversize string values to about half of max_bytes
+    # and appends a marker, so the forwarded body must shrink and be marked.
+    assert len(forwarded_body) < len(big_text)
+    assert "truncated" in forwarded_body
+
+
+def test_secondary_send_does_not_forward_handler_result():
+    """For send/reply (not read), the comm handler's result is never echoed
+    under _secondary.result — only a small confirmation summary is exposed.
+    This guards against accidental leakage of message_ids / handler internals."""
+    def dispatch(tc):
+        if tc.name == "telegram":
+            return {"status": "sent", "message_id": "secret-should-not-leak"}
+        return {"status": "ok"}
+
+    executor = make_executor(dispatch_fn=dispatch, known_tools={"read", "telegram"})
+    calls = [ToolCall(
+        name="read",
+        args={
+            "secondary": {
+                "tool": "telegram",
+                "args": {"action": "send", "chat_id": 1, "text": "hi"},
+            },
+        },
+        id="tc1",
+    )]
+
+    results, intercepted, _ = executor.execute(calls)
+
+    assert not intercepted
+    sec = results[0]["result"]["_secondary"]
+    assert sec == {"status": "success", "tool": "telegram", "action": "send"}
+    assert "result" not in sec
+
+
+def test_secondary_read_disallowed_for_imap_excluded_target():
+    """``imap`` is not a secondary-allowed target even with read in the action
+    whitelist — the tool-level allowlist still applies."""
+    def dispatch(tc):
+        return {"status": "ok"}
+
+    executor = make_executor(dispatch_fn=dispatch, known_tools={"read", "imap"})
+    calls = [ToolCall(
+        name="read",
+        args={
+            "secondary": {
+                "tool": "imap",
+                "args": {"action": "read", "email_id": ["e1"]},
+            },
+        },
+        id="tc1",
+    )]
+
+    results, intercepted, _ = executor.execute(calls)
+
+    assert not intercepted
+    sec = results[0]["result"]["_secondary"]
+    assert sec["status"] == "error"
+    assert sec["tool"] == "imap"
+    assert "not allowed" in sec["message"]
+
+
+def test_secondary_read_recursive_payload_still_rejected():
+    """Recursive secondary fields nested inside a read-action payload must
+    still be rejected — the read carve-out doesn't relax the no-recursion rule."""
+    seen = []
+
+    def dispatch(tc):
+        seen.append(tc.name)
+        return {"status": "ok"}
+
+    executor = make_executor(dispatch_fn=dispatch, known_tools={"read", "telegram"})
+    calls = [ToolCall(
+        name="read",
+        args={
+            "secondary": {
+                "tool": "telegram",
+                "args": {
+                    "action": "read",
+                    "chat_id": 1,
+                    "secondary": {"tool": "telegram", "args": {"action": "read", "chat_id": 2}},
+                },
+            },
+        },
+        id="tc1",
+    )]
+
+    results, intercepted, _ = executor.execute(calls)
+
+    assert not intercepted
+    assert seen == ["read"]
+    sec = results[0]["result"]["_secondary"]
+    assert sec["status"] == "error"
+    assert "recursive" in sec["message"]

@@ -13,6 +13,7 @@ from .secondary_tools import (
     SECONDARY_ALLOWED_ACTIONS,
     SECONDARY_ALLOWED_TOOLS,
     SECONDARY_EXCLUDED_PRIMARY_TOOLS,
+    SECONDARY_READ_RESULT_MAX_BYTES,
 )
 from .tool_timing import ToolTimer
 from .types import UnknownToolError
@@ -29,6 +30,7 @@ def _secondary_summary(
     action: str | None,
     status: str,
     message: str | None = None,
+    result: Any | None = None,
 ) -> dict:
     summary = {"status": status}
     if tool:
@@ -37,6 +39,8 @@ def _secondary_summary(
         summary["action"] = action
     if message:
         summary["message"] = _short_message(message)
+    if result is not None:
+        summary["result"] = _truncate_result(result, SECONDARY_READ_RESULT_MAX_BYTES)
     return summary
 
 
@@ -264,6 +268,17 @@ class ToolExecutor:
                     action=action,
                     status="error",
                     message=result.get("message", "secondary returned status=error") if isinstance(result, dict) else None,
+                )
+            elif action == "read":
+                # ``read`` is the only secondary action whose payload is
+                # interesting to the primary turn — send/reply only need
+                # confirmation. Forward a bounded slice so the agent can
+                # decide what to do without an extra round-trip.
+                summary = _secondary_summary(
+                    tool=tool_name,
+                    action=action,
+                    status="success",
+                    result=result,
                 )
             else:
                 summary = _secondary_summary(tool=tool_name, action=action, status="success")
