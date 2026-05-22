@@ -21,8 +21,10 @@ from dataclasses import dataclass, field
 from typing import Any
 from unittest.mock import MagicMock
 
+from lingtai_kernel.base_agent.turn import _handle_tc_wake
 from lingtai_kernel.llm.interface import (
     ChatInterface,
+    TextBlock,
     ToolCallBlock,
     ToolResultBlock,
 )
@@ -199,6 +201,34 @@ def test_ensure_session_failure_re_enqueues_and_logs():
     _, fields = err_logs[0]
     assert fields["reason"] == "ensure_session_failed"
     assert "provider unreachable" in fields["error"]
+
+
+def test_pending_tool_calls_logs_diagnostic_with_pending_ids():
+    iface = ChatInterface()
+    iface.add_system("system")
+    iface.add_user_message("run pending tool")
+    iface.add_assistant_message(
+        [
+            TextBlock("calling"),
+            ToolCallBlock(id="call_pending", name="bash", args={"command": "sleep"}),
+        ]
+    )
+    chat = _StubChatHolder(iface)
+    session = _StubSession(chat=chat, _chat_after_ensure=chat)
+    agent = _StubAgent(_session=session)
+    agent._tc_inbox.enqueue(_make_notification_item(call_id="notif_call"))
+
+    _handle_tc_wake(agent, MagicMock())
+
+    assert len(agent._tc_inbox) == 1
+    names = [event for event, _ in agent._logs]
+    assert names == ["tc_wake_noop"]
+    assert agent._logs[0][1] == {
+        "reason": "pending_tool_calls",
+        "pending_tool_call_count": 1,
+        "pending_tool_call_ids": ["call_pending"],
+        "pending_tool_names": ["bash"],
+    }
 
 
 def test_empty_queue_short_circuits_before_ensure_session():

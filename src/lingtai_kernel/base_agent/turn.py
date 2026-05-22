@@ -116,6 +116,32 @@ def _is_transient_provider_error(exc: Exception) -> bool:
     return any(fragment in msg for fragment in _TRANSIENT_MSG_FRAGMENTS)
 
 
+def _tool_call_summary(tool_calls) -> dict:
+    calls = list(tool_calls or [])
+    return {
+        "call_count": len(calls),
+        "call_ids": [getattr(call, "id", None) for call in calls],
+        "tool_names": [getattr(call, "name", None) for call in calls],
+    }
+
+
+def _pending_tool_call_summary(iface) -> dict:
+    entries = getattr(iface, "entries", None) or []
+    tail = entries[-1] if entries else None
+    calls = []
+    if getattr(tail, "role", None) == "assistant":
+        calls = [
+            block
+            for block in getattr(tail, "content", []) or []
+            if hasattr(block, "id") and hasattr(block, "name") and hasattr(block, "args")
+        ]
+    return {
+        "pending_tool_call_count": len(calls),
+        "pending_tool_call_ids": [getattr(call, "id", None) for call in calls],
+        "pending_tool_names": [getattr(call, "name", None) for call in calls],
+    }
+
+
 def _prepare_aed_retry_message(agent, err_desc: str) -> Message:
     """Build the system recovery prompt reused by transient and AED retries."""
     ts = now_iso(agent)
@@ -149,7 +175,18 @@ def _restore_tool_results_after_continuation_failure(
     ):
         return False
     agent._chat.commit_tool_results(tool_results)
-    agent._save_chat_history(ledger_source=ledger_source)
+    try:
+        agent._save_chat_history(ledger_source=ledger_source)
+    except Exception as e:
+        agent._log(
+            "tool_results_restored_after_continuation_failure",
+            result_count=len(tool_results),
+            ledger_source=ledger_source,
+            failed_at="save_chat_history",
+            save_error=(str(e) or repr(e))[:300],
+            side_effect="memory_state_may_be_ahead_of_disk",
+        )
+        raise
     agent._log(
         "tool_results_restored_after_continuation_failure",
         result_count=len(tool_results),
@@ -179,18 +216,23 @@ def _run_loop(agent) -> None:
                     agent._chat is not None
                     and agent._chat.interface.has_pending_tool_calls()
                 ):
+                    phase = "close_pending_tool_calls"
                     try:
                         agent._chat.interface.close_pending_tool_calls(
                             reason="heal:going_asleep"
                         )
-                        agent._log("heal_pending_tool_calls", reason="going_asleep")
+                        phase = "save_chat_history"
                         agent._save_chat_history(ledger_source="heal")
+                        agent._log("heal_pending_tool_calls", reason="going_asleep")
                     except Exception as e:
-                        agent._log(
-                            "heal_pending_tool_calls_failed",
-                            reason="going_asleep",
-                            error=str(e)[:200],
-                        )
+                        fields = {
+                            "reason": "going_asleep",
+                            "failed_at": phase,
+                            "error": (str(e) or repr(e))[:200],
+                        }
+                        if phase == "save_chat_history":
+                            fields["side_effect"] = "memory_state_may_be_ahead_of_disk"
+                        agent._log("heal_pending_tool_calls_failed", **fields)
                 agent._log("sleep")
 
                 # Block until a message arrives or shutdown
@@ -599,7 +641,11 @@ def _handle_tc_wake(agent, msg: Message) -> None:
     if iface.has_pending_tool_calls():
         for item in items:
             agent._tc_inbox.enqueue(item)
-        agent._log("tc_wake_noop", reason="pending_tool_calls")
+        agent._log(
+            "tc_wake_noop",
+            reason="pending_tool_calls",
+            **_pending_tool_call_summary(iface),
+        )
         return
 
     agent._executor = ToolExecutor(
@@ -903,16 +949,40 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         if not response.tool_calls:
             break
 
+        tool_call_fields = _tool_call_summary(response.tool_calls)
         if agent._cancel_event.is_set():
             agent._cancel_event.clear()
+            agent._log(
+                "tool_calls_not_dispatched",
+                ledger_source=ledger_source,
+                in_tool_loop=in_tool_loop,
+                reason="cancel_event",
+                **tool_call_fields,
+            )
             return {"text": "", "failed": False, "errors": []}
 
         stop_reason = guard.check_limit(len(response.tool_calls))
         if stop_reason:
+            agent._log(
+                "tool_calls_not_dispatched",
+                ledger_source=ledger_source,
+                in_tool_loop=in_tool_loop,
+                reason="tool_loop_limit",
+                stop_reason=stop_reason,
+                **tool_call_fields,
+            )
             break
 
         invalid_reason = guard.check_invalid_tool_limit()
         if invalid_reason:
+            agent._log(
+                "tool_calls_not_dispatched",
+                ledger_source=ledger_source,
+                in_tool_loop=in_tool_loop,
+                reason="invalid_tool_limit",
+                invalid_reason=invalid_reason,
+                **tool_call_fields,
+            )
             break
 
         # Delegate to ToolExecutor
