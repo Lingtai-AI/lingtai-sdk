@@ -170,8 +170,9 @@ class TestCheckExternalSend:
         agent._log = MagicMock()
         return agent
 
-    def _make_tc(self, name, args):
+    def _make_tc(self, name, args, id="tc-1"):
         tc = MagicMock()
+        tc.id = id
         tc.name = name
         tc.args = args
         return tc
@@ -337,8 +338,9 @@ class TestCheckPollBackoff:
         agent._log = MagicMock()
         return agent
 
-    def _make_tc(self, name, args):
+    def _make_tc(self, name, args, id="tc-1"):
         tc = MagicMock()
+        tc.id = id
         tc.name = name
         tc.args = args
         return tc
@@ -370,6 +372,41 @@ class TestCheckPollBackoff:
         _check_poll_backoff(agent, [tc_check])  # 2
         _check_poll_backoff(agent, [tc_send])   # send resets
         assert not _check_poll_backoff(agent, [tc_check])  # 1 again
+
+    def test_read_result_with_messages_resets_backoff(self):
+        from lingtai_kernel.base_agent.turn import _check_poll_backoff
+        from lingtai_kernel.llm.interface import ToolResultBlock
+
+        agent = self._make_agent()
+        tc = self._make_tc("telegram", {"action": "read"}, id="tc-read")
+
+        _check_poll_backoff(agent, [tc])
+        _check_poll_backoff(agent, [tc])
+        result = ToolResultBlock(
+            id="tc-read",
+            name="telegram",
+            content={"messages": [{"id": "msg-1", "text": "hello"}]},
+        )
+
+        assert not _check_poll_backoff(agent, [tc], [result])
+        assert agent._sent_tracker._poll_counts.get("telegram", 0) == 0
+
+    def test_check_result_with_emails_or_conversations_resets_backoff(self):
+        from lingtai_kernel.base_agent.turn import _check_poll_backoff
+        from lingtai_kernel.llm.interface import ToolResultBlock
+
+        for tool_name, content in (
+            ("imap", '{"emails": [{"subject": "hi"}]}'),
+            ("feishu", {"conversations": [{"chat_id": "oc_1"}]}),
+        ):
+            agent = self._make_agent()
+            tc = self._make_tc(tool_name, {"action": "check"}, id=f"{tool_name}-check")
+            _check_poll_backoff(agent, [tc])
+            _check_poll_backoff(agent, [tc])
+            result = ToolResultBlock(id=tc.id, name=tool_name, content=content)
+
+            assert not _check_poll_backoff(agent, [tc], [result])
+            assert agent._sent_tracker._poll_counts.get(tool_name, 0) == 0
 
     def test_non_external_tool_ignored(self):
         from lingtai_kernel.base_agent.turn import _check_poll_backoff

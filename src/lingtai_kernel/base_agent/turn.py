@@ -949,11 +949,13 @@ def _check_poll_backoff(agent, tool_calls, tool_results=None) -> bool:
     arrive via the notification system, or when a check/read action
     actually returns messages (found_new=True).
     """
-    # Build a lookup from tool_call_id to result for found-new detection.
+    # Build a lookup from tool-call id to result for found-new detection.
+    # ToolResultBlock stores the correlated tool-call id on `.id` (the same
+    # field name as ToolCallBlock), not on a separate `.tool_call_id`.
     result_by_tc_id: dict = {}
     if tool_results:
         for tr in tool_results:
-            tc_id = getattr(tr, "tool_call_id", None)
+            tc_id = getattr(tr, "id", None)
             if tc_id:
                 result_by_tc_id[tc_id] = tr
 
