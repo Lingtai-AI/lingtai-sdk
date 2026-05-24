@@ -244,6 +244,23 @@ The `backend` parameter selects the execution engine for emanations. Default is 
 - Codex doesn't emit an `is_error` flag like Claude Code; the kernel treats absence of a `turn.completed` event (combined with no captured `agent_message` items) as failure even when the process exits 0.
 - `--ephemeral` is intentionally NOT passed: it would disable session persistence and break `daemon(ask)`. Sessions persist under `~/.codex/sessions/` and can be re-resumed by ID for the lifetime of the session record.
 
+### Codex modal capabilities and native image generation
+
+`backend="codex"` delegates to the external Codex CLI/runtime, so the emanation can use whatever native tools the installed Codex account/profile exposes — including modalities that aren't surfaced in `codex --help`. The `--image` flag there only documents image *input*; native image *generation* (and other modal tools) may still be available at runtime depending on the profile.
+
+When asking a Codex emanation to generate images, be explicit:
+
+- Request **PNG or JPEG** outputs (say "not SVG" unless you actually want vector art — Codex will otherwise often fall back to an inline SVG).
+- Name an **explicit writable directory** under the parent working dir (e.g. `media/images/`) and have the emanation write files there with stable names.
+- Specify **dimensions, number of variants, and style** up front; Codex won't ask.
+
+After the emanation completes, verify:
+
+1. `daemon(action="check", id="em-N")` — confirm `state=done` and scan `cli_output` for file paths Codex reported writing.
+2. Inspect the output directory directly (e.g. `ls media/images/`) and confirm the files are real PNG/JPEG bytes, not 0-byte stubs or an SVG.
+
+**Detection / failure honesty.** If Codex reports that image generation is unavailable, refuses the modality, or completes without producing any image files, treat it as **runtime/profile unsupported** and report that honestly to the human. Do **not** silently fall back to the MiniMax `draw` capability or accept an SVG as a substitute — the human asked for a Codex-native PNG/JPEG and a different result needs their decision, not yours.
+
 ## What the manual does NOT cover
 
 - Provider routing / LLM presets — deferred to a separate spec.
