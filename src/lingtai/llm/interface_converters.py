@@ -181,6 +181,58 @@ def _to_openai_block(block: ContentBlock) -> dict:
 # ---------------------------------------------------------------------------
 
 
+_RESPONSES_ORPHAN_OUTPUT_PLACEHOLDER = (
+    "[synthesized placeholder — real tool result was not in context at send time]"
+)
+
+
+def _pair_responses_orphan_function_calls(items: list[dict]) -> list[dict]:
+    """Wire-layer guard for the Responses API input list.
+
+    Walks the list and, for any ``function_call`` item whose ``call_id``
+    is not followed by a matching ``function_call_output`` item (in any
+    later position, not just immediately after), inserts a synthesized
+    ``function_call_output`` placeholder immediately after the
+    ``function_call``. The canonical interface is not mutated — this
+    repair is local to the serialization and re-runs on the next send.
+
+    Mirrors :func:`lingtai.llm.openai.adapter.OpenAIChatSession._pair_orphan_tool_calls`
+    which provides the same guarantee for OpenAI Chat Completions. The
+    Responses API rejects an input that carries a ``function_call`` with
+    no matching ``function_call_output`` with the 400 error
+    ``"No tool output found for function call …"`` (issue #170). The
+    guard exists so that a half-committed tool loop — typically caused by
+    a continuation send that failed AFTER local tool execution and was
+    rolled back by the adapter, or a session restored from disk
+    mid-tool-loop — does not brick the next continuation request.
+    """
+    # Collect every ``function_call_output.call_id`` already present in the
+    # list.  Position doesn't matter for the Responses API — strict
+    # adjacency is only enforced by Chat Completions ``role=tool`` runs.
+    output_ids: set[str] = {
+        it["call_id"]
+        for it in items
+        if it.get("type") == "function_call_output" and it.get("call_id")
+    }
+    patched: list[dict] = []
+    for item in items:
+        patched.append(item)
+        if item.get("type") != "function_call":
+            continue
+        call_id = item.get("call_id")
+        if not call_id or call_id in output_ids:
+            continue
+        patched.append(
+            {
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": _RESPONSES_ORPHAN_OUTPUT_PLACEHOLDER,
+            }
+        )
+        output_ids.add(call_id)
+    return patched
+
+
 def to_responses_input(iface: ChatInterface) -> list[dict]:
     """Convert canonical interface to OpenAI Responses API ``input`` items.
 
@@ -196,6 +248,15 @@ def to_responses_input(iface: ChatInterface) -> list[dict]:
 
     Used by stateless Responses sessions (e.g. Codex) that must replay the
     full conversation each turn instead of relying on ``previous_response_id``.
+
+    Before returning, the wire-layer guard
+    :func:`_pair_responses_orphan_function_calls` synthesizes a
+    placeholder ``function_call_output`` for every ``function_call``
+    without a matching output. This prevents the provider's 400
+    ``"No tool output found for function call …"`` rejection when the
+    canonical history carries a tool_call whose result was lost — for
+    example after a continuation send that failed AFTER local tool
+    execution and was rolled back by the adapter (issue #170).
     """
     items: list[dict] = []
     for entry in iface.entries:
@@ -256,7 +317,7 @@ def to_responses_input(iface: ChatInterface) -> list[dict]:
                 if joined:
                     items.append({"role": "assistant", "content": joined})
             items.extend(tool_calls)
-    return items
+    return _pair_responses_orphan_function_calls(items)
 
 
 # ---------------------------------------------------------------------------

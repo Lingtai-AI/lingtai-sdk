@@ -799,7 +799,20 @@ def _handle_tc_wake(agent, msg: Message) -> None:
             agent._save_chat_history()
 
             agent._log("tc_wake_dispatch", source=item.source, call_id=item.call.id)
-            response = agent._session.send([item.result])
+            try:
+                response = agent._session.send([item.result])
+            except Exception:
+                # The spliced tool result was passed into send() and the
+                # adapter rolled the user entry back when the API call
+                # failed. Restore the real result before the catch-all
+                # below synthesizes a placeholder — without this, the
+                # original notification payload is permanently replaced by
+                # the kernel notice and the agent has no way to recover
+                # the message that was on the wire (issue #170).
+                _restore_tool_results_after_continuation_failure(
+                    agent, [item.result], ledger_source="tc_wake",
+                )
+                raise
             agent._last_usage = response.usage
             agent._save_chat_history(ledger_source="tc_wake")
             _process_response(agent, response, ledger_source="tc_wake")
