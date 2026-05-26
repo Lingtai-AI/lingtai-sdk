@@ -1,5 +1,5 @@
 {
-  "read.description": "读取文本文件的内容。返回带行号的文本。仅支持文本文件——无法读取二进制文件、图片或音频。对大文件可使用 offset/limit 读取指定区段。 如果遇到非 UTF-8、超大文件或复杂搜索/编辑等不好处理的文件问题，请先阅读 file-manual skill。",
+  "read.description": "读取文本文件的内容。返回带行号的文本。仅支持文本文件——无法读取二进制文件、图片或音频。对大文件可使用 offset/limit 读取指定区段。如果遇到非 UTF-8、超大文件或复杂搜索/编辑等不好处理的文件问题，请先阅读 file-manual skill。",
   "read.file_path": "文件的绝对路径",
   "read.offset": "起始行号（从 1 开始）",
   "read.limit": "最大读取行数",

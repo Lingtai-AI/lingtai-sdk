@@ -1,5 +1,5 @@
 {
-  "read.description": "Read the contents of a text file. Returns numbered lines. Text files only — cannot read binary, images, or audio. Use offset/limit to read specific sections of large files. If the file problem is non-UTF-8, unusually large, or needs careful search/edit workflow, read the file-manual skill first.",
+  "read.description": "Read the contents of a text file. Returns numbered lines. Text files only — cannot read binary, images, or audio. Use offset/limit to read specific sections of large files. If the file is non-UTF-8, unusually large, or needs a careful search/edit workflow, read the file-manual skill first.",
   "read.file_path": "Absolute path to the file to read",
   "read.offset": "Line number to start from (1-based)",
   "read.limit": "Max lines to read",

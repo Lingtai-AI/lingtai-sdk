@@ -1,5 +1,5 @@
 {
-  "read.description": "阅卷之器。返带行号之文。仅读文卷——不可读二进制、图像或音声。大卷可以 offset/limit 指定区段而阅。 若遇非 UTF-8、巨卷、繁搜或慎改之难题，先读 file-manual 一技。",
+  "read.description": "阅卷之器。返带行号之文。仅读文卷——不可读二进制、图像或音声。大卷可以 offset/limit 指定区段而阅。若遇非 UTF-8、巨卷、繁搜或慎改之难题，先读 file-manual 一技。",
   "read.file_path": "文卷之绝对路径",
   "read.offset": "起始行号（自一起算）",
   "read.limit": "至多读取之行数",
