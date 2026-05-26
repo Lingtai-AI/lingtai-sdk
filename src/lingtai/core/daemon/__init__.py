@@ -308,11 +308,12 @@ def get_schema(lang: str = "en") -> dict:
             },
             "backend": {
                 "type": "string",
-                "enum": ["lingtai", "claude-code", "codex"],
+                "enum": ["lingtai", "claude-code", "codex", "opencode"],
                 "description": (
                     "Execution backend: 'lingtai' (default — parallel LLM reasoning, uses your current model), "
                     "'claude-code' (coding tasks, code review, file manipulation via Claude Code CLI), "
-                    "'codex' (coding tasks via OpenAI Codex CLI). "
+                    "'codex' (coding tasks via OpenAI Codex CLI), "
+                    "'opencode' (multi-provider open-source agent via the opencode-ai CLI). "
                     "CLI backends use external tools with no LLM overhead from the parent."
                 ),
             },
@@ -1374,7 +1375,8 @@ class DaemonManager:
 
         # Clear completed emanations and stale pools.
         # Keep completed CLI emanations (backend != lingtai) so that `ask`
-        # can still route to `_handle_ask_cli` / `_handle_ask_codex`
+        # can still route to `_handle_ask_cli` / `_handle_ask_codex` /
+        # `_handle_ask_opencode`
         # and `list` can show them.
         self._emanations = {
             k: v for k, v in self._emanations.items()
@@ -1382,8 +1384,8 @@ class DaemonManager:
         }
         self._pools = [(p, c) for p, c in self._pools if not c.is_set()]
 
-        # --- Claude Code / Codex backend: skip preset resolution entirely ---
-        if backend in ("claude-code", "codex"):
+        # --- Claude Code / Codex / OpenCode backend: skip preset resolution entirely ---
+        if backend in ("claude-code", "codex", "opencode"):
             return self._handle_emanate_cli(
                 tasks, backend=backend,
                 effective_max_turns=effective_max_turns,
@@ -1548,7 +1550,7 @@ class DaemonManager:
         effective_max_turns: int,
         effective_timeout: float,
     ) -> dict:
-        """Dispatch emanations via an external CLI backend (claude-code, codex).
+        """Dispatch emanations via an external CLI backend (claude-code, codex, opencode).
 
         Skips preset resolution — the CLI manages its own tools/model/provider.
         Creates a DaemonRunDir for tracking. CLI output is persisted in the
@@ -1620,6 +1622,8 @@ class DaemonManager:
 
             if backend == "codex":
                 run_fn = self._run_codex_emanation
+            elif backend == "opencode":
+                run_fn = self._run_opencode_emanation
             else:
                 run_fn = self._run_claude_code_emanation
             future = pool.submit(
@@ -1707,13 +1711,16 @@ class DaemonManager:
         # CLI backends with resumable sessions:
         #   - claude-code: `claude --resume <claude_session_id>`
         #   - codex:       `codex exec resume <codex_session_id>`
-        # Both stream JSONL events through the resumed turn so
+        #   - opencode:    `opencode run --session <opencode_session_id> ...`
+        # All stream JSON events through the resumed turn so
         # `daemon(check)` shows live progress.
         backend = entry.get("backend")
         if backend == "claude-code":
             return self._handle_ask_cli(em_id, entry, message)
         if backend == "codex":
             return self._handle_ask_codex(em_id, entry, message)
+        if backend == "opencode":
+            return self._handle_ask_opencode(em_id, entry, message)
 
         if entry["future"].done():
             return {"status": "error", "message": "not running"}
@@ -2139,6 +2146,506 @@ class DaemonManager:
 
         output = "\n".join(agent_message_texts).strip()
         if output:
+            self._publish_followup_if_live(
+                em_id, status="follow-up completed", text=output, run_dir=run_dir,
+            )
+        return {"status": "sent", "id": em_id, "output": output}
+
+    # ------------------------------------------------------------------
+    # OpenCode backend (opencode-ai CLI, `opencode run --format json`)
+    # ------------------------------------------------------------------
+
+    # OpenCode emits one JSON object per stdout line under ``--format json``.
+    # The event vocabulary is less standardized than claude-code / codex —
+    # field names vary by event family and version — so the parser is
+    # intentionally defensive: it pulls text from any of several common
+    # shapes and captures the session id from whichever event carries it
+    # first. Unknown / non-JSON lines are still surfaced as cli_output so
+    # nothing is lost.
+    _OPENCODE_SESSION_FIELDS = (
+        "session_id", "sessionID", "sessionId", "session",
+        "id",         # only honoured for session-shaped events
+        "thread_id", "threadId",
+    )
+
+    def _build_opencode_prompt(self, task: str) -> str:
+        """Compose the initial prompt sent to ``opencode run``.
+
+        OpenCode is being used as a one-shot daemon worker, not as an
+        interactive session, so we wrap the user task with a short
+        operating contract: write detailed work product to files in the
+        parent working directory, and end with a concise final answer
+        the parent agent can read at a glance.
+        """
+        return (
+            "You are running as a LingTai daemon — a disposable subagent "
+            "spawned by a parent LingTai agent to perform one task and "
+            "report back.\n\n"
+            "Operating contract:\n"
+            "1. Do the task in the current working directory.\n"
+            "2. If the answer is long, structured, or includes code, "
+            "write the detailed output to a file (e.g. report.md, "
+            "result.json) and reference it in your final answer.\n"
+            "3. End with a concise final answer (a few short paragraphs "
+            "or bullet points) summarising what you did and where to "
+            "look for the full result.\n"
+            "4. Do not ask the operator for clarification — make the "
+            "best reasonable assumption and proceed.\n\n"
+            f"Task:\n{task}"
+        )
+
+    @staticmethod
+    def _opencode_extract_session_id(event: dict) -> str | None:
+        """Pull a session-id-shaped string out of an opencode JSON event.
+
+        OpenCode's event field naming is unstable across versions: a
+        session-created style event may use ``session_id``, ``sessionID``,
+        ``sessionId``, or a nested ``session.id``. Be defensive over all
+        of them. Returns the first non-empty string found, or None.
+        """
+        for key in DaemonManager._OPENCODE_SESSION_FIELDS:
+            val = event.get(key)
+            if isinstance(val, str) and val:
+                return val
+            if isinstance(val, dict):
+                inner = val.get("id") or val.get("session_id") or val.get("sessionID")
+                if isinstance(inner, str) and inner:
+                    return inner
+        # Some opencode builds emit a ``data`` envelope on session events.
+        data = event.get("data")
+        if isinstance(data, dict):
+            return DaemonManager._opencode_extract_session_id(data)
+        return None
+
+    @staticmethod
+    def _opencode_extract_text(event: dict) -> str:
+        """Best-effort text extraction from an opencode JSON event.
+
+        Tries a handful of common shapes (top-level ``text`` / ``content``
+        / ``message`` / ``delta``, content-block lists similar to
+        Anthropic's, and Codex-style ``item.text``) and returns the first
+        non-empty string. Returns "" when no text is present (events
+        that are purely structural, e.g. tool calls, are skipped).
+        """
+        # Top-level scalar text fields.
+        for key in ("text", "content", "message", "delta", "answer", "output"):
+            val = event.get(key)
+            if isinstance(val, str) and val.strip():
+                return val
+        # Content-block list (Anthropic-style).
+        msg = event.get("message")
+        if isinstance(msg, dict):
+            content = msg.get("content")
+            if isinstance(content, list):
+                parts = []
+                for block in content:
+                    if isinstance(block, dict):
+                        t = block.get("text")
+                        if isinstance(t, str) and t.strip():
+                            parts.append(t)
+                if parts:
+                    return "\n".join(parts)
+            elif isinstance(content, str) and content.strip():
+                return content
+        # Codex-style item.
+        item = event.get("item")
+        if isinstance(item, dict):
+            t = item.get("text")
+            if isinstance(t, str) and t.strip():
+                return t
+        return ""
+
+    def _run_opencode_emanation(
+        self,
+        em_id: str,
+        run_dir: DaemonRunDir,
+        task: str,
+        cancel_event: threading.Event,
+        timeout_event: threading.Event | None = None,
+        backend_argv: list[str] | None = None,
+    ) -> str:
+        """Run an OpenCode CLI session as the emanation backend.
+
+        Spawns ``opencode run --format json <prompt>`` and parses one
+        JSON event per stdout line. Non-JSON lines are recorded as
+        ``cli_output`` so nothing is silently dropped. The first event
+        that carries a session-id-shaped field is stored in daemon.json
+        under ``opencode_session_id`` — used later by
+        ``daemon(action='ask')`` to resume the session via
+        ``opencode run --session <id> ...``.
+
+        OpenCode's event field naming is less standardized than
+        claude-code or codex, so the parser is intentionally permissive.
+        See ``_opencode_extract_text`` / ``_opencode_extract_session_id``
+        for the shapes accepted.
+        """
+        def _exit_cancelled() -> str:
+            if timeout_event is not None and timeout_event.is_set():
+                run_dir.mark_timeout()
+            else:
+                run_dir.mark_cancelled()
+            return "[cancelled]"
+
+        if cancel_event.is_set():
+            return _exit_cancelled()
+
+        prompt = self._build_opencode_prompt(task)
+
+        # Required infrastructure flags come first; free-form
+        # backend_options sit between them and the prompt positional so the
+        # prompt stays the trailing argument opencode expects.
+        cmd = [
+            "opencode",
+            "run",
+            "--format", "json",
+        ]
+        if backend_argv:
+            cmd.extend(backend_argv)
+        cmd.append(prompt)
+        self._log("daemon_opencode_start", em_id=em_id, cmd_head=" ".join(cmd[:4]))
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=str(self._agent._working_dir),
+                start_new_session=True,  # own process group for reliable cleanup
+            )
+        except FileNotFoundError:
+            exc = RuntimeError("'opencode' CLI not found on PATH")
+            run_dir.mark_failed(exc)
+            raise exc
+        except OSError as e:
+            exc = RuntimeError(f"Failed to start opencode CLI: {e}")
+            run_dir.mark_failed(exc)
+            raise exc
+        with self._cli_lock:
+            self._cli_procs.append(proc)
+
+        stderr_lines: list[str] = []
+
+        def _drain_stderr() -> None:
+            assert proc.stderr is not None
+            for line in proc.stderr:
+                stripped = line.rstrip("\n")
+                if not stripped:
+                    continue
+                stderr_lines.append(stripped)
+                try:
+                    run_dir.record_cli_output(stripped, stream="stderr")
+                except Exception:
+                    pass
+
+        stderr_thread = threading.Thread(
+            target=_drain_stderr, daemon=True,
+            name=f"daemon-opencode-stderr-{em_id}",
+        )
+        stderr_thread.start()
+
+        session_id_captured: str | None = None
+        text_chunks: list[str] = []
+        final_text: str | None = None
+        any_event = False
+
+        def _store_session_id(sid: str) -> None:
+            nonlocal session_id_captured
+            if not sid or session_id_captured == sid:
+                return
+            session_id_captured = sid
+            run_dir._state["opencode_session_id"] = sid
+            run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
+            self._log("daemon_opencode_session", em_id=em_id, session_id=sid)
+
+        try:
+            assert proc.stdout is not None
+            for raw_line in proc.stdout:
+                if cancel_event.is_set():
+                    _kill_process_group(proc)
+                    return _exit_cancelled()
+
+                line = raw_line.rstrip("\n")
+                if not line:
+                    continue
+
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    # Non-JSON line — record verbatim so the agent can
+                    # still see banner / progress text that opencode
+                    # didn't structure as an event.
+                    run_dir.record_cli_output(line, stream="stdout")
+                    continue
+                if not isinstance(event, dict):
+                    run_dir.record_cli_output(line, stream="stdout")
+                    continue
+
+                any_event = True
+                sid = self._opencode_extract_session_id(event)
+                if sid:
+                    _store_session_id(sid)
+
+                text = self._opencode_extract_text(event)
+                if text:
+                    text_chunks.append(text)
+                    run_dir.record_cli_output(text, stream="stdout")
+
+                # Capture a definitive final answer if the event signals
+                # completion. OpenCode's "final" event names vary; we
+                # accept any event whose ``type`` ends in a terminal-ish
+                # token. Last-text-wins so a later result overrides
+                # intermediate streaming.
+                etype = event.get("type") or ""
+                if isinstance(etype, str) and etype:
+                    low = etype.lower()
+                    if low.endswith((".completed", ".done", ".finished",
+                                     "result", "final")):
+                        if text:
+                            final_text = text
+
+            proc.wait()
+        except Exception as e:
+            _kill_process_group(proc)
+            run_dir.mark_failed(e)
+            raise
+        finally:
+            stderr_thread.join(timeout=2.0)
+            with self._cli_lock:
+                try:
+                    self._cli_procs.remove(proc)
+                except ValueError:
+                    pass  # already removed by reclaim/watchdog
+
+        stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
+
+        if proc.returncode != 0:
+            detail = stderr_tail or "\n".join(text_chunks[-3:])
+            exc = RuntimeError(
+                f"opencode CLI exited with code {proc.returncode}: "
+                f"{detail[-500:]}"
+            )
+            run_dir.mark_failed(exc)
+            raise exc
+
+        # Choose the best final text: explicit terminal event > last text
+        # chunk > stderr tail > no-output sentinel. ``any_event`` lets us
+        # distinguish "process exited 0 but never spoke" from a real
+        # silent success (which shouldn't happen, but be defensive).
+        if final_text is not None:
+            text = final_text.strip()
+        elif text_chunks:
+            text = text_chunks[-1].strip()
+        elif stderr_tail:
+            text = f"[no JSON events; stderr tail follows]\n{stderr_tail[-500:]}"
+        else:
+            text = "[no output]"
+        if not any_event and not stderr_tail:
+            text = "[no output]"
+
+        run_dir.mark_done(text)
+        return text
+
+    def _handle_ask_opencode(self, em_id: str, entry: dict, message: str) -> dict:
+        """Dispatch an OpenCode session-resume follow-up off the caller's turn.
+
+        Mirrors ``_handle_ask_cli`` / ``_handle_ask_codex``: spawn the
+        ``opencode run --session <id>`` subprocess, hand the JSON-stream
+        parse to ``self._ask_pool``, return immediately. The concurrent-ask
+        guard refuses overlapping asks per-emanation because opencode
+        resume is single-writer per session.
+        """
+        run_dir = entry.get("run_dir")
+        if run_dir is None:
+            return {"status": "error", "message": f"emanation {em_id} has no run_dir"}
+
+        session_id = run_dir._state.get("opencode_session_id")
+        if not session_id:
+            return {"status": "error",
+                    "message": f"No opencode session ID found for {em_id}. "
+                               "The emanation may still be initializing — "
+                               "wait a moment and retry."}
+
+        with entry["followup_lock"]:
+            if entry.get("ask_in_flight"):
+                return {"status": "busy", "id": em_id,
+                        "message": f"a previous ask on {em_id} is still "
+                                   "running; wait for it or use "
+                                   f"daemon(action='check', id='{em_id}')"}
+            entry["ask_in_flight"] = True
+
+        cmd = [
+            "opencode",
+            "run",
+            "--session", session_id,
+            "--format", "json",
+            message,
+        ]
+        self._log("daemon_opencode_ask", em_id=em_id,
+                  session_id=session_id, message_length=len(message))
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=str(self._agent._working_dir),
+                start_new_session=True,  # own process group for reliable cleanup
+            )
+        except FileNotFoundError:
+            with entry["followup_lock"]:
+                entry["ask_in_flight"] = False
+            return {"status": "error",
+                    "message": "'opencode' CLI not found on PATH"}
+        except OSError as e:
+            with entry["followup_lock"]:
+                entry["ask_in_flight"] = False
+            return {"status": "error",
+                    "message": f"Failed to start opencode CLI: {e}"}
+        with self._cli_lock:
+            self._cli_procs.append(proc)
+
+        try:
+            run_dir.record_cli_output(
+                f"[ask dispatched] {message[:200]}", stream="stdout",
+            )
+        except OSError:
+            pass
+
+        ask_future = self._ask_pool.submit(
+            self._run_ask_opencode_stream, em_id, entry, proc, run_dir,
+        )
+        ask_future.add_done_callback(
+            lambda f, eid=em_id: self._on_ask_done(eid, f)
+        )
+        entry["ask_future"] = ask_future
+
+        return {"status": "sent", "id": em_id, "async": True,
+                "message": "ask dispatched; check daemon(action='check', "
+                           f"id='{em_id}') for progress and final reply"}
+
+    def _run_ask_opencode_stream(
+        self,
+        em_id: str,
+        entry: dict,
+        proc: subprocess.Popen,
+        run_dir: DaemonRunDir,
+    ) -> dict:
+        """Background worker: stream an ``opencode run --session`` subprocess.
+
+        Same defensive JSON-line parse as ``_run_opencode_emanation``:
+        non-JSON lines are recorded verbatim, text is pulled from any
+        plausible field, terminal-shaped events override intermediate
+        text. Always clears ``ask_in_flight`` and detaches ``proc`` from
+        ``_cli_procs`` on exit.
+        """
+        stderr_lines: list[str] = []
+
+        def _drain_stderr() -> None:
+            assert proc.stderr is not None
+            for line in proc.stderr:
+                stripped = line.rstrip("\n")
+                if not stripped:
+                    continue
+                stderr_lines.append(stripped)
+                try:
+                    run_dir.record_cli_output(stripped, stream="stderr")
+                except Exception:
+                    pass
+
+        stderr_thread = threading.Thread(
+            target=_drain_stderr, daemon=True,
+            name=f"daemon-opencode-ask-stderr-{em_id}",
+        )
+        stderr_thread.start()
+
+        text_chunks: list[str] = []
+        final_text: str | None = None
+        any_event = False
+        timed_out = False
+
+        try:
+            assert proc.stdout is not None
+            deadline = time.monotonic() + self._timeout
+            # See _run_ask_claude_code_stream for the rationale on
+            # _iter_stdout_with_deadline — fixes the silent-CLI hang.
+            for raw_line in _iter_stdout_with_deadline(
+                proc, deadline,
+                thread_name=f"daemon-opencode-ask-stdout-{em_id}",
+            ):
+                line = raw_line.rstrip("\n")
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    run_dir.record_cli_output(line, stream="stdout")
+                    continue
+                if not isinstance(event, dict):
+                    run_dir.record_cli_output(line, stream="stdout")
+                    continue
+
+                any_event = True
+                text = self._opencode_extract_text(event)
+                if text:
+                    text_chunks.append(text)
+                    run_dir.record_cli_output(text, stream="stdout")
+                etype = event.get("type") or ""
+                if isinstance(etype, str) and etype:
+                    low = etype.lower()
+                    if low.endswith((".completed", ".done", ".finished",
+                                     "result", "final")):
+                        if text:
+                            final_text = text
+
+            if time.monotonic() >= deadline:
+                timed_out = True
+                _kill_process_group(proc)
+            else:
+                try:
+                    proc.wait(timeout=max(1.0, deadline - time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                    _kill_process_group(proc)
+        finally:
+            stderr_thread.join(timeout=2.0)
+            with self._cli_lock:
+                try:
+                    self._cli_procs.remove(proc)
+                except ValueError:
+                    pass  # already removed by reclaim/watchdog
+            with entry["followup_lock"]:
+                entry["ask_in_flight"] = False
+
+        stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
+
+        if timed_out:
+            err = f"opencode run timed out after {self._timeout}s"
+            self._publish_followup_if_live(
+                em_id, status="follow-up failed", text=err, run_dir=run_dir,
+            )
+            return {"status": "error", "id": em_id, "message": err}
+
+        if proc.returncode != 0:
+            detail = stderr_tail or "\n".join(text_chunks[-3:])
+            err = f"opencode CLI exited {proc.returncode}: {detail[-500:]}"
+            self._publish_followup_if_live(
+                em_id, status="follow-up failed", text=err, run_dir=run_dir,
+            )
+            return {"status": "error", "id": em_id, "message": err}
+
+        if final_text is not None:
+            output = final_text.strip()
+        elif text_chunks:
+            output = text_chunks[-1].strip()
+        else:
+            output = ""
+
+        if not any_event and not output:
+            output = "[no output]"
+
+        if output and output != "[no output]":
             self._publish_followup_if_live(
                 em_id, status="follow-up completed", text=output, run_dir=run_dir,
             )
