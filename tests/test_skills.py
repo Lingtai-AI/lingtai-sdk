@@ -69,6 +69,28 @@ def test_skills_setup_hard_copies_intrinsics(tmp_path):
         agent.stop(timeout=1.0)
 
 
+def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
+    # Standalone always-included skills live in lingtai.intrinsic_skills and are
+    # copied next to capability manuals under .library/intrinsic/capabilities/.
+    agent, workdir = _mk_agent(tmp_path)
+    try:
+        skill_md = (
+            workdir
+            / ".library"
+            / "intrinsic"
+            / "capabilities"
+            / "file-manual"
+            / "SKILL.md"
+        )
+        assert skill_md.is_file()
+        body = skill_md.read_text(encoding="utf-8")
+        assert "name: file-manual" in body
+        assert "encoding='gbk'" in body
+        assert "iconv -f gbk -t utf-8" in body
+    finally:
+        agent.stop(timeout=1.0)
+
+
 def test_skills_setup_overwrites_stale_intrinsic(tmp_path):
     # The Agent initializer wipes-and-rewrites intrinsic/ on construction.
     # A stale entry from a previous kernel version must be replaced.
@@ -256,6 +278,7 @@ def test_catalog_injected_into_skills_section(tmp_path):
     try:
         prompt = agent._prompt_manager.read_section("skills") or ""
         assert "- name: skills-manual" in prompt
+        assert "- name: file-manual" in prompt
         assert "- name: shared-thing" in prompt
     finally:
         agent.stop(timeout=1.0)
