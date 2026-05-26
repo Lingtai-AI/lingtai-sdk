@@ -317,7 +317,7 @@ def _context_molt(agent, args: dict) -> dict:
     try:
         if current_path.is_file():
             with open(archive_path, "a") as archive:
-                archive.write(current_path.read_text())
+                archive.write(current_path.read_text(encoding="utf-8"))
             current_path.unlink()
     except OSError:
         pass
@@ -551,7 +551,7 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0,
     try:
         if current_path.is_file():
             with open(archive_path, "a") as archive:
-                archive.write(current_path.read_text())
+                archive.write(current_path.read_text(encoding="utf-8"))
             current_path.unlink()
     except OSError:
         pass

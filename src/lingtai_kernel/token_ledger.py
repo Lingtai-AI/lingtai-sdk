@@ -82,7 +82,7 @@ def count_main_api_calls(path: Path | str) -> int:
     if not path.is_file():
         return 0
     n = 0
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -113,7 +113,7 @@ def sum_token_ledger(path: Path | str) -> dict:
     }
     if not path.is_file():
         return totals
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue

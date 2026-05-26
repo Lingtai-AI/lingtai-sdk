@@ -93,7 +93,7 @@ class BashPolicy:
         p = Path(path)
         if not p.is_file():
             raise FileNotFoundError(f"Policy file not found: {path}")
-        data = json.loads(p.read_text())
+        data = json.loads(p.read_text(encoding="utf-8"))
         return cls(allow=data.get("allow"), deny=data.get("deny"))
 
     @classmethod
@@ -290,8 +290,8 @@ class BashManager:
         (job_dir / "command").write_text(command)
         (job_dir / "status").write_text("running")
 
-        stdout_f = open(job_dir / "stdout.log", "w")
-        stderr_f = open(job_dir / "stderr.log", "w")
+        stdout_f = open(job_dir / "stdout.log", "w", encoding="utf-8")
+        stderr_f = open(job_dir / "stderr.log", "w", encoding="utf-8")
 
         try:
             proc = subprocess.Popen(
@@ -353,7 +353,7 @@ class BashManager:
         # Read stdout preview
         stdout_preview = ""
         try:
-            stdout_text = (job_dir / "stdout.log").read_text()
+            stdout_text = (job_dir / "stdout.log").read_text(encoding="utf-8", errors="replace")
             stdout_preview = stdout_text[:200]
         except Exception:
             pass
@@ -396,11 +396,11 @@ class BashManager:
         if not job_dir.is_dir():
             return {"status": "error", "message": f"Job not found: {job_id}"}
 
-        status = (job_dir / "status").read_text().strip()
+        status = (job_dir / "status").read_text(encoding="utf-8").strip()
         if status != "running":
             return {"status": "error", "message": f"Job already finished ({status})"}
 
-        pid = int((job_dir / "pid").read_text().strip())
+        pid = int((job_dir / "pid").read_text(encoding="utf-8").strip())
 
         # Use Popen.poll() if we have the handle (same process), else os.waitpid
         handles = getattr(self, "_open_handles", {})
@@ -427,8 +427,8 @@ class BashManager:
         # Process finished — close file handles, read output
         self._close_handles(job_id)
 
-        stdout = (job_dir / "stdout.log").read_text()
-        stderr = (job_dir / "stderr.log").read_text()
+        stdout = (job_dir / "stdout.log").read_text(encoding="utf-8", errors="replace")
+        stderr = (job_dir / "stderr.log").read_text(encoding="utf-8", errors="replace")
 
         if len(stdout) > self._max_output:
             stdout = stdout[: self._max_output] + f"\n... (truncated, {len(stdout)} chars total)"
@@ -458,11 +458,11 @@ class BashManager:
         if not job_dir.is_dir():
             return {"status": "error", "message": f"Job not found: {job_id}"}
 
-        status = (job_dir / "status").read_text().strip()
+        status = (job_dir / "status").read_text(encoding="utf-8").strip()
         if status != "running":
             return {"status": "error", "message": f"Job already finished ({status})"}
 
-        pid = int((job_dir / "pid").read_text().strip())
+        pid = int((job_dir / "pid").read_text(encoding="utf-8").strip())
 
         # Kill the entire process group (start_new_session=True makes pid the pgid)
         try:

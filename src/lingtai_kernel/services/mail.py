@@ -241,7 +241,7 @@ class FilesystemMailService(MailService):
                             msg_file = entry / "message.json"
                             if msg_file.is_file():
                                 try:
-                                    payload = json.loads(msg_file.read_text())
+                                    payload = json.loads(msg_file.read_text(encoding="utf-8"))
                                     on_message(payload)
                                 except (json.JSONDecodeError, OSError):
                                     pass
@@ -297,7 +297,7 @@ class FilesystemMailService(MailService):
             if not msg_file.is_file():
                 continue
             try:
-                payload = json.loads(msg_file.read_text())
+                payload = json.loads(msg_file.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 continue
 

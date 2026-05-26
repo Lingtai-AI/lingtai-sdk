@@ -154,7 +154,7 @@ class WorkingDir:
                 )
                 if status_result.stdout.strip():
                     file_path = self._path / rel_path
-                    diff_text = f"(new/untracked file)\n{file_path.read_text()}"
+                    diff_text = f"(new/untracked file)\n{file_path.read_text(encoding='utf-8')}"
         except (FileNotFoundError, subprocess.CalledProcessError):
             diff_text = ""
         return diff_text
@@ -263,7 +263,7 @@ class WorkingDir:
         if not path.is_file():
             return ""
         try:
-            data = json.loads(path.read_text())
+            data = json.loads(path.read_text(encoding="utf-8"))
             return data.get("covenant", "")
         except (json.JSONDecodeError, OSError):
             corrupt = self._path / ".agent.json.corrupt"
@@ -279,7 +279,7 @@ class WorkingDir:
         if not path.is_file():
             return {}
         try:
-            return json.loads(path.read_text())
+            return json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             return {}
 

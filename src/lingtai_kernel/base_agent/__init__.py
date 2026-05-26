@@ -286,13 +286,13 @@ class BaseAgent:
         if covenant:
             covenant_file.write_text(covenant)
         elif covenant_file.is_file():
-            covenant = covenant_file.read_text()
+            covenant = covenant_file.read_text(encoding="utf-8")
 
         # Principle: constructor value wins, then fall back to file on disk
         if principle:
             principle_file.write_text(principle)
         elif principle_file.is_file():
-            principle = principle_file.read_text()
+            principle = principle_file.read_text(encoding="utf-8")
 
         # Substrate: same pattern as covenant/principle. Opt-in (issue
         # #39): kernel-owned, cross-app-stable system prompt section that
@@ -301,19 +301,19 @@ class BaseAgent:
         if substrate:
             substrate_file.write_text(substrate)
         elif substrate_file.is_file():
-            substrate = substrate_file.read_text()
+            substrate = substrate_file.read_text(encoding="utf-8")
 
         # Procedures: same pattern as covenant/principle
         if procedures:
             procedures_file.write_text(procedures)
         elif procedures_file.is_file():
-            procedures = procedures_file.read_text()
+            procedures = procedures_file.read_text(encoding="utf-8")
 
         # Brief: externally-maintained context (written by secretary agent).
         if brief and not brief_file.is_file():
             brief_file.write_text(brief)
         elif brief_file.is_file():
-            brief = brief_file.read_text()
+            brief = brief_file.read_text(encoding="utf-8")
 
         # Pad: constructor value seeds the file if it doesn't exist
         if pad and not pad_file.is_file():
@@ -322,7 +322,7 @@ class BaseAgent:
         # Auto-load pad from file into prompt manager
         loaded_pad = ""
         if pad_file.is_file():
-            loaded_pad = pad_file.read_text()
+            loaded_pad = pad_file.read_text(encoding="utf-8")
 
         # System prompt manager
         self._prompt_manager = SystemPromptManager()
@@ -340,7 +340,7 @@ class BaseAgent:
         rules_md = system_dir / "rules.md"
         if rules_md.is_file():
             try:
-                rules_content = rules_md.read_text().strip()
+                rules_content = rules_md.read_text(encoding="utf-8").strip()
                 if rules_content:
                     self._prompt_manager.write_section("rules", rules_content, protected=True)
             except OSError:

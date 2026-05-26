@@ -465,7 +465,7 @@ class Agent(BaseAgent):
         legacy_config = self._working_dir / "mcp" / "servers.json"
         if legacy_config.is_file():
             try:
-                servers = json.loads(legacy_config.read_text())
+                servers = json.loads(legacy_config.read_text(encoding="utf-8"))
                 if isinstance(servers, dict):
                     for name, cfg in servers.items():
                         if isinstance(cfg, dict):
@@ -673,7 +673,7 @@ class Agent(BaseAgent):
         # Resolve Python: target's init.json venv_path → global runtime
         try:
             import json as _json
-            target_data = _json.loads(init_path.read_text())
+            target_data = _json.loads(init_path.read_text(encoding="utf-8"))
         except (ValueError, OSError):
             target_data = None
         venv_dir = resolve_venv(target_data)
@@ -1227,7 +1227,7 @@ class Agent(BaseAgent):
         if covenant:
             covenant_file.write_text(covenant)
         elif covenant_file.is_file():
-            covenant = covenant_file.read_text()
+            covenant = covenant_file.read_text(encoding="utf-8")
         if covenant:
             self._prompt_manager.write_section("covenant", covenant, protected=True)
 
@@ -1252,12 +1252,12 @@ class Agent(BaseAgent):
         else:
             try:
                 from importlib.resources import files
-                packaged = files("lingtai.prompts").joinpath("substrate.md").read_text()
+                packaged = files("lingtai.prompts").joinpath("substrate.md").read_text(encoding="utf-8")
                 substrate_file.write_text(packaged)
                 substrate = packaged
             except (FileNotFoundError, ModuleNotFoundError, OSError):
                 if substrate_file.is_file():
-                    substrate = substrate_file.read_text()
+                    substrate = substrate_file.read_text(encoding="utf-8")
                 else:
                     substrate = ""
         if substrate:
@@ -1269,7 +1269,7 @@ class Agent(BaseAgent):
         rules_md = system_dir / "rules.md"
         if rules_md.is_file():
             try:
-                rules_content = rules_md.read_text().strip()
+                rules_content = rules_md.read_text(encoding="utf-8").strip()
                 if rules_content:
                     self._prompt_manager.write_section("rules", rules_content, protected=True)
                 else:
@@ -1283,7 +1283,7 @@ class Agent(BaseAgent):
         pad_file = system_dir / "pad.md"
         loaded_pad = ""
         if pad_file.is_file():
-            loaded_pad = pad_file.read_text()
+            loaded_pad = pad_file.read_text(encoding="utf-8")
         if loaded_pad.strip():
             self._prompt_manager.write_section("pad", loaded_pad)
 
@@ -1293,7 +1293,7 @@ class Agent(BaseAgent):
         if principle:
             principle_file.write_text(principle)
         elif principle_file.is_file():
-            principle = principle_file.read_text()
+            principle = principle_file.read_text(encoding="utf-8")
         if principle:
             self._prompt_manager.write_section("principle", principle, protected=True)
 
@@ -1314,12 +1314,12 @@ class Agent(BaseAgent):
         else:
             try:
                 from importlib.resources import files
-                packaged = files("lingtai.prompts").joinpath("procedures.md").read_text()
+                packaged = files("lingtai.prompts").joinpath("procedures.md").read_text(encoding="utf-8")
                 procedures_file.write_text(packaged)
                 procedures = packaged
             except (FileNotFoundError, ModuleNotFoundError, OSError):
                 if procedures_file.is_file():
-                    procedures = procedures_file.read_text()
+                    procedures = procedures_file.read_text(encoding="utf-8")
                 else:
                     procedures = ""
         if procedures:
@@ -1333,7 +1333,7 @@ class Agent(BaseAgent):
         if brief:
             brief_file.write_text(brief)
         elif brief_file.is_file():
-            brief = brief_file.read_text()
+            brief = brief_file.read_text(encoding="utf-8")
         if brief:
             self._prompt_manager.write_section("brief", brief, protected=True)
         else:

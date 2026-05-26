@@ -24,7 +24,7 @@ def _load_append_list(agent) -> list[str]:
     if not path.is_file():
         return []
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(data, list):
             return [str(p) for p in data]
     except (json.JSONDecodeError, OSError):
@@ -54,7 +54,7 @@ def _read_append_content(agent, files: list[str]) -> tuple[str, list[str]]:
         if not resolved.is_file():
             not_found.append(fpath)
             continue
-        parts.append(f"[append: {fpath}]\n{resolved.read_text()}")
+        parts.append(f"[append: {fpath}]\n{resolved.read_text(encoding='utf-8')}")
     return "\n\n".join(parts), not_found
 
 
@@ -102,7 +102,7 @@ def _pad_edit(agent, args: dict) -> dict:
         if not resolved.is_file():
             not_found.append(fpath)
             continue
-        file_content = resolved.read_text()
+        file_content = resolved.read_text(encoding='utf-8')
         parts.append(f"[file-{i}]\n{file_content}")
 
     if not_found:
@@ -130,7 +130,7 @@ def _pad_load(agent, args: dict) -> dict:
     if not pad_path.is_file():
         pad_path.write_text("")
 
-    content = pad_path.read_text()
+    content = pad_path.read_text(encoding="utf-8")
     size_bytes = len(content.encode("utf-8"))
 
     if content.strip():

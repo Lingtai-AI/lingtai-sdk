@@ -22,8 +22,8 @@ def _lingtai_load(agent, _args: dict) -> dict:
     covenant_path = system_dir / "covenant.md"
     lingtai_path = system_dir / "lingtai.md"
 
-    covenant = covenant_path.read_text() if covenant_path.is_file() else ""
-    character = lingtai_path.read_text() if lingtai_path.is_file() else ""
+    covenant = covenant_path.read_text(encoding="utf-8") if covenant_path.is_file() else ""
+    character = lingtai_path.read_text(encoding="utf-8") if lingtai_path.is_file() else ""
 
     parts = [p for p in [covenant, character] if p.strip()]
     combined = "\n\n".join(parts)

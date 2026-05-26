@@ -60,7 +60,7 @@ def load_env_file(path: str | Path, *, overwrite: bool = False) -> None:
     env_path = Path(path).expanduser()
     if not env_path.is_file():
         return
-    for line in env_path.read_text().splitlines():
+    for line in env_path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue

@@ -129,7 +129,7 @@ def build_agent(data: dict, working_dir: Path) -> Agent:
     prev_manifest = working_dir / ".agent.json"
     if prev_manifest.is_file():
         try:
-            prev = json.loads(prev_manifest.read_text())
+            prev = json.loads(prev_manifest.read_text(encoding="utf-8"))
             agent._molt_count = prev.get("molt_count", 0)
         except (json.JSONDecodeError, OSError):
             pass

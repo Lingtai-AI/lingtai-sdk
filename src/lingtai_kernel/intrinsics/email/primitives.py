@@ -64,7 +64,7 @@ def _load_message(agent, msg_id: str) -> dict | None:
     if not msg_file.is_file():
         return None
     try:
-        return json.loads(msg_file.read_text())
+        return json.loads(msg_file.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return None
 
@@ -82,7 +82,7 @@ def _list_inbox(agent) -> list[dict]:
         if not msg_file.is_file():
             continue
         try:
-            msg = json.loads(msg_file.read_text())
+            msg = json.loads(msg_file.read_text(encoding="utf-8"))
             msg["_mailbox_id"] = msg_dir.name
             messages.append(msg)
         except (json.JSONDecodeError, OSError):
@@ -105,7 +105,7 @@ def _read_ids(agent) -> set[str]:
     if not path.is_file():
         return set()
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         return set(data) if isinstance(data, list) else set()
     except (json.JSONDecodeError, OSError):
         return set()
@@ -234,7 +234,7 @@ def _move_to_sent(agent, msg_id: str, sent_at: str, status: str) -> None:
     msg_file = src / "message.json"
     if msg_file.is_file():
         try:
-            data = json.loads(msg_file.read_text())
+            data = json.loads(msg_file.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             data = {}
         data["sent_at"] = sent_at

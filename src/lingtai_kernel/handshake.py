@@ -66,4 +66,4 @@ def manifest(path: str | Path) -> dict:
     agent_json = Path(path) / ".agent.json"
     if not agent_json.is_file():
         raise FileNotFoundError(f"No .agent.json at {path}")
-    return json.loads(agent_json.read_text())
+    return json.loads(agent_json.read_text(encoding="utf-8"))

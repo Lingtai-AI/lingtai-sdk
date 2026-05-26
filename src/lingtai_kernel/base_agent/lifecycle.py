@@ -40,7 +40,7 @@ def _start(agent) -> None:
         try:
             messages = [
                 json.loads(line)
-                for line in chat_history_file.read_text().splitlines()
+                for line in chat_history_file.read_text(encoding="utf-8").splitlines()
                 if line.strip()
             ]
             agent.restore_chat({"messages": messages})
@@ -238,7 +238,7 @@ def _heartbeat_loop(agent) -> None:
         prompt_file = agent._working_dir / ".prompt"
         if prompt_file.is_file():
             try:
-                content = prompt_file.read_text().strip()
+                content = prompt_file.read_text(encoding="utf-8").strip()
             except OSError:
                 content = ""
             try:
@@ -253,7 +253,7 @@ def _heartbeat_loop(agent) -> None:
         clear_file = agent._working_dir / ".clear"
         if clear_file.is_file():
             try:
-                source = clear_file.read_text().strip() or "admin"
+                source = clear_file.read_text(encoding="utf-8").strip() or "admin"
             except OSError:
                 source = "admin"
             try:
@@ -280,7 +280,7 @@ def _heartbeat_loop(agent) -> None:
                 pass
             else:
                 try:
-                    content = taken_file.read_text().strip()
+                    content = taken_file.read_text(encoding="utf-8").strip()
                 except OSError:
                     content = ""
                 if content:
@@ -611,7 +611,7 @@ def _check_rules_file(agent) -> None:
     if not rules_file.is_file():
         return
     try:
-        content = rules_file.read_text().strip()
+        content = rules_file.read_text(encoding="utf-8").strip()
     except OSError:
         return
     # Always consume the signal file
@@ -626,7 +626,7 @@ def _check_rules_file(agent) -> None:
     existing = ""
     if canonical.is_file():
         try:
-            existing = canonical.read_text().strip()
+            existing = canonical.read_text(encoding="utf-8").strip()
         except OSError:
             pass
     if content == existing:

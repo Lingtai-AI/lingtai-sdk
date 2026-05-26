@@ -97,7 +97,7 @@ class EmailManager:
         path = self._mailbox_path / "sent" / email_id / "message.json"
         if path.is_file():
             try:
-                data = json.loads(path.read_text())
+                data = json.loads(path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 return None
             data["_folder"] = "sent"
@@ -106,7 +106,7 @@ class EmailManager:
         path = self._mailbox_path / "archive" / email_id / "message.json"
         if path.is_file():
             try:
-                data = json.loads(path.read_text())
+                data = json.loads(path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 return None
             data["_folder"] = "archive"
@@ -130,7 +130,7 @@ class EmailManager:
             msg_file = msg_dir / "message.json"
             if msg_dir.is_dir() and msg_file.is_file():
                 try:
-                    data = json.loads(msg_file.read_text())
+                    data = json.loads(msg_file.read_text(encoding="utf-8"))
                     data["_folder"] = folder
                     data.setdefault("_mailbox_id", msg_dir.name)
                     emails.append(data)
@@ -320,7 +320,7 @@ class EmailManager:
                 if not sched_file.is_file():
                     continue
                 try:
-                    record = json.loads(sched_file.read_text())
+                    record = json.loads(sched_file.read_text(encoding="utf-8"))
                 except (json.JSONDecodeError, OSError):
                     continue
                 status = record.get("status", "active")
@@ -383,7 +383,7 @@ class EmailManager:
             if not sched_file.is_file():
                 continue
             try:
-                record = json.loads(sched_file.read_text())
+                record = json.loads(sched_file.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 continue
 
@@ -435,7 +435,7 @@ class EmailManager:
         if not path.is_file():
             return None
         try:
-            return json.loads(path.read_text())
+            return json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             return None
 
@@ -460,7 +460,7 @@ class EmailManager:
             if not sched_file.is_file():
                 continue
             try:
-                record = json.loads(sched_file.read_text())
+                record = json.loads(sched_file.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 continue
             status = record.get("status", "active")
@@ -500,7 +500,7 @@ class EmailManager:
                 continue
 
             try:
-                record = json.loads(sched_file.read_text())
+                record = json.loads(sched_file.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 continue
 
@@ -801,7 +801,7 @@ class EmailManager:
                 path = self._mailbox_path / folder / eid / "message.json"
                 if path.is_file():
                     try:
-                        data = json.loads(path.read_text())
+                        data = json.loads(path.read_text(encoding="utf-8"))
                         data["_folder"] = folder
                         data.setdefault("_mailbox_id", eid)
                     except (json.JSONDecodeError, OSError):
@@ -1192,7 +1192,7 @@ class EmailManager:
     def _load_contacts(self) -> list[dict]:
         if self._contacts_path.is_file():
             try:
-                return json.loads(self._contacts_path.read_text())
+                return json.loads(self._contacts_path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 return []
         return []

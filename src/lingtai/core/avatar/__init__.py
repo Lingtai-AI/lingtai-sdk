@@ -260,7 +260,7 @@ class AvatarManager:
             return {"error": "parent has no init.json — cannot spawn avatar"}
 
         try:
-            parent_init = json.loads(parent_init_path.read_text())
+            parent_init = json.loads(parent_init_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as e:
             return {"error": f"failed to read parent init.json: {e}"}
 
@@ -409,7 +409,7 @@ class AvatarManager:
         parent_rules_md = parent._working_dir / "system" / "rules.md"
         if parent_rules_md.is_file():
             try:
-                rules_content = parent_rules_md.read_text()
+                rules_content = parent_rules_md.read_text(encoding="utf-8")
             except OSError:
                 rules_content = ""
             if rules_content.strip():
@@ -624,7 +624,7 @@ class AvatarManager:
         init_data = None
         if init_path.is_file():
             try:
-                init_data = json.loads(init_path.read_text())
+                init_data = json.loads(init_path.read_text(encoding="utf-8"))
             except (ValueError, OSError):
                 pass
         venv_dir = resolve_venv(init_data)
@@ -660,7 +660,7 @@ class AvatarManager:
         if not self._ledger_path.is_file():
             return []
         records = []
-        for line in self._ledger_path.read_text().splitlines():
+        for line in self._ledger_path.read_text(encoding="utf-8").splitlines():
             if line.strip():
                 try:
                     records.append(json.loads(line))
@@ -728,7 +728,7 @@ class AvatarManager:
             if not ledger_path.is_file():
                 continue
             try:
-                lines = ledger_path.read_text().splitlines()
+                lines = ledger_path.read_text(encoding="utf-8").splitlines()
             except OSError:
                 continue
             # Siblings of `current` live in current.parent
