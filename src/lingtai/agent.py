@@ -50,10 +50,14 @@ class Agent(BaseAgent):
         # Persist LLM config for revive (self-sufficient agents contract)
         self._persist_llm_config()
 
-        # Auto-create FileIOService if not provided by host
+        # Auto-create FileIOService if not provided by host. Uses the
+        # ``default_file_io_service`` factory so the Rust sidecar gets
+        # picked up automatically when a wheel-bundled or env-provided
+        # binary is available, with transparent pure-Python fallback.
+        # See LINGTAI_FILE_IO_BACKEND in services/file_io_sidecar.py.
         if self._file_io is None:
-            from .services.file_io import LocalFileIOService
-            self._file_io = LocalFileIOService(root=self._working_dir)
+            from .services.file_io_sidecar import default_file_io_service
+            self._file_io = default_file_io_service(root=self._working_dir)
 
         # Expand groups and normalize to dict
         if isinstance(capabilities, list):

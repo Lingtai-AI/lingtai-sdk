@@ -20,6 +20,14 @@ from lingtai_kernel.intrinsics.email import EmailManager
 
 # Services
 from .services.file_io import FileIOBackend, FileIOService, GrepMatch, LocalFileIOBackend, LocalFileIOService
+from .services.file_io_sidecar import (
+    BACKEND_ENV_VAR,
+    RustFileIOBackend,
+    SidecarAdapter,
+    SidecarError,
+    default_file_io_service,
+    resolve_sidecar_binary,
+)
 from lingtai_kernel.services.mail import MailService, FilesystemMailService
 from lingtai_kernel.services.logging import LoggingService, JSONLLoggingService
 from .services.vision import VisionService, create_vision_service
@@ -46,6 +54,12 @@ __all__ = [
     "FileIOBackend",
     "LocalFileIOBackend",
     "LocalFileIOService",
+    "RustFileIOBackend",
+    "SidecarAdapter",
+    "SidecarError",
+    "BACKEND_ENV_VAR",
+    "default_file_io_service",
+    "resolve_sidecar_binary",
     "GrepMatch",
     "MailService",
     "FilesystemMailService",

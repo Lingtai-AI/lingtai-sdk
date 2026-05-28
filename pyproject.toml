@@ -1,5 +1,8 @@
 [build-system]
-requires = ["setuptools>=68.0"]
+# ``wheel`` is required because setup.py overrides ``bdist_wheel`` to mark
+# the wheel as platform-specific when the bundled Rust sidecar binary is
+# present. See setup.py for the build-time bundle / fallback logic.
+requires = ["setuptools>=68.0", "wheel>=0.41"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -52,6 +55,11 @@ lingtai = [
     "capabilities/*/manual/**/*",
     "intrinsic_skills/*/**/*",
     "prompts/*.md",
+    # Rust sidecar binary bundled at build time by setup.py — present in
+    # platform-specific wheels, absent in pure-Python sdist fallback
+    # builds. The glob is non-strict, so missing files don't fail builds.
+    "bin/lingtai-search-sidecar",
+    "bin/lingtai-search-sidecar.exe",
 ]
 
 [tool.pytest.ini_options]
