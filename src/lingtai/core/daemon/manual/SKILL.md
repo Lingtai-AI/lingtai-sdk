@@ -222,6 +222,14 @@ The `backend` parameter selects the execution engine for emanations. Default is 
 
 **When to use CLI backends:** When the task benefits from a different agent runtime's tool surface (e.g., Claude Code's built-in file editing, Codex's sandboxed execution) rather than the lingtai emanation's curated tool set.
 
+**Claude Code auth environment hygiene.** The `claude-code` backend deliberately starts `claude` with auth override variables stripped from the subprocess environment. This includes `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` (which force API billing; GH #107) and `CLAUDE_CODE_OAUTH_TOKEN` (a stale inherited token can override a refreshed `~/.claude/.credentials.json` and appear as a false "weekly limit"; see Lingtai-AI/lingtai#189). If a manual shell invocation of `claude` reports a quota/weekly-limit error, run a tiny smoke test with the stale env token unset before concluding the account is actually exhausted:
+
+```bash
+env -u CLAUDE_CODE_OAUTH_TOKEN claude -p 'Reply exactly OK' --allowedTools Read -c
+```
+
+Do not print token values while diagnosing; `claude auth status` plus redacted environment variable names are enough.
+
 **CLI backends skip preset resolution** — the external CLI manages its own model, tools, and permissions. The `tools` field in the task spec is ignored for CLI backends.
 
 ### Passing free-form CLI flags via `backend_options`
