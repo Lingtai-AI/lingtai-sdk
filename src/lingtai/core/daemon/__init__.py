@@ -131,14 +131,19 @@ def _iter_stdout_with_deadline(
 # Tools emanations can never use (no recursion, no spawning, no identity mutation)
 EMANATION_BLACKLIST = {"daemon", "avatar", "psyche", "skills", "knowledge"}
 
-# Env vars that force Claude Code CLI onto an API-key billing path instead of
-# the user's Claude Code subscription (OAuth). LingTai loads ``.env`` from
-# ``~/.lingtai-tui/`` early, so an ``ANTHROPIC_API_KEY`` meant for the lingtai
-# LLM adapter silently leaks into spawned ``claude`` subprocesses and bills
-# them through API credits — surfacing as "Credit balance is too low" even
-# when the subscription is healthy. We strip these for claude-code spawns
-# only; other backends (codex, lingtai) are unaffected. See GH #107.
-_CLAUDE_CODE_STRIP_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+# Env vars that override Claude Code's normal first-party OAuth credentials.
+# LingTai loads ``.env`` from ``~/.lingtai-tui/`` early, so auth intended for
+# another LLM adapter can leak into spawned ``claude`` subprocesses.
+# ``ANTHROPIC_*`` keys force API billing (GH #107); a stale
+# ``CLAUDE_CODE_OAUTH_TOKEN`` can also beat a refreshed
+# ``~/.claude/.credentials.json`` and surface as a false weekly-limit error
+# (GH Lingtai-AI/lingtai#189). Strip these for claude-code spawns only; other
+# backends (codex, lingtai, opencode) are unaffected.
+_CLAUDE_CODE_STRIP_ENV = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+)
 
 
 def _claude_code_env() -> dict[str, str]:
