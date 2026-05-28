@@ -1097,12 +1097,15 @@ class Agent(BaseAgent):
         self._soul_delay = max(1.0, self._config.soul_delay)
         self._session._config = self._config
 
-        # Reload all prompt sections (covenant, principle, procedures, brief,
-        # rules, pad, comment) from init.json and disk.
+        # Reload all prompt sections (covenant, character, principle,
+        # procedures, brief, rules, pad, comment) from init.json and disk.
         self._reload_prompt_sections(data)
 
-        # Re-boot psyche so lingtai.md gets layered onto covenant section and
-        # the post-molt hook is re-registered on the cleared hook list.
+        # Re-boot psyche so the post-molt hook is re-registered on the cleared
+        # hook list. `boot` also reloads `character`/`pad` — both `boot` and
+        # `_reload_prompt_sections` now route through the same canonical
+        # composers (`_lingtai_load`, `_pad_load`), so they produce identical
+        # content and the result is independent of which runs last.
         from lingtai_kernel.intrinsics import psyche as _psyche
         _psyche.boot(self)
 
@@ -1221,7 +1224,7 @@ class Agent(BaseAgent):
         system_dir = self._working_dir / "system"
         system_dir.mkdir(exist_ok=True)
 
-        # --- Covenant ---
+        # --- Covenant (operator contract — covenant.md alone) ---
         covenant = data.get("covenant", "")
         covenant_file = system_dir / "covenant.md"
         if covenant:
@@ -1230,6 +1233,14 @@ class Agent(BaseAgent):
             covenant = covenant_file.read_text(encoding="utf-8")
         if covenant:
             self._prompt_manager.write_section("covenant", covenant, protected=True)
+
+        # --- Character (self-authored identity — system/lingtai.md alone) ---
+        # Delegate to the single canonical composer so boot/refresh/molt all
+        # produce byte-identical `character` content and no longer depend on
+        # post-molt hook ordering. Distinct from `covenant` above and from the
+        # mechanical `identity` section written by BaseAgent.
+        from lingtai_kernel.intrinsics.psyche import _lingtai_load
+        _lingtai_load(self, {})
 
         # --- Substrate (kernel-owned, cross-app stable; #39) ---
         # The substrate section sits right after `## tools` and describes
@@ -1279,13 +1290,12 @@ class Agent(BaseAgent):
         else:
             self._prompt_manager.delete_section("rules")
 
-        # --- Pad ---
-        pad_file = system_dir / "pad.md"
-        loaded_pad = ""
-        if pad_file.is_file():
-            loaded_pad = pad_file.read_text(encoding="utf-8")
-        if loaded_pad.strip():
-            self._prompt_manager.write_section("pad", loaded_pad)
+        # --- Pad (pad.md + pinned pad_append.json references) ---
+        # Delegate to the single canonical composer rather than re-reading
+        # pad.md alone — otherwise the post-molt hook ordering silently drops
+        # the pinned append references. `_pad_load` composes both.
+        from lingtai_kernel.intrinsics.psyche import _pad_load
+        _pad_load(self, {})
 
         # --- Principle ---
         principle = data.get("principle", "")

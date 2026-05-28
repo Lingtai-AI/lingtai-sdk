@@ -258,3 +258,83 @@ def test_deep_refresh_reseals(tmp_path):
     agent._setup_from_init()
 
     assert agent._sealed is True
+
+
+# ---------------------------------------------------------------------------
+# Prompt-section reconstruction: covenant vs character separation + molt
+# (regression for the "lingtai.md folded into covenant, dropped after molt"
+# bug — these fail on main and pass after the single-writer fix).
+# ---------------------------------------------------------------------------
+
+
+def test_reload_keeps_covenant_and_character_separate(tmp_path):
+    """Boot/refresh-style reload: covenant.md → `covenant`, lingtai.md →
+    `character`. The character text must never be folded into covenant."""
+    agent = _make_agent(tmp_path, _make_init(covenant="The operator contract."))
+    # Author a character file as the agent would via psyche(lingtai, update).
+    system_dir = agent._working_dir / "system"
+    system_dir.mkdir(exist_ok=True)
+    (system_dir / "lingtai.md").write_text("I am a meticulous archivist.")
+
+    agent._setup_from_init()
+
+    covenant = agent._prompt_manager.read_section("covenant") or ""
+    character = agent._prompt_manager.read_section("character") or ""
+
+    assert "The operator contract." in covenant
+    assert "I am a meticulous archivist." in character
+    # Separation: neither section bleeds into the other.
+    assert "I am a meticulous archivist." not in covenant
+    assert "The operator contract." not in character
+
+
+def test_post_molt_preserves_character_section(tmp_path):
+    """Firing the post-molt hooks (as _molt.py does) must leave the
+    `character` section intact — not overwritten with covenant-only content.
+
+    On main, _reload_prompt_sections runs last and overwrites covenant with
+    covenant.md-only, silently dropping the character until process restart.
+    With the single-writer fix both hooks produce identical complete output,
+    so order no longer matters."""
+    agent = _make_agent(tmp_path, _make_init(covenant="The operator contract."))
+    system_dir = agent._working_dir / "system"
+    system_dir.mkdir(exist_ok=True)
+    (system_dir / "lingtai.md").write_text("I am a meticulous archivist.")
+
+    # Boot/refresh registers both post-molt hooks (psyche lambda + _reload).
+    agent._setup_from_init()
+
+    # Mirror _molt.py:351 — fire every registered post-molt hook in order.
+    for cb in getattr(agent, "_post_molt_hooks", []):
+        cb()
+
+    character = agent._prompt_manager.read_section("character") or ""
+    covenant = agent._prompt_manager.read_section("covenant") or ""
+    assert "I am a meticulous archivist." in character
+    assert "I am a meticulous archivist." not in covenant
+
+
+def test_post_molt_preserves_pad_append_pinned_reference(tmp_path):
+    """Firing the post-molt hooks must keep the `pad_append.json` pinned
+    reference in the `pad` section. On main the pad.md-only writer runs last
+    and drops the appended reference; the single-writer fix routes both
+    hooks through `_pad_load`, which always composes pad.md + appends."""
+    agent = _make_agent(tmp_path, _make_init())
+    system_dir = agent._working_dir / "system"
+    system_dir.mkdir(exist_ok=True)
+    (system_dir / "pad.md").write_text("Working notes line.")
+
+    # Pin a reference file via pad_append.json (what psyche(pad, append) writes).
+    ref = agent._working_dir / "reference.md"
+    ref.write_text("PINNED-REFERENCE-MARKER")
+    (system_dir / "pad_append.json").write_text(json.dumps(["reference.md"]))
+
+    agent._setup_from_init()
+
+    # Mirror _molt.py:351 — fire every registered post-molt hook in order.
+    for cb in getattr(agent, "_post_molt_hooks", []):
+        cb()
+
+    pad = agent._prompt_manager.read_section("pad") or ""
+    assert "Working notes line." in pad
+    assert "PINNED-REFERENCE-MARKER" in pad

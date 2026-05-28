@@ -8,7 +8,7 @@ batches:
     Batch 1 — immovable after init (ideal cache-read prefix):
         principle (no header) → covenant → tools → substrate → procedures → comment
     Batch 2 — rarely mutated (most stable first):
-        rules → brief → skills → knowledge → identity → pad
+        rules → brief → skills → knowledge → identity → character → pad
 
 `substrate` sits **right after tools** so it functions as the long-form
 companion to the schemas above it: tool schemas carry mechanical
@@ -44,8 +44,11 @@ class SystemPromptManager:
     # sections are ordered most-stable-first so later mutations invalidate
     # as little prior content as possible.
     #   Batch 1 (immovable):         principle, covenant, tools, substrate, procedures, comment
-    #   Batch 2 (rarely-mutated):    rules, brief, skills, knowledge, identity, pad
+    #   Batch 2 (rarely-mutated):    rules, brief, skills, knowledge, identity, character, pad
     # First entry (principle) is rendered without ## header (raw text).
+    # `identity` is the mechanical section (name/nickname/manifest, written by
+    # BaseAgent); `character` is the agent's self-authored identity from
+    # system/lingtai.md (灵台) — distinct sections, character right after identity.
     _DEFAULT_ORDER = [
         # Batch 1 — immovable
         "principle",
@@ -60,6 +63,7 @@ class SystemPromptManager:
         "skills",
         "knowledge",
         "identity",
+        "character",
         "pad",
     ]
 
@@ -103,7 +107,7 @@ class SystemPromptManager:
     # "unordered" bucket rendered just before the tail batch.
     _BATCHES: tuple[tuple[str, ...], ...] = (
         ("principle", "covenant", "tools", "substrate", "procedures", "comment"),
-        ("rules", "brief", "skills", "knowledge", "identity", "pad"),
+        ("rules", "brief", "skills", "knowledge", "identity", "character", "pad"),
     )
 
     def render(self) -> str:

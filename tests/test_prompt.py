@@ -42,3 +42,40 @@ def test_rules_section_absent_when_empty():
     mgr.write_section("tools", "### bash\nRun commands.", protected=True)
     prompt = mgr.render()
     assert "## rules" not in prompt
+
+
+def test_character_renders_after_identity_before_pad():
+    """The self-authored `character` section (system/lingtai.md) sits in
+    Batch 2 right after the mechanical `identity` (name/nickname/manifest)
+    and before `pad`. It is a first-class section, distinct from both
+    `covenant` (the operator contract, Batch 1 before tools) and the
+    mechanical `identity`."""
+    mgr = SystemPromptManager()
+    mgr.write_section("identity", "name: alice", protected=True)
+    mgr.write_section("character", "I am a meticulous archivist.", protected=True)
+    mgr.write_section("pad", "Working notes.")
+    prompt = mgr.render()
+    identity_pos = prompt.index("name: alice")
+    character_pos = prompt.index("I am a meticulous archivist.")
+    pad_pos = prompt.index("Working notes.")
+    assert identity_pos < character_pos < pad_pos
+
+
+def test_character_section_separate_from_covenant():
+    """`covenant` lives in immovable Batch 1 (before tools); `character`
+    lives in Batch 2 (after the mechanical `identity`). Asserting character
+    renders *after* identity proves it is a registered Batch-2 section rather
+    than spilling into the unordered bucket that precedes Batch 2."""
+    mgr = SystemPromptManager()
+    mgr.write_section("covenant", "The operator contract.", protected=True)
+    mgr.write_section("tools", "### bash\nRun commands.", protected=True)
+    mgr.write_section("identity", "name: alice", protected=True)
+    mgr.write_section("character", "I am a meticulous archivist.", protected=True)
+    prompt = mgr.render()
+    cov_pos = prompt.index("The operator contract.")
+    tools_pos = prompt.index("Run commands.")
+    identity_pos = prompt.index("name: alice")
+    char_pos = prompt.index("I am a meticulous archivist.")
+    # covenant before tools (Batch 1); character after identity (Batch 2).
+    assert cov_pos < tools_pos
+    assert identity_pos < char_pos

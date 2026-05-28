@@ -24,8 +24,8 @@ Agent identity, working notes, and context lifecycle — the "bare essentials of
   - `_pad_append()` (`_pad.py:158-198`) — set/clear/query the list of files pinned as read-only pad reference.
 
 - `_lingtai.py` — Lingtai (identity/character) management.
-  - `_lingtai_update()` (`_lingtai.py:8-20`) — write content to `system/lingtai.md` then auto-load.
-  - `_lingtai_load()` (`_lingtai.py:19-46`) — merge `system/covenant.md` + `system/lingtai.md` and write to the protected `covenant` prompt section.
+  - `_lingtai_update()` (`_lingtai.py:11-22`) — write content to `system/lingtai.md` then auto-load.
+  - `_lingtai_load()` (`_lingtai.py:25-54`) — the single canonical writer of the protected `character` prompt section, composed from `system/lingtai.md` alone. Empty/missing file deletes the section. Distinct from `covenant` (operator contract, owned by `Agent._reload_prompt_sections`) and from the mechanical `identity` section (written by BaseAgent).
 
 - `_molt.py` — Context molt core, name handlers, and system-initiated molt.
   - `_context_molt()` (`_molt.py`) — agent-initiated molt: validates summary & keep_tool_calls, snapshots, archives history, wipes wire session, replays the molt's own ToolCallBlock + kept pairs into the fresh interface. The core of the psyche. Resets wire-level tracking (`_notification_block_id` plus any legacy `_pending_notification_*` attributes) and `_notification_fp` but preserves `.notification/` files — notifications are system state, not conversation memory. Still calls `agent._tc_inbox.drain()` defensively for pre-redesign items that survived a restart. After the wipe completes, calls `_publish_post_molt` to drop a `.notification/post-molt.json` reminder so the fresh agent reads what it was doing and how to dismiss.
@@ -40,13 +40,13 @@ Agent identity, working notes, and context lifecycle — the "bare essentials of
 - **Inbound (cross-module):** `context_forget` is called by `base_agent/lifecycle.py:235-236` (warning ladder), `base_agent/turn.py:341-342` (AED), and `base_agent/turn.py:353-354` (`.forget` signal).
 - **Inbound (cross-module):** `_write_molt_snapshot` is imported by `intrinsics/soul/consultation.py` for snapshot loading via `_load_snapshot_interface`.
 - **Outbound:** Depends on `..i18n` (translations), `..llm.interface` (`ToolCallBlock`, `ToolResultBlock`), `..token_counter` (token budget checks in `_pad_append`).
-- **Data flow:** All state lives in the filesystem under `system/` (`pad.md`, `lingtai.md`, `covenant.md`, `pad_append.json`, `summaries/`) and `history/` (`chat_history.jsonl`, `chat_history_archive.jsonl`, `snapshots/`). The molt path also touches `.notification/` (deletes everything in it) and the agent's notification-tracking attributes.
+- **Data flow:** All state lives in the filesystem under `system/` (`pad.md`, `lingtai.md`, `pad_append.json`, `summaries/`) and `history/` (`chat_history.jsonl`, `chat_history_archive.jsonl`, `snapshots/`). `_lingtai_load` reads `lingtai.md` alone (→ `character` section); `system/covenant.md` is owned by `Agent._reload_prompt_sections` (→ `covenant` section), not this package. The molt path also touches `.notification/` (deletes everything in it) and the agent's notification-tracking attributes.
 
 ## Key invariants
 
 - `_context_molt` is the only path that archives `chat_history.jsonl`, increments `molt_count`, and replays the molt's own ToolCallBlock. `context_forget` is the only path that synthesizes both the call and result entries.
 - The `keep_tool_calls` list is validated BEFORE any state mutation — if any id is unmatched, the molt is refused and `molt_count` is not incremented.
 - `context_forget` always adds `_initiator: "system"` to the ToolCallBlock args so the agent can distinguish system-initiated from agent-initiated molts.
-- `boot()` registers a post-molt hook that reloads lingtai + pad into the prompt. This hook runs BEFORE the fresh session is created during molt.
+- `boot()` registers a post-molt hook that reloads `character` (lingtai.md) + `pad` into the prompt via the canonical composers `_lingtai_load`/`_pad_load`. This hook runs BEFORE the fresh session is created during molt. On `Agent`, `_reload_prompt_sections` is *also* registered as a post-molt hook and routes through the same composers — so both hooks produce byte-identical `character`/`pad` content and the post-molt result is independent of hook order (the fix for the "lingtai folded into covenant, dropped after molt" race).
 - `handle()` uses an explicit dispatch table (`_DISPATCH`) rather than `globals().get()`, so it works correctly across sub-modules.
 - The post-molt notification channel name is the literal string `post-molt`, distinct from the pressure-warning `molt` channel owned by `base_agent.turn._check_molt_pressure`. Both can be live simultaneously; pressure-clear sweeps only its own channel. Agents dismiss the reminder with `system(action='dismiss', channel='post-molt')` after re-engaging with the original task.

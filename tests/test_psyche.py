@@ -87,7 +87,14 @@ def test_lingtai_update_empty_clears(tmp_path):
     agent.stop(timeout=1.0)
 
 
-def test_lingtai_load_combines_covenant_and_lingtai(tmp_path):
+def test_lingtai_load_writes_character_section(tmp_path):
+    """lingtai.md populates the standalone `character` section, NOT covenant.
+
+    The two are semantically distinct: `covenant` is the operator-supplied
+    contract (covenant.md alone); `character` is the agent's self-authored
+    identity (lingtai.md alone). The character text must never leak into the
+    covenant section.
+    """
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         covenant="You are helpful",
@@ -96,9 +103,16 @@ def test_lingtai_load_combines_covenant_and_lingtai(tmp_path):
     try:
         _call(agent, {"object": "lingtai", "action": "update", "content": "I specialize in PDFs"})
         _call(agent, {"object": "lingtai", "action": "load"})
-        section = agent._prompt_manager.read_section("covenant")
-        assert "You are helpful" in section
-        assert "I specialize in PDFs" in section
+
+        # character section carries lingtai.md alone
+        character = agent._prompt_manager.read_section("character")
+        assert character is not None
+        assert "I specialize in PDFs" in character
+
+        # covenant section carries covenant.md alone — character text not folded in
+        covenant = agent._prompt_manager.read_section("covenant") or ""
+        assert "You are helpful" in covenant
+        assert "I specialize in PDFs" not in covenant
     finally:
         agent.stop()
 

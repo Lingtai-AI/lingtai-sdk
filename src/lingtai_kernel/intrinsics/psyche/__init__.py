@@ -4,7 +4,7 @@ Objects:
     pad — edit/load system/pad.md (agent's working notes), append pinned files
     context — molt (shed context, keep a briefing)
     name — set true name (once), set/clear nickname
-    lingtai — update/load system/lingtai.md (covenant + character → covenant section)
+    lingtai — update/load system/lingtai.md (self-authored identity → `character` section)
 
 Sub-modules:
     _snapshots.py — Snapshot and summary persistence for the molt machinery.
