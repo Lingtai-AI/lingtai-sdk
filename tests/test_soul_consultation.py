@@ -1924,3 +1924,27 @@ class TestSoulNotificationInstructions:
         assert "email" in text
         # Tells the agent to verify before acting on narrated events.
         assert "verify" in text.lower() or "belief" in text.lower()
+
+
+# ---------------------------------------------------------------------------
+# Regression: the consultation prompt must not teach removed tools.
+# ---------------------------------------------------------------------------
+
+
+def test_consultation_prompt_has_no_removed_codex_tool_call():
+    """The consultation system prompt (and its refusal echo) must not suggest
+    a `codex(...)` tool call. The `codex` durable-memory capability was removed;
+    its replacement is `knowledge`. Guards against silently reintroducing a
+    dead-tool example into a prompt sent to the detached consultation voice.
+    """
+    from lingtai_kernel.intrinsics.soul.consultation import (
+        _CONSULTATION_SYSTEM_PROMPT,
+        _CONSULTATION_TOOL_REFUSAL,
+    )
+
+    # No `codex(` anywhere as a suggested tool-probe.
+    assert "codex(" not in _CONSULTATION_SYSTEM_PROMPT
+    # The refusal text re-grounds with the full system prompt, so check it too.
+    assert "codex(" not in _CONSULTATION_TOOL_REFUSAL
+    # The durable-memory probe example points at the current tool.
+    assert "knowledge(" in _CONSULTATION_SYSTEM_PROMPT
