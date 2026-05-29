@@ -105,30 +105,64 @@ def setup(
             from ...config_resolve import resolve_env
             api_key = resolve_env(api_key, api_key_env)
         if provider not in PROVIDERS["providers"]:
-            # No dedicated VisionService for this provider. If the agent's
-            # main LLM is OpenAI-compatible (custom relay, OpenRouter,
-            # DeepSeek, Kimi, ...), route vision through OpenAIVisionService
-            # using the LLM's own base_url. If the relay or model can't
-            # actually do vision, the call fails at runtime — no pre-check.
-            api_compat = ""
-            defaults = getattr(getattr(agent, "service", None), "_provider_defaults", None)
-            if isinstance(defaults, dict):
-                api_compat = defaults.get("api_compat") or ""
+            # No dedicated VisionService for this provider (custom relay,
+            # OpenRouter, an anthropic-compat local proxy, ...). Route vision
+            # through the OpenAI- or Anthropic-compatible service, picking the
+            # wire protocol and endpoint from, in order:
+            #   1. capability kwargs — explicit init.json override. This lets a
+            #      user point vision at a *different*, vision-capable model
+            #      (e.g. Kimi-K2.6 on a multi-model proxy) while the main LLM
+            #      stays on a text-only model (e.g. GLM-5.1).
+            #   2. the main LLM: api_compat from service._provider_defaults
+            #      (shaped {provider_name: defaults_dict}), base_url/model from
+            #      service._base_url / service._model.
+            # If the relay or model can't actually do vision, the call fails at
+            # runtime — capability registration never pre-checks.
+            api_compat = (kwargs.get("api_compat") or "").lower()
+            if not api_compat:
+                defaults = getattr(getattr(agent, "service", None), "_provider_defaults", None)
+                if isinstance(defaults, dict):
+                    # _provider_defaults is dict[provider_name, defaults_dict];
+                    # read the bucket for *this* provider, not the outer dict.
+                    bucket = defaults.get((provider or "").lower())
+                    if isinstance(bucket, dict):
+                        api_compat = (bucket.get("api_compat") or "").lower()
+
+            cap_model = kwargs.get("model")
+            cap_base_url = kwargs.get("base_url")
+            cap_max_tokens = kwargs.get("max_tokens")
+            llm_base_url = cap_base_url or getattr(agent.service, "_base_url", None)
+            llm_model = cap_model or getattr(agent.service, "_model", None)
+
             if api_compat == "openai":
                 from ...services.vision.openai import OpenAIVisionService
-                llm_base_url = getattr(agent.service, "_base_url", None)
-                llm_model = getattr(agent.service, "_model", None) or "gpt-4o"
-                vision_service = OpenAIVisionService(
-                    api_key=api_key,
-                    model=llm_model,
-                    base_url=llm_base_url,
-                )
+                svc_kwargs: dict = {
+                    "api_key": api_key,
+                    "model": llm_model or "gpt-4o",
+                    "base_url": llm_base_url,
+                }
+                if cap_max_tokens is not None:
+                    svc_kwargs["max_tokens"] = cap_max_tokens
+                vision_service = OpenAIVisionService(**svc_kwargs)
+            elif api_compat == "anthropic":
+                from ...services.vision.anthropic import AnthropicVisionService
+                svc_kwargs = {
+                    "api_key": api_key,
+                    "model": llm_model or "claude-sonnet-4-20250514",
+                    "base_url": llm_base_url,
+                }
+                if cap_max_tokens is not None:
+                    svc_kwargs["max_tokens"] = cap_max_tokens
+                vision_service = AnthropicVisionService(**svc_kwargs)
             else:
                 agent._log(
                     "capability_skipped",
                     capability="vision",
                     requested_provider=provider,
-                    reason=f"no vision support for provider {provider!r}",
+                    reason=(
+                        f"no vision support for provider {provider!r} "
+                        f"(api_compat={api_compat!r})"
+                    ),
                 )
                 return None
         else:

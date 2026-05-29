@@ -18,11 +18,17 @@ class AnthropicVisionService(VisionService):
         *,
         api_key: str,
         model: str = "claude-sonnet-4-20250514",
+        base_url: str | None = None,
         max_tokens: int = 1024,
     ) -> None:
         import anthropic as _anthropic
 
-        self._client = _anthropic.Anthropic(api_key=api_key)
+        client_kwargs: dict = {"api_key": api_key}
+        if base_url:
+            # anthropic-compat local proxies (e.g. JoyCodeProxy) need an explicit
+            # endpoint; the SDK otherwise defaults to api.anthropic.com.
+            client_kwargs["base_url"] = base_url
+        self._client = _anthropic.Anthropic(**client_kwargs)
         self._model = model
         self._max_tokens = max_tokens
 

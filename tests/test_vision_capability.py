@@ -161,7 +161,7 @@ def test_vision_setup_unsupported_provider_skips(tmp_path):
         "capability_skipped",
         capability="vision",
         requested_provider="not-real",
-        reason="no vision support for provider 'not-real'",
+        reason="no vision support for provider 'not-real' (api_compat='')",
     )
 
 
@@ -273,6 +273,109 @@ def test_vision_setup_no_provider_raises(tmp_path):
     agent = make_mock_agent(tmp_path)
     with pytest.raises(ValueError, match="vision capability requires"):
         setup(agent)
+
+
+def make_custom_agent(tmp_path, *, api_compat=None, base_url=None, model=None):
+    """Agent whose main LLM is a `provider='custom'` relay.
+
+    `_provider_defaults` is the real shape: ``{provider_name: defaults_dict}``,
+    so the fallback must peek into the per-provider bucket to read api_compat.
+    """
+    svc = MagicMock()
+    svc.provider = "custom"
+    svc._model = model
+    svc._base_url = base_url
+    svc._provider_defaults = {"custom": {"api_compat": api_compat}} if api_compat else {"custom": {}}
+    return make_mock_agent(tmp_path, svc=svc)
+
+
+# ---------------------------------------------------------------------------
+# Issue #114 — vision fallback for provider='custom'
+# ---------------------------------------------------------------------------
+
+def test_vision_fallback_reads_api_compat_from_provider_bucket(tmp_path):
+    """C-1: api_compat is read from _provider_defaults[provider], not the outer dict.
+
+    `_provider_defaults` is shaped {provider_name: defaults_dict}. The old code
+    called defaults.get("api_compat") on the OUTER dict, which always returned
+    None, so the OpenAI fallback never engaged for custom providers.
+    """
+    with patch("lingtai.services.vision.openai.OpenAIVisionService") as mock_cls:
+        agent = make_custom_agent(
+            tmp_path, api_compat="openai", base_url="http://127.0.0.1:34891/v1", model="GLM-5.1"
+        )
+        mgr = setup(agent, provider="custom", api_key="sk-test")
+
+        mock_cls.assert_called_once()
+        kwargs = mock_cls.call_args.kwargs
+        assert kwargs["api_key"] == "sk-test"
+        assert kwargs["base_url"] == "http://127.0.0.1:34891/v1"
+        assert kwargs["model"] == "GLM-5.1"
+        assert isinstance(mgr, VisionManager)
+
+
+def test_vision_fallback_anthropic_compat_routes_to_anthropic_service(tmp_path):
+    """C-2: api_compat='anthropic' routes vision through AnthropicVisionService.
+
+    Previously only the openai branch existed; anthropic-compat custom proxies
+    fell through to capability_skipped even though AnthropicVisionService exists.
+    """
+    with patch("lingtai.services.vision.anthropic.AnthropicVisionService") as mock_cls:
+        agent = make_custom_agent(
+            tmp_path, api_compat="anthropic", base_url="http://127.0.0.1:34891", model="GLM-5.1"
+        )
+        mgr = setup(agent, provider="custom", api_key="sk-test")
+
+        mock_cls.assert_called_once()
+        kwargs = mock_cls.call_args.kwargs
+        assert kwargs["api_key"] == "sk-test"
+        assert kwargs["base_url"] == "http://127.0.0.1:34891"
+        assert kwargs["model"] == "GLM-5.1"
+        assert isinstance(mgr, VisionManager)
+
+
+def test_vision_fallback_honors_capability_kwargs_over_service(tmp_path):
+    """C-3: explicit capability model/base_url/api_compat override the main LLM.
+
+    The whole point of explicit kwargs in init.json is to route vision through a
+    different (vision-capable) model than the text-only main LLM. The fallback
+    must consult kwargs first and only fall back to service._model/._base_url.
+    """
+    with patch("lingtai.services.vision.openai.OpenAIVisionService") as mock_cls:
+        # main LLM is GLM-5.1 (text-only) on an anthropic-compat proxy
+        agent = make_custom_agent(
+            tmp_path, api_compat="anthropic", base_url="http://127.0.0.1:34891", model="GLM-5.1"
+        )
+        # capability explicitly overrides: openai-compat vision model on the /v1 route
+        mgr = setup(
+            agent,
+            provider="custom",
+            api_key="sk-test",
+            api_compat="openai",
+            model="Kimi-K2.6",
+            base_url="http://127.0.0.1:34891/v1",
+            max_tokens=2048,
+        )
+
+        mock_cls.assert_called_once()
+        kwargs = mock_cls.call_args.kwargs
+        assert kwargs["model"] == "Kimi-K2.6"
+        assert kwargs["base_url"] == "http://127.0.0.1:34891/v1"
+        assert kwargs["max_tokens"] == 2048
+        assert isinstance(mgr, VisionManager)
+
+
+def test_vision_fallback_unknown_api_compat_skips_with_diagnostic(tmp_path):
+    """Fallback with an unhandled api_compat skips and names api_compat in the reason."""
+    agent = make_custom_agent(tmp_path, api_compat="gemini")
+    result = setup(agent, provider="custom", api_key="sk-test")
+    assert result is None
+    agent.add_tool.assert_not_called()
+    log_kwargs = agent._log.call_args.kwargs
+    assert log_kwargs["capability"] == "vision"
+    assert log_kwargs["requested_provider"] == "custom"
+    assert "gemini" in log_kwargs["reason"]
+    assert "api_compat" in log_kwargs["reason"]
 
 
 def test_minimax_vision_setup_filters_inherited_api_compat(tmp_path):

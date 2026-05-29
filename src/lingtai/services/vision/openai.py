@@ -51,6 +51,20 @@ class OpenAIVisionService(VisionService):
             messages=messages,
             max_tokens=self._max_tokens,
         )
+        if not hasattr(raw, "choices"):
+            # The openai SDK returns the raw body (often a str) instead of a
+            # ChatCompletion when the upstream serves non-JSON — an HTML SPA
+            # route, a plain-text gateway error, etc. Accessing raw.choices
+            # then raised the mystifying "'str' object has no attribute
+            # 'choices'". Surface the actual body so the cause is visible.
+            snippet = repr(raw)[:200] if isinstance(raw, str) else f"<{type(raw).__name__}>"
+            raise RuntimeError(
+                "vision upstream did not return a JSON ChatCompletion. "
+                f"Got {type(raw).__name__}: {snippet}. "
+                "Common cause: base_url missing the '/v1' suffix on a local "
+                "proxy, or the proxy returning an HTML dashboard for unknown "
+                "routes."
+            )
         if raw.choices:
             return raw.choices[0].message.content or ""
         return ""

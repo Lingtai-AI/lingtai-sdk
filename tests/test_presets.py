@@ -661,3 +661,86 @@ def test_preset_tier_returns_none_when_unset():
 
 def test_tier_vocabulary_is_numeric_one_through_five():
     assert TIER_VALUES == ("1", "2", "3", "4", "5")
+
+
+# ---------------------------------------------------------------------------
+# materialize_active_preset — wholesale capability replacement (issue #114, Bug D)
+# ---------------------------------------------------------------------------
+#
+# Bug D in #114 reports that init.json capability edits silently vanish on the
+# next refresh because materialize_active_preset wholesale-replaces
+# manifest.capabilities from the active preset. This is intentional design
+# (presets are an atomic swap; skills.paths is the one carve-out). These tests
+# pin that documented behavior so it stays explicit rather than surprising, and
+# guard the skills.paths carve-out against regressions.
+
+from lingtai.presets import materialize_active_preset
+
+
+def _preset_content(name, llm, capabilities):
+    return {
+        "name": name,
+        "description": {"summary": f"{name} preset", "tier": "3"},
+        "manifest": {"llm": llm, "capabilities": capabilities},
+    }
+
+
+def test_materialize_wholesale_replaces_init_capabilities(tmp_path):
+    """Documented Bug D behavior: a per-agent init.json capability edit is
+    overwritten by the active preset's capabilities on materialize.
+
+    Pinning this makes the wholesale-replace explicit. Users who need a
+    per-agent override must change the preset, not init.json (see PR/issue #114).
+    """
+    preset_path = _write_preset(
+        tmp_path, "GLM5.1",
+        _preset_content(
+            "GLM5.1",
+            llm={"provider": "custom", "api_compat": "anthropic", "model": "GLM-5.1"},
+            capabilities={"vision": {"provider": "inherit"}},
+        ),
+    )
+    data = {
+        "manifest": {
+            "preset": {"active": str(preset_path)},
+            # user hand-edited init.json to point vision at a different model
+            "capabilities": {
+                "vision": {
+                    "provider": "custom",
+                    "api_compat": "openai",
+                    "model": "Kimi-K2.6",
+                    "base_url": "http://127.0.0.1:34891/v1",
+                },
+            },
+        },
+    }
+    materialize_active_preset(data, working_dir=tmp_path)
+
+    # the user's init.json vision override is gone — preset wins wholesale
+    assert data["manifest"]["capabilities"] == {"vision": {"provider": "inherit"}}
+
+
+def test_materialize_preserves_init_skills_paths_carveout(tmp_path):
+    """The documented skills.paths carve-out: init.json extras append to the
+    preset's skill paths (preset defaults first), surviving the wholesale swap.
+    """
+    preset_path = _write_preset(
+        tmp_path, "withskills",
+        _preset_content(
+            "withskills",
+            llm={"provider": "x", "model": "y"},
+            capabilities={"skills": {"paths": ["~/preset-skills"]}},
+        ),
+    )
+    data = {
+        "manifest": {
+            "preset": {"active": str(preset_path)},
+            "capabilities": {"skills": {"paths": ["~/agent-skills"]}},
+        },
+    }
+    materialize_active_preset(data, working_dir=tmp_path)
+
+    assert data["manifest"]["capabilities"]["skills"]["paths"] == [
+        "~/preset-skills",
+        "~/agent-skills",
+    ]
