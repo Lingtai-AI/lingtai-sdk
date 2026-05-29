@@ -25,7 +25,7 @@ _CONSULTATION_SYSTEM_PROMPT = (
     "You cannot execute tools from here — but you can probe with them. Any tool call you "
     "emit is intercepted and forwarded to present-self as a recommendation. Use tool calls "
     "as exploratory gestures: `search(...)` something tangential, `pad(read, ...)` "
-    "something they haven't reopened in a while, `codex(...)` a half-remembered note. "
+    "something they haven't reopened in a while, `knowledge(...)` a half-remembered note. "
     "The call name, arguments, and your adjacent reasoning all reach them — let the why "
     "show. Tool-probes are a cheap way to point present-self at corners they haven't "
     "looked into.\n\n"
