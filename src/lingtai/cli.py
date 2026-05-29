@@ -8,7 +8,7 @@ import signal
 import sys
 from pathlib import Path
 
-from lingtai.config_resolve import (
+from lingtai_kernel.config_resolve import (
     resolve_env,
     load_env_file,
 )
@@ -26,7 +26,7 @@ def load_init(working_dir: Path) -> dict:
     so downstream code (and the schema check) sees a fully-resolved manifest.
     This mirrors ``Agent._read_init`` so boot and live-refresh agree.
     """
-    from lingtai.config_resolve import resolve_paths
+    from lingtai_kernel.config_resolve import resolve_paths
     from lingtai.presets import materialize_active_preset
 
     init_path = working_dir / "init.json"

@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 def test_resolve_env_fields_resolves_env_var(monkeypatch):
     """_resolve_env_fields replaces *_env keys with env var values."""
-    from lingtai.config_resolve import _resolve_env_fields
+    from lingtai_kernel.config_resolve import _resolve_env_fields
 
     monkeypatch.setenv("TEST_SECRET", "hunter2")
     result = _resolve_env_fields({"api_key": None, "api_key_env": "TEST_SECRET"})
@@ -20,7 +20,7 @@ def test_resolve_env_fields_resolves_env_var(monkeypatch):
 
 def test_resolve_capabilities_resolves_env():
     """_resolve_capabilities applies _resolve_env_fields to each capability."""
-    from lingtai.config_resolve import _resolve_capabilities
+    from lingtai_kernel.config_resolve import _resolve_capabilities
 
     caps = {"bash": {"policy_file": "p.json"}, "vision": {}}
     result = _resolve_capabilities(caps)

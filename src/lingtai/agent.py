@@ -839,7 +839,7 @@ class Agent(BaseAgent):
         """
         import json
         from .init_schema import strip_deprecated, validate_init
-        from .config_resolve import resolve_paths
+        from lingtai_kernel.config_resolve import resolve_paths
         from .presets import expand_inherit, materialize_active_preset
 
         init_path = self._working_dir / "init.json"
@@ -975,7 +975,7 @@ class Agent(BaseAgent):
             self._log("refresh_skipped", reason="no valid init.json")
             return
 
-        from .config_resolve import (
+        from lingtai_kernel.config_resolve import (
             load_env_file,
             resolve_env,
             resolve_file,
@@ -1218,7 +1218,7 @@ class Agent(BaseAgent):
             if data is None:
                 return
             # Resolve *_file fields (brief_file, covenant_file, etc.)
-            from .config_resolve import resolve_file
+            from lingtai_kernel.config_resolve import resolve_file
             for key in ("covenant", "principle", "substrate", "procedures",
                         "brief", "pad", "comment"):
                 file_key = f"{key}_file"

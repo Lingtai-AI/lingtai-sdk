@@ -621,7 +621,7 @@ class DaemonManager:
         if preset_llm:
             # Build a dedicated LLM service for this emanation from the preset.
             from lingtai.llm.service import LLMService
-            from ...config_resolve import resolve_env
+            from lingtai_kernel.config_resolve import resolve_env
             api_key = resolve_env(preset_llm.get("api_key"), preset_llm.get("api_key_env"))
             service = LLMService(
                 provider=preset_llm["provider"],
@@ -1401,7 +1401,7 @@ class DaemonManager:
         # If any preset is invalid, refuse the whole batch. Presets are
         # identified by path (~/foo.json, ./foo.json, or absolute).
         from lingtai.presets import load_preset
-        from lingtai.preset_connectivity import check_connectivity
+        from lingtai_kernel.preset_connectivity import check_connectivity
 
         resolved_presets: list[dict | None] = []  # one entry per task — None means inherit
         for spec in tasks:

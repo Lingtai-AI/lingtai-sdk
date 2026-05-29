@@ -89,8 +89,8 @@ daemon/run_dir.py
 - `lingtai.i18n` — `t()` for localized strings
 - `lingtai.capabilities` — `setup_capability`, `_GROUPS` for preset sandbox instantiation
 - `lingtai.presets` — `load_preset`, `expand_inherit` for per-emanation preset resolution
-- `lingtai.preset_connectivity` — `check_connectivity` for LLM reachability pre-flight
-- `lingtai.config_resolve` — `resolve_env` for API key resolution
+- `lingtai_kernel.preset_connectivity` — `check_connectivity` for LLM reachability pre-flight
+- `lingtai_kernel.config_resolve` — `resolve_env` for API key resolution
 - `lingtai.llm.service` — `LLMService` for dedicated preset LLM services
 - `lingtai.agent.Agent` — parent agent type (TYPE_CHECKING only)
 

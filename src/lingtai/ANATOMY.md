@@ -15,9 +15,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 | `network.py` | Read-only network topology crawler — avatar/contact/mail edge discovery |
 | `presets.py` | Compatibility shim re-exporting the kernel preset library (`lingtai_kernel.presets`) |
 | `init_schema.py` | `validate_init()` — strict schema for init.json |
-| `config_resolve.py` | Compatibility shim for `lingtai_kernel.config_resolve` |
 | `venv_resolve.py` | Python venv resolution — init.json → global runtime → auto-create |
-| `preset_connectivity.py` | Compatibility shim for `lingtai_kernel.preset_connectivity` |
 | `intrinsic_skills/__init__.py` | Standalone skill bundles (docs-only) copied into `.library/intrinsic/` |
 
 ### Key functions / classes
@@ -30,13 +28,11 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 
 **`init_schema.py`**: `validate_init` :85 · `TOP_OPTIONAL` :13 · `MANIFEST_OPTIONAL` :42
 
-**`config_resolve.py`**: compatibility shim; implementation lives in `lingtai_kernel.config_resolve` (`load_jsonc` :16 · `resolve_env` :42 · `resolve_paths` :98 · `_resolve_capabilities` :122).
-
 **`network.py`**: `build_network` :306 · `_discover_agents` :143 · `_build_avatar_edges` :168
 
 **`venv_resolve.py`**: `resolve_venv` :19 · `venv_python` :40 · `ensure_package` :94
 
-**`preset_connectivity.py`**: compatibility shim; implementation lives in `lingtai_kernel.preset_connectivity` (`check_connectivity` :64 · `check_many` :119).
+> Config-resolution helpers (`load_jsonc`/`resolve_env`/`resolve_paths`/`_resolve_capabilities`) and preset-connectivity probing (`check_connectivity`/`check_many`) live in the kernel — import directly from `lingtai_kernel.config_resolve` / `lingtai_kernel.preset_connectivity`. The former wrapper-side compatibility shims were removed (no back-compat shims per repo policy).
 
 ## Connections
 
@@ -44,7 +40,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 
 **Outbound — kernel:** `lingtai_kernel.base_agent.BaseAgent`, `.config.AgentConfig`, `.prompt.build_system_prompt`, `.handshake.resolve_address`, `.intrinsics.{email,psyche}`, `.services.mail.FilesystemMailService`, `.migrate.run_migrations`.
 
-**Cross-module:** `agent.py` → `capabilities.setup_capability`, `core.mcp.{decompress_addons,read_registry,MCPInboxPoller}`, `services.mcp.{MCPClient,HTTPMCPClient}`, `llm.service.LLMService`, `presets`, `config_resolve`, `init_schema`. `cli.py` → `agent.Agent`, `config_resolve`, `presets`.
+**Cross-module:** `agent.py` → `capabilities.setup_capability`, `core.mcp.{decompress_addons,read_registry,MCPInboxPoller}`, `services.mcp.{MCPClient,HTTPMCPClient}`, `llm.service.LLMService`, `presets`, `lingtai_kernel.config_resolve`, `init_schema`. `cli.py` → `agent.Agent`, `lingtai_kernel.config_resolve`, `presets`.
 
 **Agent → BaseAgent:** Three-layer hierarchy: `BaseAgent` (kernel) → `Agent` (capabilities) → `CustomAgent` (domain). Agent adds capability registration, MCP auto-loading, preset swap, full init.json reconstruct.
 

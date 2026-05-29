@@ -368,7 +368,7 @@ def test_emanate_with_preset_instantiates_caps_for_emanation(tmp_path,
                                                               monkeypatch):
     """Parent has only ['daemon']; preset declares 'file'. Emanation can
     request 'file' tools and the daemon spawns successfully."""
-    import lingtai.preset_connectivity as preset_connectivity
+    import lingtai_kernel.preset_connectivity as preset_connectivity
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
 
     presets_dir = tmp_path / "presets"
@@ -400,7 +400,7 @@ def test_emanate_preset_with_intrinsics_dispatches(tmp_path, monkeypatch):
 
     This is the lingtai #29 repro: the TUI wizard writes 'email' into
     user presets, and the daemon used to refuse the whole batch on it."""
-    import lingtai.preset_connectivity as preset_connectivity
+    import lingtai_kernel.preset_connectivity as preset_connectivity
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
 
     presets_dir = tmp_path / "presets"
@@ -434,7 +434,7 @@ def test_emanate_preset_request_for_skipped_intrinsic_tool_fails(tmp_path, monke
     not at preset instantiation. The error names the unknown tool, not
     the skipped capability. This guards against intrinsics silently
     becoming available through the daemon back door."""
-    import lingtai.preset_connectivity as preset_connectivity
+    import lingtai_kernel.preset_connectivity as preset_connectivity
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
 
     presets_dir = tmp_path / "presets"
@@ -460,7 +460,7 @@ def test_emanate_preset_does_not_pollute_parent_tool_registry(tmp_path,
                                                                 monkeypatch):
     """After a preset-driven emanation is scheduled, the parent's tool
     registry is unchanged — no preset tools leaked into the parent."""
-    import lingtai.preset_connectivity as preset_connectivity
+    import lingtai_kernel.preset_connectivity as preset_connectivity
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
 
     presets_dir = tmp_path / "presets"
@@ -488,7 +488,7 @@ def test_emanate_preset_does_not_pollute_parent_tool_registry(tmp_path,
 
 def test_emanate_preset_broken_unused_vision_dispatches(tmp_path, monkeypatch):
     """File-only daemon dispatch is not blocked by broken unused vision."""
-    import lingtai.preset_connectivity as preset_connectivity
+    import lingtai_kernel.preset_connectivity as preset_connectivity
     import lingtai.capabilities as capabilities
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
 
@@ -528,7 +528,7 @@ def test_emanate_preset_broken_unused_vision_dispatches(tmp_path, monkeypatch):
 
 def test_emanate_preset_broken_requested_vision_fails(tmp_path, monkeypatch):
     """Requested capability setup failures remain hard errors."""
-    import lingtai.preset_connectivity as preset_connectivity
+    import lingtai_kernel.preset_connectivity as preset_connectivity
     import lingtai.capabilities as capabilities
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
 
