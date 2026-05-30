@@ -136,7 +136,7 @@ See [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md).
 
 ## License
 
-MIT — [Zesen Huang](https://github.com/huangzesen), 2025–2026
+Apache-2.0 — [Zesen Huang](https://github.com/huangzesen), 2025–2026
 
 <div align="center">
 
