@@ -31,7 +31,7 @@ def test_secondary_schema_injected_into_eligible_dynamic_tool(tmp_path):
     schemas = _schema_by_name(agent)
 
     secondary = schemas["long_work"]["properties"]["secondary"]
-    assert secondary["properties"]["tool"]["enum"] == ["email", "feishu", "telegram", "wechat"]
+    assert secondary["properties"]["tool"]["enum"] == ["email", "feishu", "telegram", "wechat", "whatsapp"]
     assert "timely human replies" in secondary["description"]
     assert "Do not use for routine short calls" in secondary["description"]
     assert "action=read" in secondary["description"]
@@ -50,7 +50,7 @@ def test_secondary_schema_injected_into_eligible_dynamic_tool(tmp_path):
 
 def test_secondary_schema_not_injected_into_communication_tools_and_lifecycle_intrinsics(tmp_path):
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
-    for name in ["telegram", "wechat", "feishu", "imap"]:
+    for name in ["telegram", "wechat", "feishu", "whatsapp", "imap"]:
         agent.add_tool(
             name,
             schema={"type": "object", "properties": {"action": {"type": "string"}}},
@@ -60,7 +60,7 @@ def test_secondary_schema_not_injected_into_communication_tools_and_lifecycle_in
 
     schemas = _schema_by_name(agent)
 
-    for name in ["telegram", "wechat", "feishu", "imap", "system", "psyche", "soul", "email"]:
+    for name in ["telegram", "wechat", "feishu", "whatsapp", "imap", "system", "psyche", "soul", "email"]:
         assert name in schemas
         assert "secondary" not in schemas[name].get("properties", {})
     agent.stop(timeout=1.0)

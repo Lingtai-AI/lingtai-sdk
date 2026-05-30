@@ -1,7 +1,7 @@
 """Sent message tracker — deduplication and poll backoff for external channels.
 
 Tracks recently sent messages to external channels (Telegram, IMAP, WeChat,
-Feishu) so the turn engine can:
+Feishu, WhatsApp) so the turn engine can:
 1. Warn on duplicate sends within a short window.
 2. Apply exponential backoff on polling/check actions when no new messages found.
 """
@@ -22,7 +22,7 @@ class _SentEntry:
 
 # Tool names whose "send" action should trigger idle-after-send.
 SEND_TOOLS: frozenset[str] = frozenset({
-    "telegram", "imap", "wechat", "feishu",
+    "telegram", "imap", "wechat", "feishu", "whatsapp",
 })
 
 # Actions that count as "sending a message to a human".

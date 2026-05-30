@@ -427,6 +427,7 @@ class TestConstants:
         assert "email" not in SEND_TOOLS
         assert "telegram" in SEND_TOOLS
         assert "imap" in SEND_TOOLS
+        assert "whatsapp" in SEND_TOOLS
         assert "wechat" in SEND_TOOLS
         assert "feishu" in SEND_TOOLS
 

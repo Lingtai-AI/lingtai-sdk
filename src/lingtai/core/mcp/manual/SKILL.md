@@ -3,12 +3,12 @@ name: mcp-manual
 description: >
   Operational guide for the `mcp` capability — register, activate, update,
   deregister, and troubleshoot MCP (Model Context Protocol) servers in your
-  agent. Single source of truth for both generic MCP setup AND the four
-  kernel-curated LingTai addon MCPs (`imap`, `telegram`, `feishu`, `wechat`).
+  agent. Single source of truth for both generic MCP setup AND the five
+  kernel-curated LingTai addon MCPs (`imap`, `telegram`, `feishu`, `wechat`, `whatsapp`).
 
   Reach for this manual when:
     - The human asks to install, set up, configure, or remove an MCP server.
-      Decision tree: is it kernel-curated (imap/telegram/feishu/wechat) → the
+      Decision tree: is it kernel-curated (imap/telegram/feishu/wechat/whatsapp) → the
       `addons:` + `init.json mcp.<name>` workflow with the per-addon README is
       here. Is it third-party → the registry route OR the legacy
       `mcp/servers.json` route, both documented here.
@@ -17,7 +17,7 @@ description: >
       fetch the addon's README with the bundled script —
       `~/.lingtai-tui/runtime/venv/bin/python3 .library/intrinsic/capabilities/mcp/scripts/find_readme.py <pkg-name>`
       (where `<pkg-name>` is `lingtai-imap` / `lingtai-telegram` /
-      `lingtai-feishu` / `lingtai-wechat`). Field names like `email_password`,
+      `lingtai-feishu` / `lingtai-wechat` / `lingtai-whatsapp`). Field names like `email_password`,
       `bot_token`, `app_id`/`app_secret`, gewechat hosts are documented in
       each addon's README and nowhere else. Do NOT guess at config; ALWAYS
       read the README first.
@@ -48,7 +48,7 @@ version: 3.2.0
 
 # MCP Capability — How To Use It
 
-The `mcp` capability is your interface to Model Context Protocol (MCP) servers — both generic third-party servers and the four kernel-curated LingTai addons (`imap`, `telegram`, `feishu`, `wechat`). Like the `library` capability, it is **pure presentation**: registered MCPs are listed in your system prompt under `<registered_mcp>`, and the registry itself is a JSONL file you edit directly with `write` / `edit` / `bash`.
+The `mcp` capability is your interface to Model Context Protocol (MCP) servers — both generic third-party servers and the five kernel-curated LingTai addons (`imap`, `telegram`, `feishu`, `wechat`, `whatsapp`). Like the `library` capability, it is **pure presentation**: registered MCPs are listed in your system prompt under `<registered_mcp>`, and the registry itself is a JSONL file you edit directly with `write` / `edit` / `bash`.
 
 This is the router. Detail lives in `reference/`. Load only what you need.
 
@@ -56,7 +56,7 @@ This is the router. Detail lives in `reference/`. Load only what you need.
 
 For any MCP server, relative to this agent:
 
-1. **In the kernel catalog** — LingTai blesses it. Reference template ships with the kernel. The four curated addons live here: `imap`, `telegram`, `feishu`, `wechat`.
+1. **In the kernel catalog** — LingTai blesses it. Reference template ships with the kernel. The five curated addons live here: `imap`, `telegram`, `feishu`, `wechat`, `whatsapp`.
 2. **Officially registered** — appears as a line in `mcp_registry.jsonl` (sibling to `init.json`). The system prompt's `<registered_mcp>` lists it.
 3. **Active** — the MCP server subprocess is running, its tools are mounted in your tool surface.
 
@@ -80,7 +80,7 @@ Promotion path: catalog → registry → active. You move things along by editin
   .library/intrinsic/capabilities/mcp/scripts/find_readme.py <pkg-name>
 ```
 
-`<pkg-name>` is `lingtai-imap`, `lingtai-telegram`, `lingtai-feishu`, or `lingtai-wechat` (or any other Python-installed MCP). Full details: see §Reading an MCP's README below.
+`<pkg-name>` is `lingtai-imap`, `lingtai-telegram`, `lingtai-feishu`, `lingtai-wechat`, or `lingtai-whatsapp` (or any other Python-installed MCP). Full details: see §Reading an MCP's README below.
 
 ## Reading an MCP's README
 
@@ -88,7 +88,7 @@ Every MCP server's README is the canonical install + config + troubleshooting do
 
 ### 1. Local README (preferred)
 
-If the MCP is installed as a Python package (all four kernel-curated addons are), run the script with the **runtime venv's Python** — the same interpreter where `lingtai_imap` / `lingtai_telegram` / etc. are actually installed:
+If the MCP is installed as a Python package (all five kernel-curated addons are), run the script with the **runtime venv's Python** — the same interpreter where `lingtai_imap` / `lingtai_telegram` / etc. are actually installed:
 
 ```bash
 ~/.lingtai-tui/runtime/venv/bin/python3 \
@@ -99,7 +99,7 @@ If the MCP is installed as a Python package (all four kernel-curated addons are)
 
 The script tries the editable repo on disk first, then falls back to the README embedded in the wheel's `METADATA` file (PEP 566). Works for editable installs and normal PyPI wheels alike. Pass `--module <modname>` if you only know the importable module name (e.g. `lingtai_imap`) instead of the distribution name.
 
-Distribution names for the four kernel-curated addons:
+Distribution names for the five kernel-curated addons:
 
 | Registry name | `<pkg-name>`       | Module name        |
 |---------------|--------------------|--------------------|
@@ -107,6 +107,7 @@ Distribution names for the four kernel-curated addons:
 | `telegram`    | `lingtai-telegram` | `lingtai_telegram` |
 | `feishu`      | `lingtai-feishu`   | `lingtai_feishu`   |
 | `wechat`      | `lingtai-wechat`   | `lingtai_wechat`   |
+| `whatsapp`    | `lingtai-whatsapp` | `lingtai_whatsapp` |
 
 ### 2. Homepage URL (fallback)
 

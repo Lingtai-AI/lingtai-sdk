@@ -1,6 +1,6 @@
-# Curated addons — imap / telegram / feishu / wechat
+# Curated addons — imap / telegram / feishu / wechat / whatsapp
 
-LingTai's first-party email and chat integrations. Each ships as an installed Python package (`lingtai-imap`, `lingtai-telegram`, `lingtai-feishu`, `lingtai-wechat`) with its own README documenting config schema, env vars, and credentials.
+LingTai's first-party email and chat integrations. Each ships as an installed Python package (`lingtai-imap`, `lingtai-telegram`, `lingtai-feishu`, `lingtai-wechat`, `lingtai-whatsapp`) with its own README documenting config schema, env vars, and credentials.
 
 ## The four-step setup
 
@@ -11,7 +11,7 @@ LingTai's first-party email and chat integrations. Each ships as an installed Py
      .library/intrinsic/capabilities/mcp/scripts/find_readme.py <pkg-name>
    ```
 
-   `<pkg-name>` is `lingtai-imap`, `lingtai-telegram`, `lingtai-feishu`, or `lingtai-wechat`. Field names like `email_password` (imap), `bot_token` (telegram), `app_id`/`app_secret` (feishu), gewechat host (wechat) are documented there. Skipping this step is the #1 cause of "MCP boot failed" rabbit holes.
+   `<pkg-name>` is `lingtai-imap`, `lingtai-telegram`, `lingtai-feishu`, `lingtai-wechat`, or `lingtai-whatsapp`. Field names like `email_password` (imap), `bot_token` (telegram), `app_id`/`app_secret` (feishu), gewechat host (wechat) are documented there. Skipping this step is the #1 cause of "MCP boot failed" rabbit holes.
 
 2. **Add the addon to `init.json`.** Append the registry name to the top-level `addons:` list, then add an `mcp.<name>` activation entry with the subprocess spec from the README:
 
@@ -43,6 +43,7 @@ LingTai's first-party email and chat integrations. Each ships as an installed Py
 | `telegram`    | `lingtai-telegram` | `lingtai_telegram` |
 | `feishu`      | `lingtai-feishu`   | `lingtai_feishu`   |
 | `wechat`      | `lingtai-wechat`   | `lingtai_wechat`   |
+| `whatsapp`    | `lingtai-whatsapp` | `lingtai_whatsapp` |
 
 Pass `<distribution name>` to `find_readme.py`. Pass `<module name>` to `find_readme.py --module`.
 

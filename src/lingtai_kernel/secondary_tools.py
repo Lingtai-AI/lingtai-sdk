@@ -15,12 +15,13 @@ import copy
 from typing import Any
 
 
-SECONDARY_ALLOWED_TOOLS: set[str] = {"email", "telegram", "wechat", "feishu"}
+SECONDARY_ALLOWED_TOOLS: set[str] = {"email", "telegram", "wechat", "feishu", "whatsapp"}
 SECONDARY_ALLOWED_ACTIONS: dict[str, set[str]] = {
     "email": {"send", "reply", "read"},
     "telegram": {"send", "reply", "read"},
     "wechat": {"send", "reply", "read"},
     "feishu": {"send", "reply", "read"},
+    "whatsapp": {"send", "reply", "read"},
 }
 
 # Maximum serialized size of a ``read`` result body forwarded under
@@ -38,7 +39,7 @@ _SECONDARY_ARGS_PROPERTIES: dict[str, Any] = {
             "arrived message before the primary tool runs."
         ),
     },
-    "text": {"type": "string", "description": "Message text for telegram/wechat/feishu."},
+    "text": {"type": "string", "description": "Message text for telegram/wechat/feishu/whatsapp."},
     "message": {"type": "string", "description": "Message body for internal email."},
     "address": {"description": "Internal email recipient for email send."},
     "email_id": {"description": "Internal email id/list (used by email reply and email read)."},
@@ -51,7 +52,7 @@ _SECONDARY_ARGS_PROPERTIES: dict[str, Any] = {
     "limit": {
         "type": "integer",
         "description": (
-            "Optional per-thread message-count cap for telegram/wechat/feishu read "
+            "Optional per-thread message-count cap for telegram/wechat/feishu/whatsapp read "
             "(default 10). Ignored by email."
         ),
     },
@@ -71,7 +72,7 @@ SECONDARY_SCHEMA_PROPERTY: dict[str, Any] = {
         "tool will take more than a few seconds (action=send/reply), or to pull "
         "the full content of a just-notified message whose preview is not enough "
         "to act (action=read). Do not use for routine short calls. Only "
-        "email/telegram/wechat/feishu are allowed; only send/reply/read actions "
+        "email/telegram/wechat/feishu/whatsapp are allowed; only send/reply/read actions "
         "are allowed; nested secondary fields are forbidden. Secondary failure "
         "does not block the primary tool. For read actions, a bounded slice of "
         "the result is forwarded under _secondary.result on the primary tool "

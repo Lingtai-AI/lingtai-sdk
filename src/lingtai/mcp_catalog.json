@@ -5,7 +5,10 @@
     "summary": "Real email via IMAP/SMTP — multi-account support.",
     "transport": "stdio",
     "command": "{python}",
-    "args": ["-m", "lingtai_imap"],
+    "args": [
+      "-m",
+      "lingtai_imap"
+    ],
     "source": "lingtai-curated",
     "homepage": "https://github.com/Lingtai-AI/lingtai-imap"
   },
@@ -14,7 +17,10 @@
     "summary": "Telegram bot client — Bot API send/receive with LICC inbox callback.",
     "transport": "stdio",
     "command": "{python}",
-    "args": ["-m", "lingtai_telegram"],
+    "args": [
+      "-m",
+      "lingtai_telegram"
+    ],
     "source": "lingtai-curated",
     "homepage": "https://github.com/Lingtai-AI/lingtai-telegram"
   },
@@ -23,7 +29,10 @@
     "summary": "Feishu/Lark message client — Open API send/receive with LICC inbox callback.",
     "transport": "stdio",
     "command": "{python}",
-    "args": ["-m", "lingtai_feishu"],
+    "args": [
+      "-m",
+      "lingtai_feishu"
+    ],
     "source": "lingtai-curated",
     "homepage": "https://github.com/Lingtai-AI/lingtai-feishu"
   },
@@ -32,8 +41,23 @@
     "summary": "WeChat client via iLink Bot API — text/media send/receive with LICC inbox callback.",
     "transport": "stdio",
     "command": "{python}",
-    "args": ["-m", "lingtai_wechat"],
+    "args": [
+      "-m",
+      "lingtai_wechat"
+    ],
     "source": "lingtai-curated",
     "homepage": "https://github.com/Lingtai-AI/lingtai-wechat"
+  },
+  "whatsapp": {
+    "name": "whatsapp",
+    "summary": "WhatsApp Cloud API client — official Meta API send/receive with LICC inbox callback.",
+    "transport": "stdio",
+    "command": "{python}",
+    "args": [
+      "-m",
+      "lingtai_whatsapp"
+    ],
+    "source": "lingtai-curated",
+    "homepage": "https://github.com/Lingtai-AI/lingtai-whatsapp"
   }
 }

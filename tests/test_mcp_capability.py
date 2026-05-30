@@ -431,3 +431,13 @@ def test_retry_failed_mcps_no_specs_is_noop(tmp_path):
     report = agent._retry_failed_mcps()
     assert report == {"retried": [], "recovered": [],
                       "still_failed": [], "healthy": []}
+
+
+def test_curated_catalog_includes_whatsapp(tmp_path: Path):
+    rep = decompress_addons(tmp_path, ["whatsapp"])
+    assert rep["appended"] == ["whatsapp"]
+    records, problems = read_registry(tmp_path)
+    assert problems == []
+    assert records[0]["name"] == "whatsapp"
+    assert records[0]["args"] == ["-m", "lingtai_whatsapp"]
+    assert records[0]["homepage"] == "https://github.com/Lingtai-AI/lingtai-whatsapp"
