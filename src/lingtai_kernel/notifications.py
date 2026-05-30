@@ -161,12 +161,24 @@ def clear_with_result(workdir: Path, channel: str) -> bool:
     return True
 
 
-def dismiss_channel(agent, channel: str, *, invoked_by: str, force: bool = False) -> dict:
+def dismiss_channel(
+    agent,
+    channel: str,
+    *,
+    invoked_by: str,
+    force: bool = False,
+    reason: str | None = None,
+) -> dict:
     """Shared agent-facing notification dismissal helper.
 
     Used by ``system(action="dismiss")`` and convenience aliases such as
     ``soul(action="dismiss")``. Generic dismiss clears only the
     notification surface; producer-owned state is untouched.
+
+    ``reason`` is optional for ordinary generic channels. For the kernel-owned
+    ``post-molt`` continuation channel it is required: clearing that reminder
+    is the explicit continue/defer/obsolete acknowledgement requested by
+    issue #184.
     """
     try:
         validate_channel_name(channel)
@@ -185,6 +197,26 @@ def dismiss_channel(agent, channel: str, *, invoked_by: str, force: bool = False
             "reason": "invalid_channel",
             "channel": channel,
             "message": str(e),
+        }
+
+    ack_reason = (reason or "").strip()
+    if channel == "post-molt" and not ack_reason:
+        try:
+            agent._log(
+                "notification_dismiss_missing_reason",
+                channel=channel,
+                invoked_by=invoked_by,
+            )
+        except Exception:
+            pass
+        return {
+            "status": "error",
+            "reason": "missing_ack_reason",
+            "channel": channel,
+            "message": (
+                "post-molt continuation reminders require an acknowledgement "
+                "reason. Use reason='<continue|defer|obsolete>: ...'."
+            ),
         }
 
     suggested = is_generic_dismiss_guarded(channel)
@@ -249,20 +281,30 @@ def dismiss_channel(agent, channel: str, *, invoked_by: str, force: bool = False
             invoked_by=invoked_by,
             existed=existed,
             forced=bool(force),
+            reason=ack_reason or None,
         )
         if invoked_by == "system":
-            agent._log("system_dismiss", channel=channel, existed=existed, forced=bool(force))
+            agent._log(
+                "system_dismiss",
+                channel=channel,
+                existed=existed,
+                forced=bool(force),
+                reason=ack_reason or None,
+            )
         elif invoked_by == "soul":
             agent._log("soul_dismiss")
     except Exception:
         pass
 
-    return {
+    result = {
         "status": "ok",
         "channel": channel,
         "cleared": existed,
         "forced": bool(force),
     }
+    if ack_reason:
+        result["reason"] = ack_reason
+    return result
 
 
 # ---------------------------------------------------------------------------

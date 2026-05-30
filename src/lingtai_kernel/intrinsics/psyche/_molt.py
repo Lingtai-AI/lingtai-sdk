@@ -30,6 +30,50 @@ def _first_nonempty_line(text: str | None) -> str:
     return ""
 
 
+# Markers (lower-cased, prefix-matched after stripping leading list/heading
+# punctuation) that an agent commonly uses to flag the concrete next action
+# inside an otherwise free-form molt summary. Matching is for *display
+# excerpting only* — the text is never executed (issue #184 non-goal: do not
+# auto-execute summary content).
+_NEXT_ACTION_MARKERS = (
+    "next action",
+    "next step",
+    "next:",
+    "todo",
+    "to do",
+    "continue",
+    "resume",
+    "下一步",
+    "接下来",
+    "继续",
+    "待办",
+)
+
+
+def _next_action_excerpt(summary: str | None, *, max_len: int = 280) -> str:
+    """Best-effort extraction of an explicit next-action line from a summary.
+
+    Read-only display helper: scans the summary for the first line that looks
+    like an explicit next-action marker (``next action:``, ``TODO:``,
+    ``下一步`` …) and returns that line. Falls back to the first non-empty
+    line so the fresh agent always has *something* concrete to reorient
+    around. The result is an excerpt for human/agent attention — it is never
+    parsed as a command or executed.
+    """
+    if not summary:
+        return ""
+    for raw in summary.splitlines():
+        stripped = raw.strip()
+        if not stripped:
+            continue
+        # Strip common leading list / heading punctuation before marker match.
+        probe = stripped.lstrip("-*#> \t0123456789.)").strip().lower()
+        if any(probe.startswith(marker) for marker in _NEXT_ACTION_MARKERS):
+            return stripped[:max_len]
+    fallback = _first_nonempty_line(summary)
+    return fallback[:max_len]
+
+
 def _publish_post_molt(
     agent,
     *,
@@ -47,9 +91,15 @@ def _publish_post_molt(
     Best-effort — a publish failure must not block the molt return path.
     """
     try:
+        import uuid as _uuid
+        from datetime import datetime, timezone
+
         from ..system import publish_notification
 
         reminder = (reasoning or "").strip() or _first_nonempty_line(summary)
+        # Explicit next-action excerpt — the concrete thing the fresh agent
+        # should reorient around. Best-effort, display-only (never executed).
+        next_action = _next_action_excerpt(summary)
         if initiator == "agent":
             header = f"post-molt #{molt_count} — resume work"
         else:
@@ -61,11 +111,23 @@ def _publish_post_molt(
             else None
         )
 
+        # Stable-ish identifier for this continuation so the agent and any
+        # frontend can reference a specific molt without colliding across
+        # restarts (molt_count alone repeats if the manifest is reset).
+        molt_id = f"molt-{molt_count}-{_uuid.uuid4().hex[:8]}"
+        molt_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        source_agent = getattr(agent, "agent_name", None) or ""
+
         data = {
+            "molt_id": molt_id,
+            "molt_at": molt_at,
+            "source_agent": source_agent,
             "initiator": initiator,
             "source": source,
             "molt_count": molt_count,
             "reminder": reminder,
+            "next_action": next_action,
+            "ack_options": ["continue", "defer", "obsolete"],
             "summary_path": summary_rel,
             "tokens_before": before_tokens,
             "tokens_after": after_tokens,
@@ -74,11 +136,19 @@ def _publish_post_molt(
             data["reasoning"] = reasoning
 
         instructions = (
-            "You just completed a molt. Read system/pad.md, the latest "
-            "summary under system/summaries/, and the most recent human-channel "
-            "messages to reconstruct context, then continue the prior task. "
-            "Once you have re-engaged, dismiss this reminder with "
-            "system(action='dismiss', channel='post-molt')."
+            "You just completed a molt (continuation signal — NOT auto-executed). "
+            "Reconstruct context from system/pad.md, the latest summary under "
+            "system/summaries/ (see summary_path), and the most recent "
+            "human-channel messages; the 'next_action' field is the concrete "
+            "thing the previous self flagged to resume. Then explicitly ack by "
+            "one of: (a) CONTINUE NOW — resume the task, then "
+            "system(action='dismiss', channel='post-molt', reason='continue: ...'); "
+            "(b) DEFER — note the reason in pad.md/knowledge, then dismiss with "
+            "reason='defer: ...'; "
+            "(c) MARK OBSOLETE — note why it no longer applies, then dismiss with "
+            "reason='obsolete: ...'. "
+            "Until you dismiss it, this reminder re-injects every session so an "
+            "early stalled/interrupted tool call cannot make the task fall silent."
         )
 
         publish_notification(

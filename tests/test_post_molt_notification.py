@@ -254,6 +254,134 @@ class TestPostMoltNotificationSystemForget:
 # ---------------------------------------------------------------------------
 
 
+class TestPostMoltContinuationSignal:
+    """Issue #184 — the post-molt notification is an actionable continuation
+    signal carrying molt_id / molt_at / source_agent / next_action and an
+    ack taxonomy (continue / defer / mark-obsolete), durable until dismissed."""
+
+    def test_agent_molt_carries_continuation_fields(self, tmp_path):
+        agent = _make_agent_with_psyche(tmp_path)
+        agent.start()
+        try:
+            mock_interface = _setup_mock_chat(agent)
+            tc_id = "toolu_cont_1"
+            summary = (
+                "Did the foundation work for the doctor skill.\n"
+                "Next action: open the PR and run focused tests."
+            )
+            _build_molt_call_entry(mock_interface, tc_id, summary=summary)
+
+            from lingtai_kernel.intrinsics.psyche._molt import _context_molt
+            result = _context_molt(agent, {"summary": summary, "_tc_id": tc_id})
+            assert result.get("status") == "ok"
+
+            payload = _read_post_molt(agent)
+            data = payload["data"]
+            # New continuation fields are all present.
+            assert data.get("ack_options") == ["continue", "defer", "obsolete"]
+            assert data.get("molt_id"), "continuation must carry a molt_id"
+            assert data["molt_id"].startswith(f"molt-{result['molt_count']}-")
+            assert data.get("molt_at"), "continuation must carry a timestamp"
+            # source_agent echoes the agent's true name.
+            assert data.get("source_agent") == "test"
+            # next_action surfaces the explicit marker line, not just line 1.
+            assert "open the PR" in (data.get("next_action") or "")
+
+        finally:
+            agent.stop()
+
+    def test_instructions_spell_out_ack_taxonomy(self, tmp_path):
+        agent = _make_agent_with_psyche(tmp_path)
+        agent.start()
+        try:
+            mock_interface = _setup_mock_chat(agent)
+            tc_id = "toolu_cont_2"
+            _build_molt_call_entry(mock_interface, tc_id, summary="keep going")
+
+            from lingtai_kernel.intrinsics.psyche._molt import _context_molt
+            result = _context_molt(agent, {"summary": "keep going", "_tc_id": tc_id})
+            assert result.get("status") == "ok"
+
+            instr = (_read_post_molt(agent).get("instructions") or "").lower()
+            # The three ack paths must be discoverable from the instructions.
+            assert "continue" in instr
+            assert "defer" in instr
+            assert "obsolete" in instr
+            # And the concrete dismiss mechanism + reasoned ack are still referenced.
+            assert "post-molt" in instr
+            assert "reason='continue" in instr
+            assert "reason='defer" in instr
+            assert "reason='obsolete" in instr
+            # No-auto-execution must be explicit (non-goal guard).
+            assert "not auto-executed" in instr or "not auto" in instr
+
+        finally:
+            agent.stop()
+
+    def test_next_action_falls_back_to_first_line(self, tmp_path):
+        """Without an explicit marker, next_action falls back to the first
+        non-empty summary line so the field is never empty for a real summary."""
+        agent = _make_agent_with_psyche(tmp_path)
+        agent.start()
+        try:
+            mock_interface = _setup_mock_chat(agent)
+            tc_id = "toolu_cont_3"
+            summary = "Finish wiring the parser; tests are red on case 3."
+            _build_molt_call_entry(mock_interface, tc_id, summary=summary)
+
+            from lingtai_kernel.intrinsics.psyche._molt import _context_molt
+            result = _context_molt(agent, {"summary": summary, "_tc_id": tc_id})
+            assert result.get("status") == "ok"
+
+            data = _read_post_molt(agent)["data"]
+            assert "Finish wiring the parser" in (data.get("next_action") or "")
+
+        finally:
+            agent.stop()
+
+    def test_system_forget_also_carries_continuation_fields(self, tmp_path):
+        agent = _make_agent_with_psyche(tmp_path)
+        agent.start()
+        try:
+            _setup_mock_chat(agent)
+            from lingtai_kernel.intrinsics.psyche._molt import context_forget
+            result = context_forget(agent, source="warning_ladder")
+            assert result.get("status") == "ok"
+
+            data = _read_post_molt(agent)["data"]
+            assert data.get("molt_id", "").startswith(f"molt-{result['molt_count']}-")
+            assert data.get("molt_at")
+            assert data.get("source_agent") == "test"
+            # System-authored summary still yields a non-empty next_action.
+            assert data.get("next_action")
+
+        finally:
+            agent.stop()
+
+
+class TestPostMoltContinuationHelper:
+    """Unit coverage for the read-only next-action excerpt extractor."""
+
+    def test_marker_lines_are_preferred(self):
+        from lingtai_kernel.intrinsics.psyche._molt import _next_action_excerpt
+        assert _next_action_excerpt(
+            "Summary prose.\nNext action: open PR #185\ntail"
+        ) == "Next action: open PR #185"
+        assert _next_action_excerpt("- TODO: ship it").startswith("- TODO: ship it")
+        assert _next_action_excerpt("下一步：实现通知\n第二行") == "下一步：实现通知"
+
+    def test_fallback_and_empty(self):
+        from lingtai_kernel.intrinsics.psyche._molt import _next_action_excerpt
+        assert _next_action_excerpt("just prose\nsecond") == "just prose"
+        assert _next_action_excerpt("") == ""
+        assert _next_action_excerpt(None) == ""
+
+    def test_excerpt_is_length_bounded(self):
+        from lingtai_kernel.intrinsics.psyche._molt import _next_action_excerpt
+        long = "next action: " + "x" * 1000
+        assert len(_next_action_excerpt(long)) <= 280
+
+
 class TestPostMoltChannelIsolation:
     def test_pressure_below_threshold_clears_molt_not_post_molt(self, tmp_path):
         """Falling under molt_pressure clears `.notification/molt.json` but

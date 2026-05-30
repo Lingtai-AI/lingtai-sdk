@@ -186,3 +186,38 @@ def test_dismiss_one_channel_preserves_other_channels(tmp_path: Path) -> None:
     assert res["status"] == "ok"
     out = collect_notifications(tmp_path)
     assert set(out) == {"email"}
+
+
+def test_post_molt_dismiss_requires_ack_reason(tmp_path: Path) -> None:
+    agent = _StubAgent(tmp_path)
+    publish(tmp_path, "post-molt", {"header": "resume work"})
+
+    res = sys_intrinsic._dismiss(agent, {"channel": "post-molt"})
+
+    assert res["status"] == "error"
+    assert res["reason"] == "missing_ack_reason"
+    assert "post-molt" in collect_notifications(tmp_path)
+    assert _events(agent, "notification_dismiss_missing_reason")[0]["channel"] == "post-molt"
+
+
+def test_post_molt_dismiss_records_ack_reason(tmp_path: Path) -> None:
+    agent = _StubAgent(tmp_path)
+    publish(tmp_path, "post-molt", {"header": "resume work"})
+
+    res = sys_intrinsic._dismiss(agent, {
+        "channel": "post-molt",
+        "reason": "continue: resumed the preserved task",
+    })
+
+    assert res == {
+        "status": "ok",
+        "channel": "post-molt",
+        "cleared": True,
+        "forced": False,
+        "reason": "continue: resumed the preserved task",
+    }
+    assert "post-molt" not in collect_notifications(tmp_path)
+    assert _events(agent, "notification_dismiss")[0]["reason"] == \
+        "continue: resumed the preserved task"
+    assert _events(agent, "system_dismiss")[0]["reason"] == \
+        "continue: resumed the preserved task"
