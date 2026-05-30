@@ -88,6 +88,19 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
         assert "encoding='gbk'" in body
         assert "iconv -f gbk -t utf-8" in body
 
+        system_manual_md = (
+            workdir
+            / ".library"
+            / "intrinsic"
+            / "capabilities"
+            / "system-manual"
+            / "SKILL.md"
+        )
+        assert system_manual_md.is_file()
+        system_manual_body = system_manual_md.read_text(encoding="utf-8")
+        assert "name: system-manual" in system_manual_body
+        assert "LingTai Agent Operating Manual" in system_manual_body
+
         doctor_md = (
             workdir
             / ".library"
