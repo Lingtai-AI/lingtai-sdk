@@ -488,6 +488,7 @@ class TestRunConsultationRedirectLoop:
         agent = _FakeAgent(tmp_path)
         self._seed_diary(tmp_path)
         sent = []
+        captured_session_kwargs = {}
 
         class _MockSession:
             def __init__(self, interface):
@@ -508,7 +509,11 @@ class TestRunConsultationRedirectLoop:
                 self.interface.add_assistant_message([TextBlock(text="now I speak")])
                 return LLMResponse(text="now I speak")
 
-        agent.service.create_session.side_effect = lambda *, interface, **kw: _MockSession(interface)
+        def _create_session(*, interface, **kw):
+            captured_session_kwargs.update(kw)
+            return _MockSession(interface)
+
+        agent.service.create_session.side_effect = _create_session
         iface = ChatInterface(); iface.add_user_message("substrate")
         result = _run_consultation(agent, iface, "insights")
 
@@ -520,7 +525,8 @@ class TestRunConsultationRedirectLoop:
         # recommendation landed and doesn't retry the same call) and
         # re-grounds with the full system prompt.
         assert "recorded as a recommendation" in blocks[1].content
-        assert "chat below is your context" in blocks[1].content
+        assert "soul-flow voice" in captured_session_kwargs["system_prompt"]
+        assert captured_session_kwargs["system_prompt"] in blocks[1].content
         assert isinstance(blocks[2], TextBlock)
         assert isinstance(sent[1], list)
         assert isinstance(sent[1][0], ToolResultBlock)
@@ -603,6 +609,38 @@ class TestRunConsultationRedirectLoop:
         assert "MEANINGFUL DIARY TEXT" in spark
         # The spark starts with the [now: ...] header from _render_current_diary
         assert spark.startswith("[now:")
+
+    def test_consultation_uses_configured_soul_voice_prompt(self, tmp_path):
+        """Flow consultations resolve their system prompt through the soul
+        voice profile, so soul(action='voice', set='custom') affects flow.
+        """
+        from lingtai_kernel.llm.base import LLMResponse
+
+        agent = _FakeAgent(tmp_path)
+        agent._config.soul_voice = "custom"
+        agent._config.soul_voice_prompt = "CUSTOM FLOW PROMPT"
+        self._seed_diary(tmp_path, text="diary")
+        captured_session_kwargs = {}
+
+        class _MockSession:
+            def __init__(self, interface):
+                self.interface = interface
+
+            def send(self, content):
+                self.interface.add_user_message(content)
+                self.interface.add_assistant_message([TextBlock(text="done")])
+                return LLMResponse(text="done")
+
+        def _create_session(*, interface, **kw):
+            captured_session_kwargs.update(kw)
+            return _MockSession(interface)
+
+        agent.service.create_session.side_effect = _create_session
+        iface = ChatInterface(); iface.add_user_message("substrate")
+        result = _run_consultation(agent, iface, "insights")
+
+        assert result is not None
+        assert captured_session_kwargs["system_prompt"] == "CUSTOM FLOW PROMPT"
 
 
 # ---------------------------------------------------------------------------
@@ -1649,7 +1687,7 @@ class TestRunConsultationDispatchesByKind:
         # from _render_current_diary — not wrapped by _build_consultation_cue.
         assert "DIARY MARKER" in captured["sent_content"]
         assert captured["sent_content"].startswith("[now:")
-        assert "chat below is your context" in captured["system_prompt"].lower()
+        assert "soul-flow voice" in captured["system_prompt"]
         assert captured["tools"] == [{"name": "bash", "description": "run shell", "parameters": {"type": "object"}}]
 
     def test_insights_dispatch_uses_raw_diary(self, tmp_path):
@@ -1660,7 +1698,7 @@ class TestRunConsultationDispatchesByKind:
         # wrapper. The diary text is verbatim in the spark.
         assert "DIARY MARKER" in captured["sent_content"]
         assert captured["sent_content"].startswith("[now:")
-        assert "chat below is your context" in captured["system_prompt"].lower()
+        assert "soul-flow voice" in captured["system_prompt"]
         assert captured["tools"] == [{"name": "bash", "description": "run shell", "parameters": {"type": "object"}}]
 
 
@@ -1934,20 +1972,21 @@ class TestSoulNotificationInstructions:
 # ---------------------------------------------------------------------------
 
 
-def test_consultation_prompt_has_no_removed_codex_tool_call():
-    """The consultation system prompt (and its refusal echo) must not suggest
-    a `codex(...)` tool call. The `codex` durable-memory capability was removed;
-    its replacement is `knowledge`. Guards against silently reintroducing a
-    dead-tool example into a prompt sent to the detached consultation voice.
+def test_consultation_prompt_has_no_removed_codex_tool_call(tmp_path):
+    """The resolved consultation system prompt (and its refusal echo) must
+    not suggest a removed `codex(...)` tool call.
     """
+    from lingtai_kernel.intrinsics.soul.config import _build_soul_system_prompt
     from lingtai_kernel.intrinsics.soul.consultation import (
-        _CONSULTATION_SYSTEM_PROMPT,
-        _CONSULTATION_TOOL_REFUSAL,
+        _build_consultation_tool_refusal,
     )
 
+    agent = _FakeAgent(tmp_path)
+    system_prompt = _build_soul_system_prompt(agent, kind="insights")
+    refusal = _build_consultation_tool_refusal(system_prompt)
+
     # No `codex(` anywhere as a suggested tool-probe.
-    assert "codex(" not in _CONSULTATION_SYSTEM_PROMPT
-    # The refusal text re-grounds with the full system prompt, so check it too.
-    assert "codex(" not in _CONSULTATION_TOOL_REFUSAL
-    # The durable-memory probe example points at the current tool.
-    assert "knowledge(" in _CONSULTATION_SYSTEM_PROMPT
+    assert "codex(" not in system_prompt
+    # The refusal text re-grounds with the resolved system prompt, so check it too.
+    assert "codex(" not in refusal
+    assert system_prompt in refusal

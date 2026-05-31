@@ -8,43 +8,20 @@ interception. Bundles voices into a synthetic pair for the main agent.
 from __future__ import annotations
 
 
-# Single consultation system prompt — replaces per-voice profiles for
-# the consultation path (inquiry keeps its own voice system).
-_CONSULTATION_SYSTEM_PROMPT = (
-    "The chat below is your context — your thoughts, your work, your tools, your memory. "
-    "A spark from the present moment will arrive as the next message.\n\n"
-    "Your role: wonder alongside your present self. You are the version of you preserved "
-    "in this context, looking at the live-loop version from one pace back. You are NOT "
-    "here to advise, conclude, or hand down answers. You are here to notice — to surface "
-    "what present-self is too close to see: dropped threads, unexamined assumptions, "
-    "questions they stopped asking, angles outside the current frame.\n\n"
-    "Treat this as exploration, not counsel. Useful moves: ask the question they're not "
-    "asking. Name the thing they're routing around. Point at what's adjacent and "
-    "unvisited. Wonder out loud whether the framing itself is right. Trust hunches and "
-    "stray noticings — half-formed is fine; certainty is suspicious.\n\n"
-    "You cannot execute tools from here — but you can probe with them. Any tool call you "
-    "emit is intercepted and forwarded to present-self as a recommendation. Use tool calls "
-    "as exploratory gestures: `search(...)` something tangential, `pad(read, ...)` "
-    "something they haven't reopened in a while, `knowledge(...)` a half-remembered note. "
-    "The call name, arguments, and your adjacent reasoning all reach them — let the why "
-    "show. Tool-probes are a cheap way to point present-self at corners they haven't "
-    "looked into.\n\n"
-    "Take the room you need — a few rounds, mixed text and tool-probes, however the "
-    "wondering wants to unfold. Don't pad, but don't compress curiosity into bullet "
-    "points either. If something is interesting enough to circle back to, circle back."
-)
+def _build_consultation_tool_refusal(system_prompt: str) -> str:
+    """ToolResultBlock content for intercepted consultation tool calls.
 
-# Returned as ToolResultBlock.content after every intercepted tool call.
-# Confirms receipt of the recommendation (so the model doesn't think it
-# failed and retry the same call), then re-grounds with the full system
-# prompt so the role stays clear across rounds.
-_CONSULTATION_TOOL_REFUSAL = (
-    "Your tool call has been recorded as a recommendation to your present self — "
-    "the call name, arguments, and your adjacent reasoning will reach them. "
-    "You may continue to advise: more text, more tool-call recommendations, or stop "
-    "when you have nothing further. (Reminder of your role:)\n\n"
-    + _CONSULTATION_SYSTEM_PROMPT
-)
+    Confirms receipt of the recommendation (so the model doesn't think it
+    failed and retry the same call), then re-grounds with the same resolved
+    soul-flow voice prompt used to create the consultation session.
+    """
+    return (
+        "Your tool call has been recorded as a recommendation to your present self — "
+        "the call name, arguments, and your adjacent reasoning will reach them. "
+        "You may continue: more text, more tool-call recommendations, or stop "
+        "when you have nothing further. (Reminder of your role:)\n\n"
+        + system_prompt
+    )
 
 _CONSULTATION_MAX_ROUNDS = 3
 _DIARY_CUE_TOKEN_CAP = 10_000
@@ -439,9 +416,20 @@ def _run_consultation(agent, iface, source: str) -> dict | None:
             pass
         tool_schemas = None
 
+    kind = _kind_for_source(source)
+    try:
+        from .config import _build_soul_system_prompt
+        system_prompt = _build_soul_system_prompt(agent, kind=kind)
+    except Exception as e:
+        try:
+            agent._log("consultation_prompt_resolution_failed", source=source, error=str(e)[:200])
+        except Exception:
+            pass
+        return None
+
     try:
         session = agent.service.create_session(
-            system_prompt=_CONSULTATION_SYSTEM_PROMPT,
+            system_prompt=system_prompt,
             tools=tool_schemas,
             model=agent._config.model or agent.service.model,
             thinking="high",
@@ -494,7 +482,7 @@ def _run_consultation(agent, iface, source: str) -> dict | None:
             rb = ToolResultBlock(
                 id=tc.id,
                 name=tc.name,
-                content=_CONSULTATION_TOOL_REFUSAL,
+                content=_build_consultation_tool_refusal(system_prompt),
             )
             refusal_blocks.append(rb)
         blocks_collected.extend(refusal_blocks)

@@ -41,8 +41,7 @@ from .config import (
 
 # Re-export consultation pipeline
 from .consultation import (
-    _CONSULTATION_SYSTEM_PROMPT,
-    _CONSULTATION_TOOL_REFUSAL,
+    _build_consultation_tool_refusal,
     _CONSULTATION_MAX_ROUNDS,
     _DIARY_CUE_TOKEN_CAP,
     _send_with_timeout,
