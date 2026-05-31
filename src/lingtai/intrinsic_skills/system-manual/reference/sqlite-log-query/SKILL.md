@@ -1,4 +1,17 @@
-<!-- Subguide of system-manual. Not a standalone skill catalog entry. -->
+---
+name: sqlite-log-query
+description: >
+  Nested system-manual reference for inspecting LingTai runtime traces through
+  the additive SQLite/log.sqlite sidecar. Read via the `system-manual` router
+  when you need `lingtai-agent log doctor|query|rebuild`, JSONL source-of-truth
+  rules, read-only SQL safety, offline rebuild/WAL caveats, events and
+  chat_entries schema, daemon/chat-history indexing, query recipes, runtime
+  problem investigation workflow, or log redaction pitfalls. This is a nested
+  skill-reference under `system-manual`, not a standalone catalog skill; its
+  folder may carry scripts/assets as SQLite trace tooling grows.
+version: 1.0.0
+tags: [lingtai, system-manual, sqlite, log.sqlite, runtime-logs, trace, jsonl, daemon]
+---
 
 # SQLite Log Query
 

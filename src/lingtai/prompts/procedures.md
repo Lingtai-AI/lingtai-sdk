@@ -2,8 +2,9 @@
 
 Keep the always-on prompt small. When a procedure needs examples, command
 recipes, troubleshooting, or detailed rationale, read the relevant skill instead
-of relying on resident memory. The unified runtime/procedure reference is
-`system-manual`.
+of relying on resident memory. The unified runtime/procedure router is
+`system-manual`; it routes expanded procedure guidance to
+`reference/procedures-manual/SKILL.md`.
 
 ### Write Skills As You Work
 
@@ -43,7 +44,8 @@ practice, read `psyche-manual`; for the broader memory model, read
 
 | Situation | Load |
 |---|---|
-| Agent runtime, lifecycle, communication, memory layers, resident prompt design | `system-manual` |
+| Agent runtime, lifecycle, communication, memory layers, resident substrate expansion | `system-manual` → `reference/substrate-manual/SKILL.md` |
+| Resident procedures expansion, action discipline, deliverables, issue/reporting workflow | `system-manual` → `reference/procedures-manual/SKILL.md` |
 | Molt, pad tending, session journaling, post-wipe recovery | `psyche-manual` |
 | Spawning/managing avatars | `avatar-manual` |
 | Internal email protocol | `email-manual` |
@@ -52,7 +54,7 @@ practice, read `psyche-manual`; for the broader memory model, read
 | Skill authoring/publishing | `skills-manual` |
 | Knowledge entries | `knowledge-manual` |
 | Shell commands, cron, host scheduling | `bash-manual` |
-| Querying LingTai runtime logs / SQLite log sidecar | `system-manual` section 9 / `reference/sqlite-log-query.md` |
+| SQLite / log.sqlite / LingTai runtime logs / `lingtai-agent log doctor|query|rebuild` / trace inspection | `system-manual` → `reference/sqlite-log-query/SKILL.md` |
 | Kernel architecture / breaking changes | `lingtai-kernel-anatomy` |
 | TUI / portal code navigation | `lingtai-tui-anatomy` |
 | Web fetching/search/scraping | `web-browsing` |

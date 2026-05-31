@@ -1,8 +1,9 @@
 # Substrate
 
 This section is kernel-owned and cross-app stable. It holds the minimal operating
-model every LingTai agent must keep resident. For the expanded version, read the
-`system-manual` skill.
+model every LingTai agent must keep resident. The expanded runtime/substrate
+router is `system-manual`; it routes the full substrate expansion to
+`reference/substrate-manual/SKILL.md`.
 
 ## I · Body and extensions
 
@@ -55,4 +56,5 @@ Preset `tier:*` tags indicate cost/quality: tier 5 for irreplaceable reasoning,
 tier 4 for premium work, tier 3 for strong everyday work, tier 2 for cheap
 throughput, tier 1 for opportunistic/free use. For lifecycle actions (`refresh`,
 `presets`, `notification`, `dismiss`, `lull`, `interrupt`, `suspend`, `cpr`,
-`clear`, `nirvana`) and the full operating model, read `system-manual`.
+`clear`, `nirvana`) and the full operating model, read the `system-manual`
+router; it routes substrate details to `reference/substrate-manual/SKILL.md`.

@@ -99,16 +99,46 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
         assert system_manual_md.is_file()
         system_manual_body = system_manual_md.read_text(encoding="utf-8")
         assert "name: system-manual" in system_manual_body
-        assert "LingTai Agent Operating Manual" in system_manual_body
-        assert "SQLite log sidecar queries" in system_manual_body
-        assert "reference/sqlite-log-query.md" in system_manual_body
+        assert "Progressive Disclosure Router" in system_manual_body
+        assert "reference/substrate-manual/SKILL.md" in system_manual_body
+        assert "reference/procedures-manual/SKILL.md" in system_manual_body
+        assert "reference/sqlite-log-query/SKILL.md" in system_manual_body
+        assert "lingtai-agent log doctor|query|rebuild" in system_manual_body
+        assert "name: substrate-manual" in system_manual_body
+        assert "name: procedures-manual" in system_manual_body
+        assert "name: sqlite-log-query" in system_manual_body
+        assert "Nested reference catalog" in system_manual_body
 
-        sqlite_log_query_ref = system_manual_md.parent / "reference" / "sqlite-log-query.md"
+        substrate_ref = system_manual_md.parent / "reference" / "substrate-manual" / "SKILL.md"
+        assert substrate_ref.is_file()
+        substrate_body = substrate_ref.read_text(encoding="utf-8")
+        assert "name: substrate-manual" in substrate_body
+        assert "Nested system-manual reference" in substrate_body
+        assert "# Substrate Manual" in substrate_body
+        assert "**ACTIVE**" in substrate_body
+        assert "**ASLEEP**" in substrate_body
+        assert "**SUSPENDED**" in substrate_body
+        assert "MCP and addon ownership" in substrate_body
+        assert "notification" in substrate_body
+        assert "dismiss" in substrate_body
+
+        procedures_ref = system_manual_md.parent / "reference" / "procedures-manual" / "SKILL.md"
+        assert procedures_ref.is_file()
+        procedures_body = procedures_ref.read_text(encoding="utf-8")
+        assert "name: procedures-manual" in procedures_body
+        assert "Nested system-manual reference" in procedures_body
+        assert "# Procedures Manual" in procedures_body
+        assert "Human-facing deliverables" in procedures_body
+        assert "external side effects" in procedures_body
+        assert "Resident procedures maintenance" in procedures_body
+
+        sqlite_log_query_ref = system_manual_md.parent / "reference" / "sqlite-log-query" / "SKILL.md"
         assert sqlite_log_query_ref.is_file()
         sqlite_log_query_body = sqlite_log_query_ref.read_text(encoding="utf-8")
+        assert "name: sqlite-log-query" in sqlite_log_query_body
+        assert "Nested system-manual reference" in sqlite_log_query_body
         assert "# SQLite Log Query" in sqlite_log_query_body
         assert "lingtai-agent log query" in sqlite_log_query_body
-        assert "name: sqlite-log-query" not in sqlite_log_query_body
 
         doctor_md = (
             workdir
@@ -485,3 +515,19 @@ def test_skills_does_not_create_git_repo(tmp_path):
         assert not (workdir / ".library" / ".git").exists()
     finally:
         agent.stop(timeout=1.0)
+
+
+def test_resident_prompts_route_to_system_manual_nested_references():
+    root = Path(__file__).resolve().parents[1]
+
+    substrate = (root / "src" / "lingtai" / "prompts" / "substrate.md").read_text(
+        encoding="utf-8"
+    )
+    assert "expanded runtime/substrate\nrouter is `system-manual`" in substrate
+    assert "reference/substrate-manual/SKILL.md" in substrate
+
+    procedures = (root / "src" / "lingtai" / "prompts" / "procedures.md").read_text(
+        encoding="utf-8"
+    )
+    assert "unified runtime/procedure router is\n`system-manual`" in procedures
+    assert "reference/procedures-manual/SKILL.md" in procedures
