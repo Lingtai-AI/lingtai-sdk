@@ -52,7 +52,7 @@ practice, read `psyche-manual`; for the broader memory model, read
 | Skill authoring/publishing | `skills-manual` |
 | Knowledge entries | `knowledge-manual` |
 | Shell commands, cron, host scheduling | `bash-manual` |
-| Querying LingTai runtime logs / SQLite log sidecar | `sqlite-log-query` |
+| Querying LingTai runtime logs / SQLite log sidecar | `system-manual` section 9 / `reference/sqlite-log-query.md` |
 | Kernel architecture / breaking changes | `lingtai-kernel-anatomy` |
 | TUI / portal code navigation | `lingtai-tui-anatomy` |
 | Web fetching/search/scraping | `web-browsing` |

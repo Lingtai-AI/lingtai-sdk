@@ -1,15 +1,4 @@
----
-name: sqlite-log-query
-description: >
-  Query LingTai agent runtime history through the additive SQLite log sidecar.
-  Read this when you need to inspect `logs/log.sqlite`, run `lingtai-agent log
-  doctor|query|rebuild`, count event types, investigate recent errors/tool
-  calls/notifications, or explain the JSONL source-of-truth versus SQLite
-  query-index contract. Covers safe read-only query patterns, offline rebuild,
-  schema, example SQL, and pitfalls around live agents and WAL snapshots.
-version: 0.1.0
-tags: [lingtai, logs, sqlite, observability, diagnostics, query]
----
+<!-- Subguide of system-manual. Not a standalone skill catalog entry. -->
 
 # SQLite Log Query
 

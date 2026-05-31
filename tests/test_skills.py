@@ -100,19 +100,15 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
         system_manual_body = system_manual_md.read_text(encoding="utf-8")
         assert "name: system-manual" in system_manual_body
         assert "LingTai Agent Operating Manual" in system_manual_body
+        assert "SQLite log sidecar queries" in system_manual_body
+        assert "reference/sqlite-log-query.md" in system_manual_body
 
-        sqlite_log_query_md = (
-            workdir
-            / ".library"
-            / "intrinsic"
-            / "capabilities"
-            / "sqlite-log-query"
-            / "SKILL.md"
-        )
-        assert sqlite_log_query_md.is_file()
-        sqlite_log_query_body = sqlite_log_query_md.read_text(encoding="utf-8")
-        assert "name: sqlite-log-query" in sqlite_log_query_body
+        sqlite_log_query_ref = system_manual_md.parent / "reference" / "sqlite-log-query.md"
+        assert sqlite_log_query_ref.is_file()
+        sqlite_log_query_body = sqlite_log_query_ref.read_text(encoding="utf-8")
+        assert "# SQLite Log Query" in sqlite_log_query_body
         assert "lingtai-agent log query" in sqlite_log_query_body
+        assert "name: sqlite-log-query" not in sqlite_log_query_body
 
         doctor_md = (
             workdir

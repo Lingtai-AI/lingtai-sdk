@@ -5,9 +5,11 @@ description: >
   full version of the always-on substrate and procedures prompt: lifecycle
   states, communication discipline, memory layers, tool routing, skill
   authoring, collaboration, notifications, MCP/addon ownership, preset tiers,
-  molt, idle/soul behavior, human-facing deliverables, and the `system` tool
-  actions. The resident substrate/procedures prompt keeps only the compact
-  principles and routes here for details.
+  molt, idle/soul behavior, human-facing deliverables, runtime log inspection,
+  SQLite log sidecar queries, and the `system` tool actions. The resident
+  substrate/procedures prompt keeps only the compact principles and routes here
+  for details; bundled subguides such as `reference/sqlite-log-query.md` carry
+  deeper command recipes.
 version: 1.0.0
 tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, memory, communication, skills, molt]
 ---
@@ -226,11 +228,26 @@ LingTai runtime history is written first to `logs/events.jsonl`. Newer kernels
 also maintain a rebuildable SQLite sidecar at `logs/log.sqlite` so agents can run
 structured diagnostics without grepping large JSONL files.
 
+The feature is deliberately **additive**. JSONL keeps the append-only audit trail
+that existing tools, migrations, and humans can inspect or recover with a text
+editor. SQLite adds the missing read path: indexed counts, filtered queries,
+doctor checks, trajectory mining, and future portal/replay analysis over large
+histories. Keeping SQLite rebuildable and deletable lets LingTai gain structured
+observability now without forcing a risky all-at-once source-of-truth migration or
+breaking compatibility for agents that still rely on JSONL.
+
 When you need to query event history, count event types, inspect failures,
 investigate notification storms, or use `lingtai-agent log doctor|query|rebuild`,
-load `sqlite-log-query`. Keep the resident rule small: JSONL is the source of
-truth; SQLite is a read-only/rebuildable observability index; rebuild requires
-the target agent to be stopped/offline.
+stay within this skill and read the bundled subguide
+`reference/sqlite-log-query.md`. Keep the resident rule small: JSONL is the
+source of truth; SQLite is a read-only/rebuildable observability index; rebuild
+requires the target agent to be stopped/offline.
+
+### System-manual subguides
+
+- `reference/sqlite-log-query.md` — safe SQLite log sidecar inspection: CLI
+  commands, schema, query recipes, offline rebuild rules, WAL/live-read caveats,
+  and redaction pitfalls.
 
 ## 10. Collaboration and network topology
 
