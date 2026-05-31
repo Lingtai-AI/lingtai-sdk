@@ -466,6 +466,47 @@ class TestSQLiteEventIndex:
             {"role": "assistant", "kind": None, "turn": 1, "content_text": "daemon answer", "source_kind": "daemon_chat", "scope": "daemon", "run_id": "em-1-20260531-030000-abcdef"},
         ]
 
+    def test_rebuild_indexes_canonical_chat_history_shapes(self, tmp_path):
+        history = tmp_path / "history"
+        history.mkdir()
+        rows = [
+            {"role": "system", "system": "system prompt text", "timestamp": 0},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_call", "id": "tc-1", "name": "bash", "args": {"command": "echo hi"}},
+                    {"type": "tool_result", "id": "tc-1", "name": "bash", "content": {"stdout": "hi"}},
+                ],
+                "timestamp": 0,
+            },
+        ]
+        (history / "chat_history.jsonl").write_text(
+            "".join(json.dumps(row) + "\n" for row in rows),
+            encoding="utf-8",
+        )
+
+        result = rebuild_sqlite_event_index(tmp_path)
+        assert result["event_count"] == 0
+        assert result["chat_entry_count"] == 2
+
+        chat_rows = query_sqlite_event_index(
+            tmp_path,
+            "SELECT role, ts, ts_text, content_text FROM chat_entries ORDER BY id",
+        )
+        assert chat_rows[0] == {
+            "role": "system",
+            "ts": 0.0,
+            "ts_text": "0",
+            "content_text": "system prompt text",
+        }
+        assert chat_rows[1]["role"] == "assistant"
+        assert chat_rows[1]["ts"] == 0.0
+        assert chat_rows[1]["ts_text"] == "0"
+        assert "tool_call bash" in chat_rows[1]["content_text"]
+        assert "echo hi" in chat_rows[1]["content_text"]
+        assert "tool_result bash" in chat_rows[1]["content_text"]
+        assert "hi" in chat_rows[1]["content_text"]
+
     def test_existing_v1_sidecar_migrates_to_trace_schema(self, tmp_path):
         sqlite_file = tmp_path / "logs" / "log.sqlite"
         sqlite_file.parent.mkdir()

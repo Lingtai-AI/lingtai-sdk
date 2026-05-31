@@ -62,14 +62,29 @@ def _extract_content_text(value: Any) -> str | None:
                 parts.append(text)
         return "\n".join(parts) if parts else None
     if isinstance(value, dict):
-        if isinstance(value.get("text"), str):
-            return value["text"]
-        if isinstance(value.get("content"), str):
-            return value["content"]
-        nested = _extract_content_text(value.get("content"))
-        if nested:
-            return nested
-        return None
+        block_type = value.get("type")
+        if block_type == "tool_call":
+            parts = ["tool_call"]
+            if value.get("name") is not None:
+                parts.append(str(value["name"]))
+            if value.get("args") is not None:
+                parts.append(json.dumps(value["args"], ensure_ascii=False, default=str))
+            return " ".join(parts)
+        if block_type == "tool_result":
+            parts = ["tool_result"]
+            if value.get("name") is not None:
+                parts.append(str(value["name"]))
+            nested = _extract_content_text(value.get("content"))
+            if nested:
+                parts.append(nested)
+            return " ".join(parts)
+
+        parts: list[str] = []
+        for key in ("text", "content", "system"):
+            nested = _extract_content_text(value.get(key))
+            if nested:
+                parts.append(nested)
+        return "\n".join(parts) if parts else None
     return str(value)
 
 
@@ -363,11 +378,16 @@ class SQLiteEventIndex:
             turn = int(turn_raw) if turn_raw is not None else None
         except (TypeError, ValueError):
             turn = None
-        raw_ts = entry.get("ts") or entry.get("timestamp")
+        if "ts" in entry:
+            raw_ts = entry.get("ts")
+        else:
+            raw_ts = entry.get("timestamp")
         ts, _ = _coerce_ts(raw_ts)
         content_text = _extract_content_text(entry.get("text"))
-        if content_text is None:
+        if not content_text:
             content_text = _extract_content_text(entry.get("content"))
+        if not content_text:
+            content_text = _extract_content_text(entry.get("system"))
         return (
             ts,
             str(raw_ts) if raw_ts is not None else None,
@@ -572,7 +592,7 @@ def _import_events_source(
     last_offset = 0
     last_line = 0
     for event, offset, next_offset, line_no in _iter_jsonl_records_with_offsets(source):
-        conn.execute(
+        cur = conn.execute(
             """
             INSERT OR IGNORE INTO events(
                 ts, type, agent_address, agent_name_snapshot, fields_json,
@@ -589,7 +609,7 @@ def _import_events_source(
                 run_id=run_id,
             ),
         )
-        count += 1
+        count += max(cur.rowcount, 0)
         last_offset = next_offset
         last_line = line_no
     return count, last_offset, last_line
@@ -607,7 +627,7 @@ def _import_chat_source(
     last_offset = 0
     last_line = 0
     for entry, offset, next_offset, line_no in _iter_jsonl_records_with_offsets(source):
-        conn.execute(
+        cur = conn.execute(
             """
             INSERT OR IGNORE INTO chat_entries(
                 ts, ts_text, role, kind, turn, content_text, entry_json,
@@ -624,7 +644,7 @@ def _import_chat_source(
                 run_id=run_id,
             ),
         )
-        count += 1
+        count += max(cur.rowcount, 0)
         last_offset = next_offset
         last_line = line_no
     return count, last_offset, last_line
