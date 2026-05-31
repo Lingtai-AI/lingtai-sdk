@@ -193,6 +193,37 @@ def test_cursor_emanate_persists_session_id_and_final_result(tmp_path):
     assert result == "final cursor answer"
 
 
+def test_cursor_emanate_marks_error_result_failed(tmp_path):
+    agent = _make_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+
+    stdout_lines = [
+        '{"type":"result","subtype":"error","is_error":true,"result":"Cursor failed to apply patch"}\n',
+    ]
+
+    def fake_popen(cmd, *args, **kwargs):
+        return _FakeProc(stdout_lines=stdout_lines)
+
+    run_dir = _make_run_dir(agent, handle="em-cur-error")
+    cancel = threading.Event()
+    timeout = threading.Event()
+
+    with patch("lingtai.core.daemon.subprocess.Popen", side_effect=fake_popen):
+        try:
+            mgr._run_cursor_emanation(
+                "em-cur-error", run_dir, "Please fail", cancel, timeout,
+            )
+        except RuntimeError as exc:
+            assert "error result" in str(exc)
+            assert "Cursor failed to apply patch" in str(exc)
+        else:  # pragma: no cover - test must fail if no exception is raised
+            raise AssertionError("Cursor error result should fail the emanation")
+
+    state = json.loads(run_dir.daemon_json_path.read_text())
+    assert state["state"] == "failed"
+
+
+
 def test_emanate_cursor_routes_to_cli_handler(tmp_path):
     agent = _make_agent(tmp_path)
     mgr = agent.get_capability("daemon")
@@ -305,6 +336,37 @@ def test_ask_cursor_resumes_with_captured_session_id(tmp_path):
     assert "--output-format" in cmd
     assert cmd[cmd.index("--output-format") + 1] == "stream-json"
     assert cmd[-1] == "how is it going?"
+
+
+def test_ask_cursor_error_result_publishes_failure(tmp_path):
+    agent = _make_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+
+    def fake_popen(cmd, *args, **kwargs):
+        return _FakeProc(stdout_lines=[
+            '{"type":"result","subtype":"error","is_error":true,"result":"resume failed"}\n',
+        ])
+
+    run_dir = _make_run_dir(agent, handle="em-cur-resume-error")
+    run_dir._state["cursor_session_id"] = "cursor-resumable-error"
+    run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
+    _register_cursor_entry(mgr, agent, run_dir, em_id="em-cur-resume-error")
+
+    with patch("lingtai.core.daemon.subprocess.Popen", side_effect=fake_popen):
+        result = mgr.handle({
+            "action": "ask",
+            "id": "em-cur-resume-error",
+            "message": "try again",
+        })
+
+    assert result["status"] == "sent"
+    ask_future = mgr._emanations["em-cur-resume-error"]["ask_future"]
+    assert ask_future is not None
+    followup = ask_future.result(timeout=5)
+    assert followup["status"] == "error"
+    assert "error result" in followup["message"]
+    assert "resume failed" in followup["message"]
+
 
 
 def test_ask_cursor_concurrent_returns_busy(tmp_path):

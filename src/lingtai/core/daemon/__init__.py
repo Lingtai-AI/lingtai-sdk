@@ -2363,6 +2363,7 @@ class DaemonManager:
         session_id_captured: str | None = None
         text_chunks: list[str] = []
         final_text: str | None = None
+        final_is_error = False
         any_event = False
 
         def _store_session_id(sid: str) -> None:
@@ -2578,6 +2579,7 @@ class DaemonManager:
 
         text_chunks: list[str] = []
         final_text: str | None = None
+        final_is_error = False
         any_event = False
         timed_out = False
 
@@ -2767,6 +2769,7 @@ class DaemonManager:
         session_id_captured: str | None = None
         text_chunks: list[str] = []
         final_text: str | None = None
+        final_is_error = False
         any_event = False
 
         def _store_session_id(sid: str) -> None:
@@ -2812,10 +2815,12 @@ class DaemonManager:
                 if isinstance(etype, str) and etype:
                     low = etype.lower()
                     subtype = str(event.get("subtype") or "").lower()
-                    if low.endswith((".completed", ".done", ".finished",
-                                     "result", "final")) or (
-                        low == "result" and subtype != "error"
-                    ):
+                    is_error_event = bool(event.get("is_error")) or subtype == "error"
+                    is_result_event = low == "result" or low.endswith(
+                        (".completed", ".done", ".finished", ".result", ".final")
+                    )
+                    if is_result_event:
+                        final_is_error = is_error_event
                         if text:
                             final_text = text
 
@@ -2839,6 +2844,14 @@ class DaemonManager:
             exc = RuntimeError(
                 f"Cursor CLI exited with code {proc.returncode}: "
                 f"{detail[-500:]}"
+            )
+            run_dir.mark_failed(exc)
+            raise exc
+
+        if final_is_error:
+            detail = final_text or stderr_tail or "\n".join(text_chunks[-3:])
+            exc = RuntimeError(
+                f"Cursor CLI reported error result: {detail[-500:]}"
             )
             run_dir.mark_failed(exc)
             raise exc
@@ -2960,6 +2973,7 @@ class DaemonManager:
 
         text_chunks: list[str] = []
         final_text: str | None = None
+        final_is_error = False
         any_event = False
         timed_out = False
 
@@ -2991,10 +3005,12 @@ class DaemonManager:
                 if isinstance(etype, str) and etype:
                     low = etype.lower()
                     subtype = str(event.get("subtype") or "").lower()
-                    if low.endswith((".completed", ".done", ".finished",
-                                     "result", "final")) or (
-                        low == "result" and subtype != "error"
-                    ):
+                    is_error_event = bool(event.get("is_error")) or subtype == "error"
+                    is_result_event = low == "result" or low.endswith(
+                        (".completed", ".done", ".finished", ".result", ".final")
+                    )
+                    if is_result_event:
+                        final_is_error = is_error_event
                         if text:
                             final_text = text
 
@@ -3029,6 +3045,14 @@ class DaemonManager:
         if proc.returncode != 0:
             detail = stderr_tail or "\n".join(text_chunks[-3:])
             err = f"Cursor CLI exited {proc.returncode}: {detail[-500:]}"
+            self._publish_followup_if_live(
+                em_id, status="follow-up failed", text=err, run_dir=run_dir,
+            )
+            return {"status": "error", "id": em_id, "message": err}
+
+        if final_is_error:
+            detail = final_text or stderr_tail or "\n".join(text_chunks[-3:])
+            err = f"Cursor CLI reported error result: {detail[-500:]}"
             self._publish_followup_if_live(
                 em_id, status="follow-up failed", text=err, run_dir=run_dir,
             )
