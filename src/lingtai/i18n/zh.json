@@ -51,7 +51,7 @@
   "daemon.timeout": "'emanate' 操作：整批的最大壁钟秒数。默认：父灵上限（3600 秒）。超时仍在运行的分神由看门狗强制终止。",
   "daemon.tasks": "'emanate' 的任务列表。每项：{task: str（必填——包含保存位置的指令），tools: list[str]（必填——能力名称列表，如 ['file', 'bash']），preset: str（可选——预设文件路径，用 system(action='presets') 返回的 name 字段）。省略 preset 则继承父灵的工具面。MCP 工具始终从父灵继承。预设继承与能力解析详见 daemon-manual。",
   "daemon.tasks.preset": "可选预设文件路径。必须是 .json/.jsonc 路径，使用 system(action='presets') 返回的 name 字段。不要用简写名——用 presets 列表里的完整 name。示例：'~/.lingtai-tui/presets/saved/cheap.json'。省略则继承父灵工具面。",
-  "daemon.tasks.backend_options": "仅适用于 'claude-code' / 'codex' / 'opencode' 后端的自由 CLI 选项（lingtai 后端会忽略）。JSON 对象，键为 flag 名，值为：true → 仅传 flag（如 {\"search\": true} → --search）；string/int/float → '--flag <值>'；标量数组 → '--flag <v1> --flag <v2>'；false/null 则省略。键里的下划线会转成短横线；嵌套对象与不安全键会被拒绝。只在启动分神时生效，不会带到 `ask` 跟进里。要查看当前支持的 flag，请在 bash 里跑 'claude --help'、'codex exec --help' 或 'opencode run --help'——CLI 的 flag 会随版本变化，这里是直通字段而非固定列表。详见 daemon-manual。",
+  "daemon.tasks.backend_options": "仅适用于 'claude-code' / 'codex' / 'opencode' / 'cursor' 后端的自由 CLI 选项（lingtai 后端会忽略）。JSON 对象，键为 flag 名，值为：true → 仅传 flag（如 {\"search\": true} → --search）；string/int/float → '--flag <值>'；标量数组 → '--flag <v1> --flag <v2>'；false/null 则省略。键里的下划线会转成短横线；嵌套对象与不安全键会被拒绝。只在启动分神时生效，不会带到 `ask` 跟进里。要查看当前支持的 flag，请在 bash 里跑 'claude --help'、'codex exec --help'、'opencode run --help' 或 'agent --help'——CLI 的 flag 会随版本变化，这里是直通字段而非固定列表。详见 daemon-manual。",
   "daemon.id": "'ask' 操作的分神 ID（如 'em-1'）",
   "daemon.message": "'ask' 操作的跟进消息",
   "skills.description": "你的器灵专属技能目录。系统提示词中的技能目录为 YAML 列表——每项技能为一 `- name:` 块，附 `location:` 与 `description:` 字段——涵盖当前所有可用的技能。用此工具前（编写、固定、发布或管理技能），必先读 `skills-manual` 技能——调用 `info` 即可获取其正文与运行时健康快照，无例外。",

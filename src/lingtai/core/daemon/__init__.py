@@ -138,7 +138,7 @@ EMANATION_BLACKLIST = {"daemon", "avatar", "psyche", "skills", "knowledge"}
 # ``CLAUDE_CODE_OAUTH_TOKEN`` can also beat a refreshed
 # ``~/.claude/.credentials.json`` and surface as a false weekly-limit error
 # (GH Lingtai-AI/lingtai#189). Strip these for claude-code spawns only; other
-# backends (codex, lingtai, opencode) are unaffected.
+# backends (codex, lingtai, opencode, cursor) are unaffected.
 _CLAUDE_CODE_STRIP_ENV = (
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
@@ -313,12 +313,12 @@ def get_schema(lang: str = "en") -> dict:
             },
             "backend": {
                 "type": "string",
-                "enum": ["lingtai", "claude-code", "codex", "opencode"],
+                "enum": ["lingtai", "claude-code", "codex", "opencode", "cursor"],
                 "description": (
                     "Execution backend: 'lingtai' (default — parallel LLM reasoning, uses your current model), "
                     "'claude-code' (coding tasks, code review, file manipulation via Claude Code CLI), "
                     "'codex' (coding tasks via OpenAI Codex CLI), "
-                    "'opencode' (multi-provider open-source agent via the opencode-ai CLI). "
+                    "'opencode' (multi-provider open-source agent via the opencode-ai CLI), 'cursor' (coding tasks via Cursor Agent CLI). "
                     "CLI backends use external tools with no LLM overhead from the parent."
                 ),
             },
@@ -1381,7 +1381,7 @@ class DaemonManager:
         # Clear completed emanations and stale pools.
         # Keep completed CLI emanations (backend != lingtai) so that `ask`
         # can still route to `_handle_ask_cli` / `_handle_ask_codex` /
-        # `_handle_ask_opencode`
+        # `_handle_ask_opencode` / `_handle_ask_cursor`
         # and `list` can show them.
         self._emanations = {
             k: v for k, v in self._emanations.items()
@@ -1389,8 +1389,8 @@ class DaemonManager:
         }
         self._pools = [(p, c) for p, c in self._pools if not c.is_set()]
 
-        # --- Claude Code / Codex / OpenCode backend: skip preset resolution entirely ---
-        if backend in ("claude-code", "codex", "opencode"):
+        # --- Claude Code / Codex / OpenCode / Cursor backend: skip preset resolution entirely ---
+        if backend in ("claude-code", "codex", "opencode", "cursor"):
             return self._handle_emanate_cli(
                 tasks, backend=backend,
                 effective_max_turns=effective_max_turns,
@@ -1555,7 +1555,7 @@ class DaemonManager:
         effective_max_turns: int,
         effective_timeout: float,
     ) -> dict:
-        """Dispatch emanations via an external CLI backend (claude-code, codex, opencode).
+        """Dispatch emanations via an external CLI backend (claude-code, codex, opencode, cursor).
 
         Skips preset resolution — the CLI manages its own tools/model/provider.
         Creates a DaemonRunDir for tracking. CLI output is persisted in the
@@ -1629,6 +1629,8 @@ class DaemonManager:
                 run_fn = self._run_codex_emanation
             elif backend == "opencode":
                 run_fn = self._run_opencode_emanation
+            elif backend == "cursor":
+                run_fn = self._run_cursor_emanation
             else:
                 run_fn = self._run_claude_code_emanation
             future = pool.submit(
@@ -1717,6 +1719,7 @@ class DaemonManager:
         #   - claude-code: `claude --resume <claude_session_id>`
         #   - codex:       `codex exec resume <codex_session_id>`
         #   - opencode:    `opencode run --session <opencode_session_id> ...`
+        #   - cursor:      `agent -p --resume <cursor_session_id> ...`
         # All stream JSON events through the resumed turn so
         # `daemon(check)` shows live progress.
         backend = entry.get("backend")
@@ -1726,6 +1729,8 @@ class DaemonManager:
             return self._handle_ask_codex(em_id, entry, message)
         if backend == "opencode":
             return self._handle_ask_opencode(em_id, entry, message)
+        if backend == "cursor":
+            return self._handle_ask_cursor(em_id, entry, message)
 
         if entry["future"].done():
             return {"status": "error", "message": "not running"}
@@ -2239,7 +2244,7 @@ class DaemonManager:
         that are purely structural, e.g. tool calls, are skipped).
         """
         # Top-level scalar text fields.
-        for key in ("text", "content", "message", "delta", "answer", "output"):
+        for key in ("text", "content", "message", "delta", "answer", "output", "result"):
             val = event.get(key)
             if isinstance(val, str) and val.strip():
                 return val
@@ -2358,6 +2363,7 @@ class DaemonManager:
         session_id_captured: str | None = None
         text_chunks: list[str] = []
         final_text: str | None = None
+        final_is_error = False
         any_event = False
 
         def _store_session_id(sid: str) -> None:
@@ -2573,6 +2579,7 @@ class DaemonManager:
 
         text_chunks: list[str] = []
         final_text: str | None = None
+        final_is_error = False
         any_event = False
         timed_out = False
 
@@ -2641,6 +2648,411 @@ class DaemonManager:
         if proc.returncode != 0:
             detail = stderr_tail or "\n".join(text_chunks[-3:])
             err = f"opencode CLI exited {proc.returncode}: {detail[-500:]}"
+            self._publish_followup_if_live(
+                em_id, status="follow-up failed", text=err, run_dir=run_dir,
+            )
+            return {"status": "error", "id": em_id, "message": err}
+
+        if final_text is not None:
+            output = final_text.strip()
+        elif text_chunks:
+            output = text_chunks[-1].strip()
+        else:
+            output = ""
+
+        if not any_event and not output:
+            output = "[no output]"
+
+        if output and output != "[no output]":
+            self._publish_followup_if_live(
+                em_id, status="follow-up completed", text=output, run_dir=run_dir,
+            )
+        return {"status": "sent", "id": em_id, "output": output}
+
+
+    # ------------------------------------------------------------------
+    # Cursor backend (Cursor Agent CLI, `agent -p --output-format stream-json`)
+    # ------------------------------------------------------------------
+
+    # Cursor's headless CLI is exposed as the `agent` executable. In print mode
+    # (`-p` / `--print`) it can emit the same single-result JSON shape and
+    # stream-json shape documented by Cursor's CLI reference.  We parse it with
+    # the same defensive helpers used by OpenCode because both are JSONL CLI
+    # backends whose event vocabularies may evolve between releases. Cursor's
+    # documented final result event includes `result` and `session_id` fields;
+    # the shared helpers cover both.
+
+    def _build_cursor_prompt(self, task: str) -> str:
+        """Compose the initial prompt sent to Cursor Agent CLI."""
+        return self._build_opencode_prompt(task)
+
+    def _run_cursor_emanation(
+        self,
+        em_id: str,
+        run_dir: DaemonRunDir,
+        task: str,
+        cancel_event: threading.Event,
+        timeout_event: threading.Event | None = None,
+        backend_argv: list[str] | None = None,
+    ) -> str:
+        """Run a Cursor Agent CLI session as the emanation backend.
+
+        Spawns ``agent -p --force --output-format stream-json <prompt>``.
+        ``-p`` puts Cursor in non-interactive print mode; ``--force`` allows
+        file modifications in that mode (matching the daemon's coding-agent
+        expectation); ``stream-json`` gives one JSON object per stdout line.
+        The first event carrying a session-id-shaped field is stored in
+        daemon.json under ``cursor_session_id`` for ``daemon(action='ask')``.
+        """
+        def _exit_cancelled() -> str:
+            if timeout_event is not None and timeout_event.is_set():
+                run_dir.mark_timeout()
+            else:
+                run_dir.mark_cancelled()
+            return "[cancelled]"
+
+        if cancel_event.is_set():
+            return _exit_cancelled()
+
+        prompt = self._build_cursor_prompt(task)
+        cmd = [
+            "agent",
+            "-p",
+            "--force",
+            "--output-format", "stream-json",
+        ]
+        if backend_argv:
+            cmd.extend(backend_argv)
+        cmd.append(prompt)
+        self._log("daemon_cursor_start", em_id=em_id, cmd_head=" ".join(cmd[:5]))
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=str(self._agent._working_dir),
+                start_new_session=True,
+            )
+        except FileNotFoundError:
+            exc = RuntimeError("'agent' Cursor CLI not found on PATH")
+            run_dir.mark_failed(exc)
+            raise exc
+        except OSError as e:
+            exc = RuntimeError(f"Failed to start Cursor CLI: {e}")
+            run_dir.mark_failed(exc)
+            raise exc
+        with self._cli_lock:
+            self._cli_procs.append(proc)
+
+        stderr_lines: list[str] = []
+
+        def _drain_stderr() -> None:
+            assert proc.stderr is not None
+            for line in proc.stderr:
+                stripped = line.rstrip("\n")
+                if not stripped:
+                    continue
+                stderr_lines.append(stripped)
+                try:
+                    run_dir.record_cli_output(stripped, stream="stderr")
+                except Exception:
+                    pass
+
+        stderr_thread = threading.Thread(
+            target=_drain_stderr, daemon=True,
+            name=f"daemon-cursor-stderr-{em_id}",
+        )
+        stderr_thread.start()
+
+        session_id_captured: str | None = None
+        text_chunks: list[str] = []
+        final_text: str | None = None
+        final_is_error = False
+        any_event = False
+
+        def _store_session_id(sid: str) -> None:
+            nonlocal session_id_captured
+            if not sid or session_id_captured == sid:
+                return
+            session_id_captured = sid
+            run_dir._state["cursor_session_id"] = sid
+            run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
+            self._log("daemon_cursor_session", em_id=em_id, session_id=sid)
+
+        try:
+            assert proc.stdout is not None
+            for raw_line in proc.stdout:
+                if cancel_event.is_set():
+                    _kill_process_group(proc)
+                    return _exit_cancelled()
+
+                line = raw_line.rstrip("\n")
+                if not line:
+                    continue
+
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    run_dir.record_cli_output(line, stream="stdout")
+                    continue
+                if not isinstance(event, dict):
+                    run_dir.record_cli_output(line, stream="stdout")
+                    continue
+
+                any_event = True
+                sid = self._opencode_extract_session_id(event)
+                if sid:
+                    _store_session_id(sid)
+
+                text = self._opencode_extract_text(event)
+                if text:
+                    text_chunks.append(text)
+                    run_dir.record_cli_output(text, stream="stdout")
+
+                etype = event.get("type") or ""
+                if isinstance(etype, str) and etype:
+                    low = etype.lower()
+                    subtype = str(event.get("subtype") or "").lower()
+                    is_error_event = bool(event.get("is_error")) or subtype == "error"
+                    is_result_event = low == "result" or low.endswith(
+                        (".completed", ".done", ".finished", ".result", ".final")
+                    )
+                    if is_result_event:
+                        final_is_error = is_error_event
+                        if text:
+                            final_text = text
+
+            proc.wait()
+        except Exception as e:
+            _kill_process_group(proc)
+            run_dir.mark_failed(e)
+            raise
+        finally:
+            stderr_thread.join(timeout=2.0)
+            with self._cli_lock:
+                try:
+                    self._cli_procs.remove(proc)
+                except ValueError:
+                    pass
+
+        stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
+
+        if proc.returncode != 0:
+            detail = stderr_tail or "\n".join(text_chunks[-3:])
+            exc = RuntimeError(
+                f"Cursor CLI exited with code {proc.returncode}: "
+                f"{detail[-500:]}"
+            )
+            run_dir.mark_failed(exc)
+            raise exc
+
+        if final_is_error:
+            detail = final_text or stderr_tail or "\n".join(text_chunks[-3:])
+            exc = RuntimeError(
+                f"Cursor CLI reported error result: {detail[-500:]}"
+            )
+            run_dir.mark_failed(exc)
+            raise exc
+
+        if final_text is not None:
+            text = final_text.strip()
+        elif text_chunks:
+            text = text_chunks[-1].strip()
+        elif stderr_tail:
+            text = f"[no JSON events; stderr tail follows]\n{stderr_tail[-500:]}"
+        else:
+            text = "[no output]"
+        if not any_event and not stderr_tail:
+            text = "[no output]"
+
+        run_dir.mark_done(text)
+        return text
+
+    def _handle_ask_cursor(self, em_id: str, entry: dict, message: str) -> dict:
+        """Dispatch a Cursor Agent CLI ``--resume`` follow-up off the caller's turn."""
+        run_dir = entry.get("run_dir")
+        if run_dir is None:
+            return {"status": "error", "message": f"emanation {em_id} has no run_dir"}
+
+        session_id = run_dir._state.get("cursor_session_id")
+        if not session_id:
+            return {"status": "error",
+                    "message": f"No cursor session ID found for {em_id}. "
+                               "The emanation may still be initializing — "
+                               "wait a moment and retry."}
+
+        with entry["followup_lock"]:
+            if entry.get("ask_in_flight"):
+                return {"status": "busy", "id": em_id,
+                        "message": f"a previous ask on {em_id} is still "
+                                   "running; wait for it or use "
+                                   f"daemon(action='check', id='{em_id}')"}
+            entry["ask_in_flight"] = True
+
+        cmd = [
+            "agent",
+            "-p",
+            "--force",
+            "--resume", session_id,
+            "--output-format", "stream-json",
+            message,
+        ]
+        self._log("daemon_cursor_ask", em_id=em_id,
+                  session_id=session_id, message_length=len(message))
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=str(self._agent._working_dir),
+                start_new_session=True,
+            )
+        except FileNotFoundError:
+            with entry["followup_lock"]:
+                entry["ask_in_flight"] = False
+            return {"status": "error",
+                    "message": "'agent' Cursor CLI not found on PATH"}
+        except OSError as e:
+            with entry["followup_lock"]:
+                entry["ask_in_flight"] = False
+            return {"status": "error",
+                    "message": f"Failed to start Cursor CLI: {e}"}
+        with self._cli_lock:
+            self._cli_procs.append(proc)
+
+        try:
+            run_dir.record_cli_output(
+                f"[ask dispatched] {message[:200]}", stream="stdout",
+            )
+        except OSError:
+            pass
+
+        ask_future = self._ask_pool.submit(
+            self._run_ask_cursor_stream, em_id, entry, proc, run_dir,
+        )
+        ask_future.add_done_callback(
+            lambda f, eid=em_id: self._on_ask_done(eid, f)
+        )
+        entry["ask_future"] = ask_future
+
+        return {"status": "sent", "id": em_id, "async": True,
+                "message": "ask dispatched; check daemon(action='check', "
+                           f"id='{em_id}') for progress and final reply"}
+
+    def _run_ask_cursor_stream(
+        self,
+        em_id: str,
+        entry: dict,
+        proc: subprocess.Popen,
+        run_dir: DaemonRunDir,
+    ) -> dict:
+        """Background worker: stream an ``agent -p --resume`` subprocess."""
+        stderr_lines: list[str] = []
+
+        def _drain_stderr() -> None:
+            assert proc.stderr is not None
+            for line in proc.stderr:
+                stripped = line.rstrip("\n")
+                if not stripped:
+                    continue
+                stderr_lines.append(stripped)
+                try:
+                    run_dir.record_cli_output(stripped, stream="stderr")
+                except Exception:
+                    pass
+
+        stderr_thread = threading.Thread(
+            target=_drain_stderr, daemon=True,
+            name=f"daemon-cursor-ask-stderr-{em_id}",
+        )
+        stderr_thread.start()
+
+        text_chunks: list[str] = []
+        final_text: str | None = None
+        final_is_error = False
+        any_event = False
+        timed_out = False
+
+        try:
+            assert proc.stdout is not None
+            deadline = time.monotonic() + self._timeout
+            for raw_line in _iter_stdout_with_deadline(
+                proc, deadline,
+                thread_name=f"daemon-cursor-ask-stdout-{em_id}",
+            ):
+                line = raw_line.rstrip("\n")
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    run_dir.record_cli_output(line, stream="stdout")
+                    continue
+                if not isinstance(event, dict):
+                    run_dir.record_cli_output(line, stream="stdout")
+                    continue
+
+                any_event = True
+                text = self._opencode_extract_text(event)
+                if text:
+                    text_chunks.append(text)
+                    run_dir.record_cli_output(text, stream="stdout")
+                etype = event.get("type") or ""
+                if isinstance(etype, str) and etype:
+                    low = etype.lower()
+                    subtype = str(event.get("subtype") or "").lower()
+                    is_error_event = bool(event.get("is_error")) or subtype == "error"
+                    is_result_event = low == "result" or low.endswith(
+                        (".completed", ".done", ".finished", ".result", ".final")
+                    )
+                    if is_result_event:
+                        final_is_error = is_error_event
+                        if text:
+                            final_text = text
+
+            if time.monotonic() >= deadline:
+                timed_out = True
+                _kill_process_group(proc)
+            else:
+                try:
+                    proc.wait(timeout=max(1.0, deadline - time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                    _kill_process_group(proc)
+        finally:
+            stderr_thread.join(timeout=2.0)
+            with self._cli_lock:
+                try:
+                    self._cli_procs.remove(proc)
+                except ValueError:
+                    pass
+            with entry["followup_lock"]:
+                entry["ask_in_flight"] = False
+
+        stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
+
+        if timed_out:
+            err = f"Cursor CLI resume timed out after {self._timeout}s"
+            self._publish_followup_if_live(
+                em_id, status="follow-up failed", text=err, run_dir=run_dir,
+            )
+            return {"status": "error", "id": em_id, "message": err}
+
+        if proc.returncode != 0:
+            detail = stderr_tail or "\n".join(text_chunks[-3:])
+            err = f"Cursor CLI exited {proc.returncode}: {detail[-500:]}"
+            self._publish_followup_if_live(
+                em_id, status="follow-up failed", text=err, run_dir=run_dir,
+            )
+            return {"status": "error", "id": em_id, "message": err}
+
+        if final_is_error:
+            detail = final_text or stderr_tail or "\n".join(text_chunks[-3:])
+            err = f"Cursor CLI reported error result: {detail[-500:]}"
             self._publish_followup_if_live(
                 em_id, status="follow-up failed", text=err, run_dir=run_dir,
             )
