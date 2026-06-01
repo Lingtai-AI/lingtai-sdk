@@ -1,6 +1,10 @@
 """Tests for the renamed skills capability."""
 from __future__ import annotations
 
+import importlib.util
+import json
+import sqlite3
+import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -109,7 +113,9 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
         assert "reference/substrate-manual/SKILL.md" in system_manual_body
         assert "reference/procedures-manual/SKILL.md" in system_manual_body
         assert "reference/sqlite-log-query/SKILL.md" in system_manual_body
-        assert "lingtai-agent log doctor|query|rebuild" in system_manual_body
+        assert "lingtai-agent log doctor" in system_manual_body
+        assert "lingtai-agent log query" in system_manual_body
+        assert "lingtai-agent log rebuild" in system_manual_body
         assert "name: substrate-manual" in system_manual_body
         assert "name: procedures-manual" in system_manual_body
         assert "name: sqlite-log-query" in system_manual_body
@@ -145,6 +151,73 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
         assert "Nested system-manual reference" in sqlite_log_query_body
         assert "# SQLite Log Query" in sqlite_log_query_body
         assert "lingtai-agent log query" in sqlite_log_query_body
+        # Trajectory mining content is now in the sqlite-log-query reference
+        assert "Trajectory Mining" in sqlite_log_query_body
+        assert "trajectory mining" in sqlite_log_query_body.lower()
+        assert "Finding schema" in sqlite_log_query_body or "finding schema" in sqlite_log_query_body.lower()
+        assert "cheap model" in sqlite_log_query_body.lower() or "cheap-model" in sqlite_log_query_body.lower()
+        assert "scripts/event_summary.py" in sqlite_log_query_body
+
+        # event_summary.py script exists, is referenced, and can summarize
+        # a minimal SQLite sidecar using the actual events schema columns.
+        sqlite_scripts = sqlite_log_query_ref.parent / "scripts" / "event_summary.py"
+        assert sqlite_scripts.is_file(), "event_summary.py script must exist"
+        spec = importlib.util.spec_from_file_location("event_summary_for_test", sqlite_scripts)
+        assert spec and spec.loader
+        event_summary = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(event_summary)
+
+        db_path = tmp_path / "log.sqlite"
+        conn = sqlite3.connect(db_path)
+        conn.executescript(
+            """
+            CREATE TABLE events (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              ts REAL NOT NULL,
+              type TEXT NOT NULL,
+              agent_address TEXT,
+              agent_name_snapshot TEXT,
+              fields_json TEXT NOT NULL,
+              source_file TEXT,
+              source_offset INTEGER,
+              source_line INTEGER,
+              source_kind TEXT,
+              scope TEXT,
+              run_id TEXT,
+              inserted_at TEXT
+            );
+            """
+        )
+        now = time.time()
+        conn.executemany(
+            "INSERT INTO events(ts, type, fields_json, source_kind, scope, run_id) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                (now - 60, "tool_call", json.dumps({"name": "bash"}), "agent_events", "agent", None),
+                (now, "tool_result", json.dumps({"error": "token abcdefghijklmnop"}), "agent_events", "agent", None),
+            ],
+        )
+        conn.commit()
+        conn.close()
+        summary = event_summary.summarize(str(db_path), source_kind="agent_events", hours=1)
+        assert summary["total_events"] == 2
+        assert summary["event_type_counts"]
+        assert summary["schema_keys"]
+        assert summary["error_clusters"][0]["error"] == "token=[REDACTED]"
+
+        # No standalone top-level trajectory-mining skill: the capability is
+        # intentionally exposed only through system-manual's SQLite reference.
+        trajectory_md = (
+            workdir
+            / ".library"
+            / "intrinsic"
+            / "capabilities"
+            / "lingtai-trajectory-mining"
+            / "SKILL.md"
+        )
+        assert not trajectory_md.exists()
+        assert "trajectory/anomaly mining" in system_manual_body
+        assert "sqlite-log-query" in system_manual_body
 
         doctor_md = (
             workdir

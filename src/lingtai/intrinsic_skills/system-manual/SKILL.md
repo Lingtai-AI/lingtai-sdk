@@ -9,13 +9,12 @@ description: >
   `reference/procedures-manual/SKILL.md` for the expanded procedures/action discipline,
   skill routing, responsiveness, deliverables, artifact sharing, and issue
   reporting guidance; and `reference/sqlite-log-query/SKILL.md` for SQLite/log.sqlite
-  runtime trace inspection, `lingtai-agent log doctor|query|rebuild`, events and
-  chat_entries schema, JSONL source-of-truth rules, offline rebuild/WAL caveats,
-  daemon/chat-history indexing, SQL recipes, and redaction pitfalls. Also route
-  here for lifecycle operations, notification handling, molt/memory questions,
-  MCP/addon ownership, preset tiers, collaboration/network topology, resident
-  prompt design, and the `system` tool actions.
-version: 1.1.0
+  runtime trace inspection and trajectory/anomaly mining from event traces. Also
+  route here for lifecycle operations, notification
+  handling, molt/memory questions, MCP/addon ownership, preset tiers,
+  collaboration/network topology, resident prompt design, and the `system` tool
+  actions.
+version: 1.2.0
 tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, memory, communication, skills, molt]
 ---
 
@@ -59,11 +58,13 @@ selects that topic.
 - name: sqlite-log-query
   location: reference/sqlite-log-query/SKILL.md
   description: |
-    SQLite/log.sqlite runtime trace inspection: `lingtai-agent log doctor`,
-    `lingtai-agent log query`, `lingtai-agent log rebuild`, JSONL source-of-truth
-    rules, read-only SQL safety, offline rebuild/WAL caveats, events and
-    chat_entries schema, daemon/chat-history indexing, query recipes, runtime
-    problem investigation workflow, and redaction pitfalls.
+    SQLite/log.sqlite runtime trace inspection and trajectory/anomaly mining:
+    `lingtai-agent log doctor`, `lingtai-agent log query`,
+    `lingtai-agent log rebuild`, JSONL source-of-truth rules, read-only SQL
+    safety, offline rebuild/WAL caveats, events and chat_entries schema,
+    daemon/chat-history indexing, query recipes, runtime problem investigation,
+    SQL-based event metrics, cheap-model daemon strategy, finding schema,
+    improvement digest output, redaction/privacy rules, and event_summary.py script.
 ```
 
 ## Router table
@@ -72,7 +73,7 @@ selects that topic.
 |---|---|
 | Expanded substrate; body/extensions; bash vs daemon vs avatar vs MCP; lifecycle states; ACTIVE/IDLE/ASLEEP/SUSPENDED; same-channel communication; notifications; memory layers; molt model; idle/soul; preset tiers; `system` operations | `reference/substrate-manual/SKILL.md` |
 | Expanded procedures; progressive disclosure; writing skills/knowledge; action discipline; responsiveness; skill routing; HTML deliverables; artifact sharing; issue reporting; when to read which manual | `reference/procedures-manual/SKILL.md` |
-| SQLite; `log.sqlite`; LingTai runtime logs; JSONL traces; `lingtai-agent log doctor`; `lingtai-agent log query`; `lingtai-agent log rebuild`; events/chat_entries schema; daemon/chat-history trace indexing; WAL/live-read caveats; SQL recipes | `reference/sqlite-log-query/SKILL.md` |
+| SQLite; `log.sqlite`; LingTai runtime logs; JSONL traces; `lingtai-agent log doctor`; `lingtai-agent log query`; `lingtai-agent log rebuild`; events/chat_entries schema; daemon/chat-history trace indexing; WAL/live-read caveats; SQL recipes; trajectory/anomaly mining; improvement digests; cheap-model strategy | `reference/sqlite-log-query/SKILL.md` |
 | Molt mechanics, pad tending, session journals, post-wipe recovery | `psyche-manual` |
 | Authoring/publishing skills or changing skill catalog behavior | `skills-manual` |
 | Knowledge-entry layout and private durable memory | `knowledge-manual` |
@@ -105,16 +106,17 @@ router, and put detailed explanations in `reference/substrate-manual/SKILL.md`,
 
 ## Runtime log / SQLite note
 
-SQLite log guidance is a nested skill-reference owned by this manual:
+SQLite log guidance, including trajectory/anomaly mining from event traces,
+lives only in this manual's nested reference:
 `reference/sqlite-log-query/SKILL.md`. Route here for keywords such as SQLite,
 `log.sqlite`, runtime logs, trace index, `lingtai-agent log query`, `doctor`,
-`rebuild`, JSONL source of truth, daemon events, chat history, WAL, or SQL
-recipes.
+`rebuild`, JSONL source of truth, daemon events, chat history, WAL, SQL recipes,
+improvement digests, cheap-model strategy, or finding schema.
 
 ## Maintaining this router
 
 When resident substrate/procedures gain new concepts, add a routing hint here and
 put detail in a nested reference. When a reference grows too large or needs
-scripts/assets, split it into another `reference/<name>/SKILL.md` folder and list
+companion scripts and assets, split it into another `reference/<name>/SKILL.md` folder and list
 its frontmatter summary in both this nested reference catalog and the router
 table. Keep this file short enough to scan.
