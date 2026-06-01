@@ -75,6 +75,25 @@ def test_skills_setup_hard_copies_intrinsics(tmp_path):
         assert "reference/substrate-manual/SKILL.md" in body
         assert "The catalog scanner treats a directory that already" in body
         assert "validate.py reference/topic-a/" in body
+
+        bash_md = (
+            workdir / ".library" / "intrinsic" / "capabilities" / "bash" / "SKILL.md"
+        )
+        assert bash_md.is_file()
+        bash_body = bash_md.read_text(encoding="utf-8")
+        assert "name: bash-manual" in bash_body
+        assert "Nested reference catalog" in bash_body
+        assert "reference/scheduled-work/SKILL.md" in bash_body
+        assert "reference/notification-reminders/SKILL.md" in bash_body
+        assert "reference/debugging-cleanup/SKILL.md" in bash_body
+
+        bash_reference_dir = bash_md.parent / "reference"
+        for reference_name in ("scheduled-work", "notification-reminders", "debugging-cleanup"):
+            bash_reference = bash_reference_dir / reference_name / "SKILL.md"
+            assert bash_reference.is_file()
+        assert "Nested bash-manual reference" in (
+            bash_reference_dir / "scheduled-work" / "SKILL.md"
+        ).read_text(encoding="utf-8")
     finally:
         agent.stop(timeout=1.0)
 
