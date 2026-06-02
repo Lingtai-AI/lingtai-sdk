@@ -120,10 +120,30 @@ Before context exhaustion:
 5. Write a molt summary as a successor briefing.
 6. Molt deliberately.
 
-A good molt summary is not a transcript. It states: who you are, what just
-happened, what remains, what not to do without authorization, where artifacts
-live, which chats/mail to check, and which knowledge/skills matter. For detailed
-mechanics, read `psyche-manual`.
+A good molt summary is not a transcript. It is an operational briefing for the
+next self: what to do first, what is done, what remains, what is forbidden
+without authorization, who is waiting, and where the durable state lives.
+
+Use the full consequential scaffold in `psyche-manual` when a long task is
+mid-stream, multiple collaborators are active, human commitments are pending, or
+the next self would otherwise need to reconstruct state from logs. Resident
+`procedures.md` only carries the compact cue; `psyche-manual` is the canonical
+place for the full summary template and pre-molt verification checklist.
+
+Minimum handoff checks:
+
+- Durable stores are tended before the summary is written.
+- Routine molts stay compact; consequential molts get the full scaffold.
+- Every outstanding task has a concrete action item with owner/recipient,
+  channel, and exact next action/content.
+- Collaborators, pending replies, authorization limits, and next human-facing
+  reports are explicit.
+- Active background work (daemons, bash jobs, avatars, schedules) is listed or
+  explicitly absent.
+- Key artifact paths are absolute and still useful.
+- Safety constraints are explicit: approvals required, secrets not shared, and
+  external side effects not implied.
+- The first five minutes after wake are obvious from the summary.
 
 ## 7. Skill routing
 
