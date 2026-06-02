@@ -127,28 +127,6 @@ def get_schema(lang: str = "en") -> dict:
                     },
                 },
             },
-            "schedule": {
-                "type": "object",
-                "properties": {
-                    "action": {
-                        "type": "string",
-                        "enum": ["create", "cancel", "list", "reactivate"],
-                        "description": t(lang, "email.schedule_action"),
-                    },
-                    "interval": {
-                        "type": "integer",
-                        "description": t(lang, "email.schedule_interval"),
-                    },
-                    "count": {
-                        "type": "integer",
-                        "description": t(lang, "email.schedule_count"),
-                    },
-                    "schedule_id": {
-                        "type": "string",
-                        "description": t(lang, "email.schedule_id"),
-                    },
-                },
-            },
         },
         "required": [],
     }

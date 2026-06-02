@@ -1,4 +1,4 @@
-"""EmailManager — filesystem-based email manager with search, contacts, schedules.
+"""EmailManager — filesystem-based email manager with search and contacts.
 
 Moved from the former monolithic email.py.  Imports mailbox primitives from
 the sibling primitives module.
@@ -14,10 +14,8 @@ import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
-from uuid import uuid4
 
 from ...i18n import t
-from ...message import _make_message, MSG_REQUEST
 from ...time_veil import scrub_time_fields
 from ...token_counter import count_tokens
 
@@ -53,35 +51,10 @@ class EmailManager:
         # Track consecutive identical sends per recipient to block loops.
         self._last_sent: dict[str, tuple[str, int]] = {}
         self._dup_free_passes = 2  # allow this many identical sends
-        self._stop_event = threading.Event()
-        self._scheduler_thread: threading.Thread | None = None
-
-    def start_scheduler(self) -> None:
-        """Start the background scheduler thread."""
-        if self._scheduler_thread is not None:
-            return
-        self._stop_event.clear()
-        self._scheduler_thread = threading.Thread(
-            target=self._scheduler_loop,
-            name=f"scheduler-{self._agent._working_dir.name}",
-            daemon=True,
-        )
-        self._scheduler_thread.start()
-
-    def stop_scheduler(self) -> None:
-        """Stop the scheduler thread cleanly."""
-        self._stop_event.set()
-        if self._scheduler_thread is not None:
-            self._scheduler_thread.join(timeout=5.0)
-            self._scheduler_thread = None
 
     @property
     def _mailbox_path(self) -> Path:
         return _mailbox_dir(self._agent)
-
-    @property
-    def _schedules_dir(self) -> Path:
-        return self._mailbox_path / "schedules"
 
     # ------------------------------------------------------------------
     # Filesystem helpers
@@ -211,12 +184,9 @@ class EmailManager:
     # ------------------------------------------------------------------
 
     def handle(self, args: dict) -> dict:
-        schedule = args.get("schedule")
-        if schedule is not None:
-            return self._handle_schedule(args, schedule)
         action = args.get("action")
         if not action:
-            return {"error": "action is required (or pass a schedule object)"}
+            return {"error": "action is required"}
         if action == "send":
             return self._send(args)
         elif action == "check":
@@ -247,359 +217,6 @@ class EmailManager:
             return {"error": f"Unknown email action: {action}"}
 
     # ------------------------------------------------------------------
-    # Schedule dispatch
-    # ------------------------------------------------------------------
-
-    def _handle_schedule(self, args: dict, schedule: dict) -> dict:
-        action = schedule.get("action")
-        if action == "create":
-            return self._schedule_create(args, schedule)
-        elif action == "cancel":
-            return self._schedule_cancel(schedule)
-        elif action == "list":
-            return self._schedule_list()
-        elif action == "reactivate":
-            return self._schedule_reactivate(schedule)
-        else:
-            return {"error": f"Unknown schedule action: {action}"}
-
-    def _schedule_create(self, args: dict, schedule: dict) -> dict:
-        interval = schedule.get("interval")
-        count = schedule.get("count")
-        if interval is None or count is None:
-            return {"error": "schedule.interval and schedule.count are required"}
-        if interval <= 0 or count <= 0:
-            return {"error": "schedule.interval and schedule.count must be positive"}
-
-        raw_address = args.get("address", "")
-        to_list = _coerce_address_list(raw_address)
-        if not to_list:
-            return {"error": "address is required"}
-
-        send_payload = {
-            "address": args.get("address"),
-            "subject": args.get("subject", ""),
-            "message": args.get("message", ""),
-            "cc": args.get("cc") or [],
-            "bcc": args.get("bcc") or [],
-            "type": args.get("type", "normal"),
-        }
-        if args.get("attachments"):
-            send_payload["attachments"] = args["attachments"]
-
-        schedule_id = uuid4().hex[:12]
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        record = {
-            "schedule_id": schedule_id,
-            "send_payload": send_payload,
-            "interval": interval,
-            "count": count,
-            "sent": 0,
-            "created_at": now,
-            "last_sent_at": None,
-            "status": "active",
-        }
-
-        sched_dir = self._schedules_dir / schedule_id
-        sched_dir.mkdir(parents=True, exist_ok=True)
-        self._write_schedule(sched_dir / "schedule.json", record)
-
-        return {"status": "scheduled", "schedule_id": schedule_id, "interval": interval, "count": count}
-
-    def _schedule_cancel(self, schedule: dict) -> dict:
-        schedule_id = schedule.get("schedule_id")
-
-        if not schedule_id:
-            schedules_dir = self._schedules_dir
-            if not schedules_dir.is_dir():
-                return {"status": "paused", "message": "No schedules to cancel"}
-            for sched_dir in schedules_dir.iterdir():
-                if not sched_dir.is_dir():
-                    continue
-                sched_file = sched_dir / "schedule.json"
-                if not sched_file.is_file():
-                    continue
-                try:
-                    record = json.loads(sched_file.read_text(encoding="utf-8"))
-                except (json.JSONDecodeError, OSError):
-                    continue
-                status = record.get("status", "active")
-                if status in ("inactive", "completed"):
-                    continue
-                record["status"] = "inactive"
-                try:
-                    self._write_schedule(sched_file, record)
-                except OSError:
-                    continue
-            return {"status": "paused", "message": "All active schedules paused"}
-
-        record = self._read_schedule(schedule_id)
-        if record is None:
-            return {"error": f"Schedule not found: {schedule_id}"}
-        status = record.get("status", "active")
-        if status == "inactive":
-            return {"status": "already_inactive", "schedule_id": schedule_id}
-        if status == "completed":
-            return {"status": "already_completed", "schedule_id": schedule_id}
-        self._set_schedule_status(schedule_id, "inactive")
-        return {"status": "paused", "schedule_id": schedule_id}
-
-    def _schedule_reactivate(self, schedule: dict) -> dict:
-        schedule_id = schedule.get("schedule_id")
-        if not schedule_id:
-            return {"error": "schedule_id is required for reactivate"}
-        record = self._read_schedule(schedule_id)
-        if record is None:
-            return {"error": f"Schedule not found: {schedule_id}"}
-        status = record.get("status", "active")
-        if status == "completed":
-            return {"error": "Cannot reactivate a completed schedule"}
-        if status == "active":
-            return {"status": "already_active", "schedule_id": schedule_id}
-        sent = record.get("sent", 0)
-        count = record.get("count", 0)
-        if sent >= count:
-            record["status"] = "completed"
-            sched_file = self._schedules_dir / schedule_id / "schedule.json"
-            self._write_schedule(sched_file, record)
-            return {"error": "Cannot reactivate a completed schedule"}
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        record["status"] = "active"
-        record["last_sent_at"] = now
-        sched_file = self._schedules_dir / schedule_id / "schedule.json"
-        self._write_schedule(sched_file, record)
-        return {"status": "reactivated", "schedule_id": schedule_id}
-
-    def _schedule_list(self) -> dict:
-        schedules_dir = self._schedules_dir
-        if not schedules_dir.is_dir():
-            return {"status": "ok", "schedules": []}
-
-        entries = []
-        for sched_dir in schedules_dir.iterdir():
-            if not sched_dir.is_dir():
-                continue
-            sched_file = sched_dir / "schedule.json"
-            if not sched_file.is_file():
-                continue
-            try:
-                record = json.loads(sched_file.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                continue
-
-            payload = record.get("send_payload", {})
-            address = payload.get("address", "")
-            if isinstance(address, list):
-                address = ", ".join(address)
-
-            sent = record.get("sent", 0)
-            count = record.get("count", 0)
-
-            entries.append(scrub_time_fields(self._agent, {
-                "schedule_id": record.get("schedule_id", sched_dir.name),
-                "to": address,
-                "subject": payload.get("subject", ""),
-                "interval": record.get("interval", 0),
-                "count": count,
-                "sent": sent,
-                "status": record.get("status", "active"),
-                "created_at": record.get("created_at", ""),
-                "last_sent_at": record.get("last_sent_at"),
-            }))
-
-        entries.sort(key=lambda e: e.get("created_at", ""), reverse=True)
-        return {"status": "ok", "schedules": entries}
-
-    # ------------------------------------------------------------------
-    # Schedule helpers
-    # ------------------------------------------------------------------
-
-    def _write_schedule(self, path: Path, record: dict) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-        try:
-            os.write(fd, json.dumps(record, indent=2, default=str).encode())
-            os.close(fd)
-            os.replace(tmp, str(path))
-        except Exception:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-            if os.path.exists(tmp):
-                os.unlink(tmp)
-            raise
-
-    def _read_schedule(self, schedule_id: str) -> dict | None:
-        path = self._schedules_dir / schedule_id / "schedule.json"
-        if not path.is_file():
-            return None
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return None
-
-    def _set_schedule_status(self, schedule_id: str, status: str) -> bool:
-        record = self._read_schedule(schedule_id)
-        if record is None:
-            return False
-        record["status"] = status
-        sched_file = self._schedules_dir / schedule_id / "schedule.json"
-        self._write_schedule(sched_file, record)
-        return True
-
-    def _reconcile_schedules_on_startup(self) -> None:
-        """Flip every non-completed schedule to inactive on agent startup."""
-        schedules_dir = self._schedules_dir
-        if not schedules_dir.is_dir():
-            return
-        for sched_dir in schedules_dir.iterdir():
-            if not sched_dir.is_dir():
-                continue
-            sched_file = sched_dir / "schedule.json"
-            if not sched_file.is_file():
-                continue
-            try:
-                record = json.loads(sched_file.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                continue
-            status = record.get("status", "active")
-            if status == "completed":
-                continue
-            if status == "inactive":
-                continue
-            record["status"] = "inactive"
-            try:
-                self._write_schedule(sched_file, record)
-            except OSError:
-                continue
-
-    def _scheduler_loop(self) -> None:
-        """Single polling loop that drives all schedules from disk state."""
-        while not self._stop_event.is_set():
-            try:
-                self._scheduler_tick()
-            except Exception:
-                pass
-            self._stop_event.wait(timeout=1.0)
-
-    def _scheduler_tick(self) -> None:
-        """One scan of all schedule folders."""
-        schedules_dir = self._schedules_dir
-        if not schedules_dir.is_dir():
-            return
-
-        now = datetime.now(timezone.utc)
-
-        for sched_dir in schedules_dir.iterdir():
-            if not sched_dir.is_dir():
-                continue
-
-            sched_file = sched_dir / "schedule.json"
-            if not sched_file.is_file():
-                continue
-
-            try:
-                record = json.loads(sched_file.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                continue
-
-            status = record.get("status", "active")
-            if status != "active":
-                continue
-
-            sent = record.get("sent", 0)
-            count = record.get("count", 0)
-            if sent >= count:
-                continue
-
-            last_sent_at = record.get("last_sent_at")
-            if last_sent_at is not None:
-                try:
-                    last_dt = datetime.strptime(last_sent_at, "%Y-%m-%dT%H:%M:%SZ").replace(
-                        tzinfo=timezone.utc
-                    )
-                except ValueError:
-                    continue
-                interval = record.get("interval", 0)
-                due_at = last_dt + timedelta(seconds=interval)
-                if now < due_at:
-                    continue
-
-            # Claim this tick BEFORE the slow ``_send``: stamp
-            # ``last_sent_at = now`` and persist atomically. Without this,
-            # a second scheduler thread (one leaked across refresh — see
-            # issue #154 — or a future duplicate manager) that reads
-            # ``schedule.json`` while we're inside ``_send`` would see the
-            # previous tick's stale ``last_sent_at`` and decide "still
-            # due", firing the same tick twice. Semantic shift:
-            # ``last_sent_at`` now means "tick we *claimed*", not "tick
-            # we *finished sending*" — but the error / blocked branch
-            # below already writes ``now`` here anyway, so this is
-            # consistent with how the field is already used.
-            seq = sent + 1
-            now_stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-            record["sent"] = seq
-            record["last_sent_at"] = now_stamp
-            self._write_schedule(sched_file, record)
-
-            send_payload = record.get("send_payload", {})
-            remaining = count - seq
-            interval = record.get("interval", 0)
-            estimated_finish = (now + timedelta(seconds=remaining * interval)).strftime(
-                "%Y-%m-%dT%H:%M:%SZ"
-            )
-            schedule_meta = {
-                "schedule_id": record.get("schedule_id", sched_dir.name),
-                "seq": seq,
-                "total": count,
-                "interval": interval,
-                "scheduled_at": now_stamp,
-                "estimated_finish": estimated_finish,
-            }
-            send_args = {**send_payload, "_schedule": schedule_meta}
-            result = self._send(send_args)
-
-            if result.get("error") or result.get("status") == "blocked":
-                # ``last_sent_at`` was already claimed above; nothing to
-                # update here.
-                continue
-
-            to_label = send_payload.get("address", "")
-            subj_label = send_payload.get("subject", "(no subject)")
-            ts = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-            if seq < count:
-                next_at = (now + timedelta(seconds=interval)).strftime(
-                    "%Y-%m-%dT%H:%M:%SZ"
-                )
-                note = (
-                    f"[schedule {seq}/{count}] sent to {to_label} "
-                    f"| subject: {subj_label} "
-                    f"| sent at {ts} "
-                    f"| next at {next_at} "
-                    f"| ends ~{estimated_finish}"
-                )
-            else:
-                note = (
-                    f"[schedule {seq}/{count}] sent to {to_label} "
-                    f"| subject: {subj_label} "
-                    f"| sent at {ts} "
-                    f"| schedule complete"
-                )
-            self._agent._log(
-                "schedule_send", schedule_id=schedule_meta["schedule_id"],
-                seq=seq, total=count, to=to_label, subject=subj_label,
-            )
-            msg = _make_message(MSG_REQUEST, "system", note)
-            self._agent.inbox.put(msg)
-
-            # ``last_sent_at`` was already stamped before _send; only
-            # flip status if the schedule is now complete.
-            if seq >= count:
-                record["status"] = "completed"
-                self._write_schedule(sched_file, record)
-
-    # ------------------------------------------------------------------
     # Send — deliver + save to sent/
     # ------------------------------------------------------------------
 
@@ -621,15 +238,12 @@ class EmailManager:
             return {"error": f"invalid mode: {mode!r} (must be peer or abs)"}
 
         all_targets = to_list + cc + bcc
-        if args.get("_schedule"):
-            duplicates = []
-        else:
-            duplicates = [
-                addr for addr in all_targets
-                if (prev := self._last_sent.get(addr)) is not None
-                and prev[0] == message_text
-                and prev[1] >= self._dup_free_passes
-            ]
+        duplicates = [
+            addr for addr in all_targets
+            if (prev := self._last_sent.get(addr)) is not None
+            and prev[0] == message_text
+            and prev[1] >= self._dup_free_passes
+        ]
         if duplicates:
             return {
                 "status": "blocked",
@@ -714,8 +328,6 @@ class EmailManager:
         }
         if bcc:
             sent_record["bcc"] = bcc
-        if args.get("_schedule"):
-            sent_record["_schedule"] = args["_schedule"]
         (sent_dir / "message.json").write_text(
             json.dumps(sent_record, indent=2, default=str)
         )

@@ -1,4 +1,4 @@
-"""Email intrinsic — filesystem-based mailbox with search, contacts, schedules.
+"""Email intrinsic — filesystem-based mailbox with search and contacts.
 
 Re-exports the full public surface of the former monolithic email.py so all
 existing import sites continue to work unchanged.
@@ -14,12 +14,14 @@ Storage layout:
     working_dir/mailbox/archive/{uuid}/message.json   — archived from inbox
     working_dir/mailbox/read.json                     — read tracking
     working_dir/mailbox/contacts.json                 — contact book
-    working_dir/mailbox/schedules/{id}/schedule.json  — recurring sends
 
 Internal:
-    boot(agent) — instantiates EmailManager on agent._email_manager and starts
-        the scheduler thread. Called from base_agent during agent construction.
+    boot(agent) — instantiates EmailManager on agent._email_manager.
+        Called from base_agent during agent construction.
     handle(agent, args) — module-level dispatcher; delegates to the manager.
+
+Note: recurring/scheduled sends were removed in favor of cron. The email
+tool is now request/response only.
 """
 from __future__ import annotations
 
@@ -94,29 +96,18 @@ def handle(agent, args: dict) -> dict:
 
 
 def boot(agent) -> None:
-    """Boot-time hook: instantiate manager, set agent fields, start scheduler.
+    """Boot-time hook: instantiate manager and wire it onto the agent.
 
     The intrinsic registration (add_tool with schema/handler/description) is
     done by _wire_intrinsics + ALL_INTRINSICS — this hook does the runtime
-    setup that the registry can't: create the manager, wire it into the
-    agent so module-level handle() can find it, and kick the scheduler.
+    setup that the registry can't: create the manager and wire it into the
+    agent so module-level handle() can find it.
 
-    Idempotent on re-boot: if a previous EmailManager was already wired
-    onto ``agent`` (the molt / refresh / cpr path goes through
-    ``_setup_from_init`` which re-runs ``boot``), stop its scheduler
-    thread first. Otherwise the abandoned daemon keeps polling the same
-    ``mailbox/schedules/*/schedule.json`` and races the new thread on
-    read-modify-write — issue #154.
+    Idempotent on re-boot (the molt / refresh / cpr path goes through
+    ``_setup_from_init`` which re-runs ``boot``): simply rebinds a fresh
+    manager.
     """
-    prev = getattr(agent, "_email_manager", None)
-    if prev is not None:
-        try:
-            prev.stop_scheduler()
-        except Exception:
-            pass
     mgr = EmailManager(agent)
     agent._email_manager = mgr
     agent._mailbox_name = "email box"
     agent._mailbox_tool = "email"
-    mgr._reconcile_schedules_on_startup()
-    mgr.start_scheduler()
