@@ -28,6 +28,7 @@ def load_init(working_dir: Path) -> dict:
     """
     from lingtai_kernel.config_resolve import resolve_paths
     from lingtai.presets import materialize_active_preset
+    from lingtai.capabilities import CORE_DEFAULTS
 
     from lingtai_kernel.migrate import run_agent_migrations
 
@@ -45,7 +46,7 @@ def load_init(working_dir: Path) -> dict:
         sys.exit(1)
 
     try:
-        materialize_active_preset(data, working_dir)
+        materialize_active_preset(data, working_dir, core_defaults=CORE_DEFAULTS)
     except (KeyError, ValueError) as e:
         print(f"error: failed to materialize active preset: {e}", file=sys.stderr)
         sys.exit(1)

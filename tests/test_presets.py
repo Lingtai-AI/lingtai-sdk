@@ -685,12 +685,14 @@ def _preset_content(name, llm, capabilities):
     }
 
 
-def test_materialize_wholesale_replaces_init_capabilities(tmp_path):
-    """Documented Bug D behavior: a per-agent init.json capability edit is
-    overwritten by the active preset's capabilities on materialize.
+def test_materialize_init_capability_overrides_win_per_key(tmp_path):
+    """Per-agent init.json capability kwargs win key-by-key over preset kwargs.
 
-    Pinning this makes the wholesale-replace explicit. Users who need a
-    per-agent override must change the preset, not init.json (see PR/issue #114).
+    The preset still owns the capability *set* (atomic swap), but for a
+    capability the preset enables that init.json also configures, init.json's
+    kwargs override the preset's per key. A user who hand-edits init.json's
+    vision config keeps that override across preset materialization rather than
+    having it silently clobbered (the previous "Bug D" wholesale-replace).
     """
     preset_path = _write_preset(
         tmp_path, "GLM5.1",
@@ -716,8 +718,16 @@ def test_materialize_wholesale_replaces_init_capabilities(tmp_path):
     }
     materialize_active_preset(data, working_dir=tmp_path)
 
-    # the user's init.json vision override is gone — preset wins wholesale
-    assert data["manifest"]["capabilities"] == {"vision": {"provider": "inherit"}}
+    # init.json's per-key overrides win — vision keeps the user's model/base_url
+    # and overrides the preset's provider:"inherit" with provider:"custom".
+    assert data["manifest"]["capabilities"] == {
+        "vision": {
+            "provider": "custom",
+            "api_compat": "openai",
+            "model": "Kimi-K2.6",
+            "base_url": "http://127.0.0.1:34891/v1",
+        },
+    }
 
 
 def test_materialize_preserves_init_skills_paths_carveout(tmp_path):

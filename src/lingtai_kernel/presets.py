@@ -286,18 +286,47 @@ def load_preset(
     return data
 
 
-def materialize_active_preset(data: dict, working_dir: Path) -> None:
+def materialize_active_preset(
+    data: dict,
+    working_dir: Path,
+    core_defaults: dict | set | list | None = None,
+) -> None:
     """Substitute the active preset's llm + capabilities into init.json data.
 
     If ``manifest.preset.active`` is set, load that preset and copy its
     ``manifest.llm`` and ``manifest.capabilities`` into ``data["manifest"]``
     so downstream validators and consumers see a fully-resolved manifest.
 
-    Capabilities are wholesale-replaced by the preset (atomic swap is the
-    whole point of presets) with one carve-out: ``skills.paths`` from
-    init.json appends to the preset's skills paths, deduped, preset defaults
-    first. Skill paths are project-truth (where this agent's extra skills
-    live) — swapping presets should not erase them.
+    The active preset owns explicit opt-in capability/tier choices (atomic
+    swap is the whole point of presets), but it must not silently discard
+    per-agent capability kwargs declared in init.json. Two layers preserve
+    those:
+
+    - **Per-key override** (any capability the preset *also* enables):
+      init.json's kwargs win key-by-key over the preset's — e.g. init.json's
+      ``daemon.max_emanations`` survives a preset that also enables daemon
+      with a different ceiling.
+    - **Core-default carry-forward** (capabilities the preset *omits*): for
+      capability names in ``core_defaults`` — the always-on floor
+      (``knowledge``/``skills``/``bash``/``avatar``/``daemon``/``mcp``/
+      ``read``/``write``/``edit``/``glob``/``grep``) — init.json's kwargs are
+      carried into the materialized manifest even when the preset never
+      mentions the capability. Without this, a preset that omits ``daemon``
+      drops init.json's ``daemon.max_emanations``, and ``apply_core_defaults``
+      later re-adds ``daemon={}`` (losing the override). Non-core optional
+      capabilities (``vision``/``web_search``/...) the preset omits are NOT
+      carried — that omission is the swap.
+
+    ``core_defaults`` is the set/dict/list of always-on capability names; pass
+    ``lingtai.capabilities.CORE_DEFAULTS`` from the wrapper. It lives in
+    ``lingtai`` (not the kernel), so it is injected rather than imported —
+    the kernel must not depend on the wrapper. When ``None`` (legacy callers
+    and the no-core tests), only the per-key override layer runs.
+
+    The ``skills.paths`` carve-out (init.json extras append to the preset's
+    skills paths, deduped, preset defaults first) layers on top of both —
+    ``skills`` is excluded from the generic merge so this append-dedup logic
+    stays in charge.
 
     Mutates ``data`` in place. No-op when ``manifest.preset.active`` is unset
     or when the manifest already has a literal ``llm`` and no preset block.
@@ -352,14 +381,24 @@ def materialize_active_preset(data: dict, working_dir: Path) -> None:
     preset_ctx = preset_llm.pop("context_limit", None)
     manifest["llm"] = preset_llm
 
-    # Capabilities are wholesale-replaced by the preset (atomic swap is the
-    # whole point of presets). One carve-out preserves project-truth across
-    # preset switches:
-    #   - skills.paths: extras declared in init.json append to the preset's
-    #     defaults. Skill paths are project-truth (where this agent's extra
-    #     skills live), not runtime-tier choices, so swapping presets should
-    #     not erase them.
+    # The preset chooses *which* opt-in capabilities run (atomic swap is the
+    # whole point of presets), but it must not clobber per-agent capability
+    # kwargs declared in init.json. Two layers preserve those (see docstring):
+    #   1. Per-key override — for capabilities the preset ALSO enables,
+    #      init.json's kwargs win key-by-key.
+    #   2. Core-default carry-forward — for always-on capabilities (in
+    #      `core_defaults`) the preset OMITS, init.json's kwargs are carried in
+    #      anyway, since those capabilities boot regardless of the preset.
+    # `skills` is excluded from both generic passes; its dedicated append-dedup
+    # block below owns it (and skills is itself a core default).
     # If you need to add another carve-out, do it here — keep the list short.
+    if isinstance(core_defaults, dict):
+        core_names: set[str] = set(core_defaults.keys())
+    elif core_defaults is not None:
+        core_names = set(core_defaults)
+    else:
+        core_names = set()
+
     init_caps = manifest.get("capabilities", {}) if isinstance(
         manifest.get("capabilities"), dict) else {}
     init_skill_paths: list[str] = []
@@ -370,6 +409,25 @@ def materialize_active_preset(data: dict, working_dir: Path) -> None:
                 init_skill_paths.append(path)
 
     new_caps = preset_manifest.get("capabilities", init_caps)
+    if isinstance(new_caps, dict) and isinstance(init_caps, dict):
+        merged_caps = dict(new_caps)
+        # 1. Per-key override for capabilities the preset also enables.
+        for cap_name, preset_kwargs in new_caps.items():
+            if cap_name == "skills":
+                continue
+            init_kwargs = init_caps.get(cap_name)
+            if isinstance(preset_kwargs, dict) and isinstance(init_kwargs, dict):
+                merged_caps[cap_name] = {**preset_kwargs, **init_kwargs}
+        # 2. Carry forward init kwargs for always-on capabilities the preset
+        #    omits — these boot via apply_core_defaults regardless, so their
+        #    per-agent kwargs must not be lost. `skills` stays with its block.
+        for cap_name in core_names:
+            if cap_name == "skills" or cap_name in new_caps:
+                continue
+            init_kwargs = init_caps.get(cap_name)
+            if isinstance(init_kwargs, dict):
+                merged_caps[cap_name] = dict(init_kwargs)
+        new_caps = merged_caps
     if isinstance(new_caps, dict) and init_skill_paths:
         # Make sure we have a skills entry to merge into. If the preset didn't
         # enable skills, init.json's paths alone are enough to enable it.

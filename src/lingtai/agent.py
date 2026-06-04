@@ -842,6 +842,7 @@ class Agent(BaseAgent):
         from lingtai_kernel.config_resolve import resolve_paths
         from lingtai_kernel.migrate import run_agent_migrations
         from .presets import expand_inherit, materialize_active_preset
+        from .capabilities import CORE_DEFAULTS
 
         run_agent_migrations(self._working_dir)
 
@@ -858,7 +859,8 @@ class Agent(BaseAgent):
         # Materialize active preset, if any, BEFORE validation so the manifest
         # the schema validates is the fully-resolved one the agent will run on.
         try:
-            materialize_active_preset(data, self._working_dir)
+            materialize_active_preset(data, self._working_dir,
+                                      core_defaults=CORE_DEFAULTS)
         except (KeyError, ValueError) as e:
             self._log("refresh_init_error",
                       error=f"preset materialization failed: {e}")

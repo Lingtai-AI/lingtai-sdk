@@ -179,7 +179,7 @@ CustomAgent(Agent) — host's wrapper (subclass with domain logic)
 | `draw` | `capabilities=["draw"]` | Text-to-image via MiniMax MCP |
 | `video` | `capabilities=["video"]` or `{"video": {"provider": "minimax"}}` | Video generation via MiniMax MCP. Text-to-video and image-to-video (via `first_frame_image`). Director models support camera movement instructions in prompts. Output: MP4 saved to media/videos/. |
 | `listen` | `capabilities=["listen"]` | Speech transcription + music analysis |
-| `daemon` | `capabilities=["daemon"]` or `{"daemon": {"max_emanations": 10}}` | Subagent system (分神). Dispatch ephemeral LLM sessions as parallel workers in the same working dir. Actions: emanate (分, dispatch batch), list (观, status), ask (问, follow-up), reclaim (收, kill all). Results return as `[daemon:em-N]` notifications. MCP tools auto-inherited. Blacklist: daemon, avatar, psyche, skills, knowledge. |
+| `daemon` | `capabilities=["daemon"]` or `{"daemon": {"max_emanations": 100}}` | Subagent system (分神). Dispatch ephemeral LLM sessions as parallel workers in the same working dir. Actions: emanate (分, dispatch batch), list (观, status), ask (问, follow-up), reclaim (收, kill all). Results return as `[daemon:em-N]` notifications. MCP tools auto-inherited. Blacklist: daemon, avatar, psyche, skills, knowledge. |
 
 ### Extension Pattern
 
