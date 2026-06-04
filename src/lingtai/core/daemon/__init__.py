@@ -3189,7 +3189,12 @@ class DaemonManager:
             future for e in self._emanations.values()
             if (future := e.get("future")) is not None
         ]
-        cancelled = sum(1 for future in futures if not future.done())
+        ask_futures = [
+            future for e in self._emanations.values()
+            if (future := e.get("ask_future")) is not None
+        ]
+        wait_futures = futures + ask_futures
+        cancelled = sum(1 for future in wait_futures if not future.done())
         errors: list[str] = []
 
         # Kill all tracked CLI process groups first — this terminates child
@@ -3233,13 +3238,15 @@ class DaemonManager:
         # grace period while killed CLI workers and cooperative daemon loops
         # unwind. Explicit daemon(action="reclaim") keeps the old non-blocking
         # behavior by passing wait_timeout=0.
-        futures_remaining = sum(1 for future in futures if not future.done())
+        futures_remaining = sum(1 for future in wait_futures if not future.done())
         if wait_timeout > 0 and futures_remaining:
             try:
-                wait(futures, timeout=wait_timeout)
+                wait(wait_futures, timeout=wait_timeout)
             except Exception as e:  # pragma: no cover - defensive teardown
                 errors.append(f"wait futures: {e}")
-            futures_remaining = sum(1 for future in futures if not future.done())
+            futures_remaining = sum(
+                1 for future in wait_futures if not future.done()
+            )
 
         self._emanations.clear()
         self._next_id = 1  # handles can be re-used; folder names disambiguate
@@ -3250,6 +3257,7 @@ class DaemonManager:
             "cancelled": cancelled,
             "cli_processes_killed": len(procs_to_kill),
             "pools_shutdown": len(pools),
+            "ask_futures_shutdown": len(ask_futures),
             "futures_remaining": futures_remaining,
             "errors": errors,
         }

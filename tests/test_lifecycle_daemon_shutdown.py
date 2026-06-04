@@ -24,7 +24,11 @@ def test_daemon_shutdown_for_agent_stop_reclaims_pools_and_cli_processes(tmp_pat
     mgr = daemon_module.DaemonManager(agent)
 
     pending = Future()
-    mgr._emanations["em-1"] = {"future": pending}
+    ask_pending = Future()
+    mgr._emanations["em-1"] = {
+        "future": pending,
+        "ask_future": ask_pending,
+    }
 
     class FakePool:
         def __init__(self):
@@ -54,9 +58,10 @@ def test_daemon_shutdown_for_agent_stop_reclaims_pools_and_cli_processes(tmp_pat
 
     assert report["status"] == "shutdown"
     assert report["reason"] == "agent_stop"
-    assert report["cancelled"] == 1
+    assert report["cancelled"] == 2
     assert report["cli_processes_killed"] == 1
     assert report["pools_shutdown"] == 1
+    assert report["ask_futures_shutdown"] == 1
     assert killed == [4242]
     assert cancel.is_set()
     assert pool.shutdown_calls == [{"wait": False, "cancel_futures": True}]
@@ -104,3 +109,35 @@ def test_agent_stop_shuts_down_daemon_before_heartbeat_and_lock(monkeypatch):
     assert order.index(("daemon", "agent_stop")) < order.index(("heartbeat", None))
     assert order.index(("daemon", "agent_stop")) < order.index(("lock", None))
     assert order.index(("manifest", {"agent": "test"})) < order.index(("heartbeat", None))
+
+
+def test_daemon_shutdown_waits_for_cli_ask_future_before_releasing_liveness(tmp_path, monkeypatch):
+    from lingtai.core import daemon as daemon_module
+
+    agent = SimpleNamespace(
+        service=SimpleNamespace(model="mock-model"),
+        _working_dir=tmp_path / "agent",
+        _log=lambda *args, **kwargs: None,
+    )
+    mgr = daemon_module.DaemonManager(agent)
+
+    primary_done = Future()
+    primary_done.set_result("done")
+    ask_done = Future()
+    mgr._emanations["em-1"] = {
+        "future": primary_done,
+        "ask_future": ask_done,
+    }
+
+    waits = []
+
+    def fake_wait(futures, timeout):
+        waits.append((set(futures), timeout))
+        ask_done.set_result("ask done")
+
+    monkeypatch.setattr(daemon_module, "wait", fake_wait)
+    report = mgr.shutdown_for_agent_stop(reason="agent_stop", wait_timeout=2.5)
+
+    assert waits == [({primary_done, ask_done}, 2.5)]
+    assert report["ask_futures_shutdown"] == 1
+    assert report["futures_remaining"] == 0
