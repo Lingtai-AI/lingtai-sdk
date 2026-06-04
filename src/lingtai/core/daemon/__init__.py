@@ -7,7 +7,7 @@ agent.  Results are persisted in daemon run directories; completion is surfaced 
 
 Usage:
     Agent(capabilities=["daemon"])
-    Agent(capabilities={"daemon": {"max_emanations": 10}})
+    Agent(capabilities={"daemon": {"max_emanations": 100}})
 """
 from __future__ import annotations
 
@@ -334,7 +334,7 @@ class DaemonManager:
     # Short results (e.g. "[cancelled]") are suppressed to avoid notification storms.
     _NOTIFY_MIN_LEN = 20
 
-    def __init__(self, agent: "Agent", max_emanations: int = 10,
+    def __init__(self, agent: "Agent", max_emanations: int = 100,
                  max_turns: int = 200, timeout: float = 3600.0,
                  notify_threshold: int = 20):
         self._agent = agent
@@ -3257,7 +3257,7 @@ class DaemonManager:
             self._agent._log(event_type, **fields)
 
 
-def setup(agent: "Agent", max_emanations: int = 10,
+def setup(agent: "Agent", max_emanations: int = 100,
           max_turns: int = 200, timeout: float = 3600.0,
           notify_threshold: int = 20) -> DaemonManager:
     """Set up the daemon capability on an agent."""

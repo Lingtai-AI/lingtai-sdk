@@ -51,6 +51,22 @@ def test_daemon_registers_tool(tmp_path):
     assert "daemon" in tool_names
 
 
+def test_daemon_default_max_emanations_is_100(tmp_path):
+    """Default concurrency ceiling is 100 when init.json gives no override."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    assert mgr._max_emanations == 100
+    assert mgr._handle_list()["max_emanations"] == 100
+
+
+def test_daemon_max_emanations_override_reaches_manager(tmp_path):
+    """A kwargs override on the daemon capability reaches DaemonManager."""
+    agent = _make_agent(tmp_path, {"daemon": {"max_emanations": 30}})
+    mgr = agent.get_capability("daemon")
+    assert mgr._max_emanations == 30
+    assert mgr._handle_list()["max_emanations"] == 30
+
+
 def test_build_tool_surface_expands_groups(tmp_path):
     """'file' group expands to read/write/edit/glob/grep."""
     agent = _make_agent(tmp_path, ["file", "daemon"])

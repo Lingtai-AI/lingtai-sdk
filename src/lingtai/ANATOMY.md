@@ -24,7 +24,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 
 **`cli.py`**: `load_init` :21 · `build_agent` :72 · `run` :200 · `main` :246
 
-**`presets.py`**: compatibility re-export shim (`presets.py:1-21`); implementation lives in `lingtai_kernel.presets` (`load_preset` :175 · `materialize_active_preset` :290 · `expand_inherit` :444 · `discover_presets_in_dirs` :121).
+**`presets.py`**: compatibility re-export shim (`presets.py:1-21`); implementation lives in `lingtai_kernel.presets` (`load_preset` :175 · `materialize_active_preset` :290 · `expand_inherit` :503 · `discover_presets_in_dirs` :121).
 
 **`init_schema.py`**: `DEPRECATED_TOP_FIELDS` :28 (plain deprecated top-level fields stripped by `strip_deprecated`), `LEGACY_MIGRATED_TOP_FIELDS` :38 (legacy fields removed by version-controlled agent migrations and known only as inactive schema), `validate_init` :98, `TOP_OPTIONAL` :13, `MANIFEST_OPTIONAL` :59.
 
@@ -46,7 +46,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 
 **Capability registration:** `setup_capability()` in `capabilities/__init__.py`; the registry is `_BUILTIN` (per-capability module paths) plus `CORE_DEFAULTS` (which boot automatically). Agent calls `apply_core_defaults` + `_setup_capability` (agent.py:148) during `__init__` and `_setup_from_init`. Hosts disable defaults via the `disable=[...]` kwarg or `manifest.disable` in init.json.
 
-**Agent init migration + preset materialization:** `run_agent_migrations` (`lingtai_kernel/migrate/migrate.py:285`) is called by `cli.load_init` (boot) and `Agent._read_init` (refresh) before `init.json` is read/validated. Then `materialize_active_preset` (`lingtai_kernel/presets.py:290`) reads `manifest.preset.active`, loads preset, substitutes `llm`+`capabilities` into manifest before validation.
+**Agent init migration + preset materialization:** `run_agent_migrations` (`lingtai_kernel/migrate/migrate.py:285`) is called by `cli.load_init` (boot) and `Agent._read_init` (refresh) before `init.json` is read/validated. Then `materialize_active_preset` (`lingtai_kernel/presets.py:290`) reads `manifest.preset.active`, loads preset, substitutes `llm`+`capabilities` into manifest before validation. The preset owns explicit opt-in capabilities, but per-agent init.json kwargs survive in two ways: (1) for capabilities the preset *also* enables, init.json wins key-by-key; (2) for always-on `CORE_DEFAULTS` capabilities the preset *omits* (daemon, bash, knowledge, …), init.json kwargs are carried forward so `apply_core_defaults` doesn't re-add an empty entry and lose e.g. `daemon.max_emanations`. Non-core optional caps the preset omits are dropped (the swap). `CORE_DEFAULTS` lives in `lingtai.capabilities` and is injected via the `core_defaults=` arg by both callers (`agent._read_init` :861, `cli.load_init` :48) — the kernel does not import the wrapper. `skills.paths` additionally append-merges (preset defaults first).
 
 ## Composition
 

@@ -327,6 +327,227 @@ def test_materialize_picks_up_context_limit_from_llm_block(tmp_path, monkeypatch
     assert "context_limit" not in data["manifest"]["llm"]
 
 
+def test_materialize_preserves_init_capability_overrides(tmp_path, monkeypatch):
+    """Per-agent capability kwargs in init.json survive preset materialization.
+
+    A preset enabling daemon must not clobber init.json's
+    manifest.capabilities.daemon.max_emanations — the preset decides *which*
+    capabilities run, but per-agent overrides win key-by-key. Regression for
+    daemon(list) reporting the default ceiling instead of the configured one.
+    """
+    plib = _make_preset_lib(tmp_path, {
+        "smart": {
+            "name": "smart",
+            "description": {"summary": "smart preset with daemon"},
+            "manifest": {
+                "llm": {"provider": "gemini", "model": "gemini-2.5-pro",
+                        "api_key": None, "api_key_env": "GEMINI_API_KEY"},
+                # Preset enables daemon with its own (default-ish) ceiling.
+                "capabilities": {"file": {}, "daemon": {"max_emanations": 10}},
+            },
+        },
+    })
+    monkeypatch.setenv("GEMINI_API_KEY", "sk-test")
+    # init.json declares daemon with a per-agent override of 30.
+    wd = _make_workdir(
+        tmp_path, active_preset=str(plib / "smart.json"),
+        manifest_extra={"capabilities": {"daemon": {"max_emanations": 30}}},
+    )
+    a = _make_probe_agent(wd)
+    data = a._read_init()
+    caps = data["manifest"]["capabilities"]
+    # Preset still chose the capability set (file is present from the preset)...
+    assert "file" in caps
+    assert "daemon" in caps
+    # ...but the init.json override wins for the key it specified.
+    assert caps["daemon"]["max_emanations"] == 30
+
+
+def test_materialize_preset_only_capability_kwargs_kept(tmp_path, monkeypatch):
+    """Preset kwargs survive for capabilities init.json does NOT override.
+
+    The merge must not erase preset-supplied kwargs for capabilities the agent
+    never mentions — only same-key overrides win.
+    """
+    plib = _make_preset_lib(tmp_path, {
+        "smart": {
+            "name": "smart",
+            "description": {"summary": "smart preset"},
+            "manifest": {
+                "llm": {"provider": "gemini", "model": "gemini-2.5-pro",
+                        "api_key": None, "api_key_env": "GEMINI_API_KEY"},
+                "capabilities": {"daemon": {"max_emanations": 50, "max_turns": 99}},
+            },
+        },
+    })
+    monkeypatch.setenv("GEMINI_API_KEY", "sk-test")
+    # init.json overrides only max_emanations; max_turns must come from preset.
+    wd = _make_workdir(
+        tmp_path, active_preset=str(plib / "smart.json"),
+        manifest_extra={"capabilities": {"daemon": {"max_emanations": 30}}},
+    )
+    a = _make_probe_agent(wd)
+    data = a._read_init()
+    daemon_kw = data["manifest"]["capabilities"]["daemon"]
+    assert daemon_kw["max_emanations"] == 30   # init override wins
+    assert daemon_kw["max_turns"] == 99        # preset kwarg preserved
+
+
+def test_materialize_preserves_core_default_override_when_preset_omits_it(tmp_path, monkeypatch):
+    """A CORE_DEFAULTS capability's init.json kwargs survive even when the
+    active preset OMITS that capability entirely.
+
+    Jason's real case: the codex preset enables file/web tools but never
+    mentions daemon. daemon is always-on (CORE_DEFAULTS), so init.json's
+    daemon.max_emanations=30 must be carried into the materialized manifest;
+    otherwise apply_core_defaults later re-adds daemon={} and the override is
+    lost. Non-core capabilities the preset omits are still dropped (the swap).
+    """
+    plib = _make_preset_lib(tmp_path, {
+        "codex": {
+            "name": "codex",
+            "description": {"summary": "codex preset — no daemon entry"},
+            "manifest": {
+                "llm": {"provider": "gemini", "model": "gemini-2.5-pro",
+                        "api_key": None, "api_key_env": "GEMINI_API_KEY"},
+                # Note: NO daemon key. Has a non-core optional cap instead.
+                "capabilities": {"file": {}, "web_search": {"provider": "inherit"}},
+            },
+        },
+    })
+    monkeypatch.setenv("GEMINI_API_KEY", "sk-test")
+    wd = _make_workdir(
+        tmp_path, active_preset=str(plib / "codex.json"),
+        manifest_extra={"capabilities": {
+            "daemon": {"max_emanations": 30},   # core default — must survive
+            "vision": {"provider": "custom"},   # non-core, preset omits — must drop
+        }},
+    )
+    a = _make_probe_agent(wd)
+    data = a._read_init()
+    caps = data["manifest"]["capabilities"]
+    # Core-default daemon override carried forward despite preset omitting it.
+    assert "daemon" in caps
+    assert caps["daemon"]["max_emanations"] == 30
+    # Preset still owns the explicit opt-in set.
+    assert "web_search" in caps
+    # Non-core optional capability that the preset omits is NOT carried over.
+    assert "vision" not in caps
+
+
+def test_materialize_core_default_no_init_override_left_to_apply_core_defaults(tmp_path, monkeypatch):
+    """When init.json has no kwargs for a core-default cap and the preset omits
+    it too, materialize leaves it absent — apply_core_defaults adds the floor
+    later. Materialize must not invent empty core entries."""
+    plib = _make_preset_lib(tmp_path, {
+        "codex": {
+            "name": "codex",
+            "description": {"summary": "codex preset"},
+            "manifest": {
+                "llm": {"provider": "gemini", "model": "gemini-2.5-pro",
+                        "api_key": None, "api_key_env": "GEMINI_API_KEY"},
+                "capabilities": {"file": {}},
+            },
+        },
+    })
+    monkeypatch.setenv("GEMINI_API_KEY", "sk-test")
+    # init.json declares only file (no daemon kwargs).
+    wd = _make_workdir(
+        tmp_path, active_preset=str(plib / "codex.json"),
+        manifest_extra={"capabilities": {"file": {}}},
+    )
+    a = _make_probe_agent(wd)
+    data = a._read_init()
+    caps = data["manifest"]["capabilities"]
+    # No daemon entry invented by materialize — apply_core_defaults owns the floor.
+    assert "daemon" not in caps
+
+
+def test_refresh_preset_omitting_daemon_keeps_override_in_manager(tmp_path, monkeypatch):
+    """End-to-end refresh for Jason's case: active preset omits daemon, init.json
+    sets daemon.max_emanations=30 → live DaemonManager ceiling is 30."""
+    from unittest.mock import MagicMock
+    from lingtai.agent import Agent
+    from lingtai_kernel.config import AgentConfig
+
+    plib = _make_preset_lib(tmp_path, {
+        "codex": {
+            "name": "codex",
+            "description": {"summary": "codex preset, no daemon"},
+            "manifest": {
+                "llm": {"provider": "deepseek", "model": "deepseek-v4-flash",
+                        "api_key": None, "api_key_env": "DEEPSEEK_API_KEY"},
+                "capabilities": {"file": {}},   # no daemon entry
+            },
+        },
+    })
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    wd = _make_workdir(
+        tmp_path, active_preset=str(plib / "codex.json"),
+        manifest_extra={"capabilities": {"daemon": {"max_emanations": 30}}},
+    )
+
+    svc = MagicMock()
+    svc.provider = "mock"
+    svc.model = "mock-model"
+    svc.create_session = MagicMock()
+    svc.make_tool_result = MagicMock()
+    agent = Agent(svc, working_dir=wd, capabilities=["daemon"],
+                  config=AgentConfig())
+    agent._setup_from_init()
+
+    mgr = agent.get_capability("daemon")
+    assert mgr is not None
+    assert mgr._max_emanations == 30
+    assert mgr._handle_list()["max_emanations"] == 30
+
+
+def test_refresh_preset_keeps_daemon_override_in_manager(tmp_path, monkeypatch):
+    """End-to-end refresh: a real Agent with an active preset that enables
+    daemon at 10 plus an init.json daemon override of 30 ends up with a live
+    DaemonManager whose ceiling is 30 (and daemon(list) reports 30).
+
+    This exercises the full path the bug report described: materialize active
+    preset → _setup_from_init → _setup_capability("daemon", ...) → DaemonManager.
+    """
+    from unittest.mock import MagicMock
+    from lingtai.agent import Agent
+    from lingtai_kernel.config import AgentConfig
+
+    plib = _make_preset_lib(tmp_path, {
+        "smart": {
+            "name": "smart",
+            "description": {"summary": "smart preset enabling daemon"},
+            "manifest": {
+                "llm": {"provider": "deepseek", "model": "deepseek-v4-flash",
+                        "api_key": None, "api_key_env": "DEEPSEEK_API_KEY"},
+                "capabilities": {"daemon": {"max_emanations": 10}},
+            },
+        },
+    })
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    wd = _make_workdir(
+        tmp_path, active_preset=str(plib / "smart.json"),
+        manifest_extra={"capabilities": {"daemon": {"max_emanations": 30}}},
+    )
+
+    svc = MagicMock()
+    svc.provider = "mock"
+    svc.model = "mock-model"
+    svc.create_session = MagicMock()
+    svc.make_tool_result = MagicMock()
+    agent = Agent(svc, working_dir=wd, capabilities=["daemon"],
+                  config=AgentConfig())
+
+    # Drive the documented "fix config → refresh" reconstruct path.
+    agent._setup_from_init()
+
+    mgr = agent.get_capability("daemon")
+    assert mgr is not None
+    assert mgr._max_emanations == 30
+    assert mgr._handle_list()["max_emanations"] == 30
+
+
 def test_materialize_inherit_expansion_runs(tmp_path, monkeypatch):
     """Capabilities with provider:inherit get the main LLM's provider after materialization."""
     plib = _make_preset_lib(tmp_path, {
