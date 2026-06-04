@@ -244,3 +244,26 @@ def test_perform_refresh_watcher_marks_env_file_overwrite(tmp_path):
     assert mock_popen.called
     _, kwargs = mock_popen.call_args
     assert kwargs["env"]["LINGTAI_REFRESH_ENV_OVERWRITE"] == "1"
+
+
+def test_refresh_watcher_script_cleans_stale_duplicate_process(tmp_path):
+    """Production incident 2026-06-04: refresh watcher relaunches can be
+    blocked by a stale `lingtai run <agent-dir>` process. The watcher script
+    must detect the duplicate-process guard stderr and terminate only a stale
+    same-agent process (no fresh heartbeat) before retrying.
+    """
+    agent = _make_agent_with_launch_cmd(tmp_path)
+
+    with patch("subprocess.Popen") as mock_popen:
+        agent._perform_refresh()
+
+    assert mock_popen.called
+    args, _kwargs = mock_popen.call_args
+    script = args[0][2]
+    assert "another lingtai agent is already running" in script
+    assert "def _cleanup_stale_duplicate" in script
+    assert "('lingtai run ' + wd) in cmdline" in script
+    assert "heartbeat_age" in script
+    assert "signal.SIGTERM" in script
+    assert "signal.SIGKILL" in script
+    assert "refresh_watcher_stale_duplicate" in script
