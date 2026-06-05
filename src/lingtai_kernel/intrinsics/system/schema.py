@@ -14,7 +14,7 @@ def get_schema(lang: str = "en") -> dict:
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["refresh", "sleep", "lull", "interrupt", "suspend", "cpr", "clear", "nirvana", "presets", "dismiss", "notification"],
+                "enum": ["refresh", "sleep", "lull", "interrupt", "suspend", "cpr", "clear", "nirvana", "presets", "dismiss", "notification", "snapshot", "snapshots", "rollback_preview", "rollback"],
                 "description": t(lang, "system_tool.action_description"),
             },
             "reason": {
@@ -40,6 +40,14 @@ def get_schema(lang: str = "en") -> dict:
             "force": {
                 "type": "boolean",
                 "description": t(lang, "system_tool.force_description"),
+            },
+            "ref": {
+                "type": "string",
+                "description": t(lang, "system_tool.ref_description"),
+            },
+            "limit": {
+                "type": "integer",
+                "description": t(lang, "system_tool.limit_description"),
             },
         },
         "required": ["action"],

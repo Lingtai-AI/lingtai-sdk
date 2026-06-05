@@ -1,6 +1,8 @@
 # intrinsics/system
 
-System intrinsic — runtime, lifecycle, and synchronization. Provides the agent with refresh (hot-reload config/presets), karma-gated lifecycle actions on other agents (sleep, lull, suspend, cpr, interrupt, clear, nirvana), preset listing, voluntary notification reads (`action="notification"`), and a generic notification dismiss (`dismiss`). The system module is also the **conceptual home** of the notification surface — it re-exports `publish_notification` / `clear_notification` from the kernel-root `notifications.py` so any in-process producer (intrinsic, capability, or wired-in MCP server) submits through one canonical entry point.
+System intrinsic — runtime, lifecycle, and synchronization. Provides the agent with refresh (hot-reload config/presets), karma-gated lifecycle actions on other agents (sleep, lull, suspend, cpr, interrupt, clear, nirvana), preset listing, voluntary notification reads (`action="notification"`), a generic notification dismiss (`dismiss`), and a **filesystem Time Machine** (`snapshot`, `snapshots`, `rollback_preview`, `rollback`) that lets the agent capture and restore its own working-directory state via git. The system module is also the **conceptual home** of the notification surface — it re-exports `publish_notification` / `clear_notification` from the kernel-root `notifications.py` so any in-process producer (intrinsic, capability, or wired-in MCP server) submits through one canonical entry point.
+
+> **Note:** the Time Machine is *filesystem* rollback (working-directory git state), distinct from `psyche` snapshots which roll back *conversation/context* state. The two are independent.
 
 > **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues.
 
@@ -11,7 +13,8 @@ System intrinsic — runtime, lifecycle, and synchronization. Provides the agent
   - `_dismiss` (re-exported from `notification.py`) — agent-facing generic notification dismiss; routes `channel`/`force` through `notifications.dismiss_channel` and keeps a one-release legacy `ids=` soak path.
   - **`publish_notification` / `clear_notification`** (re-exported from `lingtai_kernel.notifications` as `submit` / `clear`) — canonical producer entry point. Importable as `from lingtai_kernel.intrinsics.system import publish_notification, clear_notification`. The system module owns the notification surface conceptually; the implementation lives at the kernel root so non-intrinsic callers (and external scripts) can import it without going through the intrinsic surface.
   - All handler functions re-exported from sub-modules for backward compatibility.
-  - `handle()` (`__init__.py:82-109`) — main dispatcher with explicit dispatch table. The `notification` action takes a fast path that returns `collect_notifications(agent._working_dir)` directly without going through the dispatch table — voluntary reads of the agent's own `.notification/` state.
+  - `_snapshot` / `_snapshots` / `_rollback_preview` / `_rollback` (re-exported from `time_machine.py`) — agent-facing filesystem Time Machine actions.
+  - `handle()` (`__init__.py:82-109`) — main dispatcher with explicit dispatch table. The `notification` action takes a fast path that returns `collect_notifications(agent._working_dir)` directly without going through the dispatch table — voluntary reads of the agent's own `.notification/` state. The dispatch table also routes the four Time Machine actions to `time_machine.py`.
 
 - `preset.py` — Preset management and refresh.
   - `_preset_ref_in()` (`preset.py:9-36`) — normalized membership test for preset path strings (~/foo vs absolute).
@@ -33,16 +36,23 @@ System intrinsic — runtime, lifecycle, and synchronization. Provides the agent
 - `notification.py` — agent-facing generic dismiss. The `.notification/` filesystem-as-protocol uses one file per producer channel; `_dismiss()` (`notification.py:12-40`) accepts `channel`, optional `force`, and optional `reason`, then calls `notifications.dismiss_channel(agent, ...)`. Legacy `ids=` calls are accepted for one release, log `system_dismiss_legacy_ids_ignored`, and clear nothing. The kernel-owned `post-molt` channel requires a non-empty `reason` so clearing it is an explicit continue/defer/obsolete acknowledgement rather than an accidental sweep.
   - Producer-side notification submission lives in `notifications.py` at the kernel root and is re-exported by this package's `__init__.py` as `publish_notification` / `clear_notification`. See root `ANATOMY.md` "Notifications" for the full architecture and dismissal taxonomy.
 
+- `time_machine.py` — filesystem Time Machine (working-directory rollback).
+  - `_wd()` (`time_machine.py:24-30`) — returns `agent._workdir` (a `WorkingDir`), constructing one from `agent._working_dir` if not attached. Keeps handlers decoupled and unit-testable with a thin stub agent.
+  - `_snapshot()` — captures the whole working directory as a git commit via `WorkingDir.snapshot()` (no-op if clean); logs `system_snapshot`.
+  - `_snapshots()` — lists recent snapshots via `WorkingDir.snapshot_list(limit)`; clamps `limit` to 1..100 (default 20).
+  - `_rollback_preview()` — read-only; requires `ref`; returns `WorkingDir.rollback_preview(ref)` (resolved ref, current HEAD, dirty/untracked, affected files, warning). Maps an unresolvable ref to `reason="invalid_ref"`, a missing ref to `reason="missing_ref"`.
+  - `_rollback()` — applies `WorkingDir.rollback_apply(ref, force)`. Requires `ref`; honors `force`. Safety (dirty-tree refusal, invalid-ref refusal, safety-ref tagging, `.git` preservation) is enforced in `WorkingDir`; the handler logs `system_rollback` with status/reason/safety_ref.
+
 - `schema.py` — Tool registration.
   - `get_description()` (`schema.py:5-7`) — returns localized tool description.
-  - `get_schema()` (`schema.py:10-46`) — returns JSON schema for the system tool. Action enum includes `dismiss` plus `channel`/`force` parameters for generic notification clearing; legacy `ids` remains handler-only and is no longer taught in schema.
+  - `get_schema()` (`schema.py:10-46`) — returns JSON schema for the system tool. Action enum includes `dismiss` plus `channel`/`force` parameters for generic notification clearing; the four Time Machine actions (`snapshot`, `snapshots`, `rollback_preview`, `rollback`) plus `ref`/`limit` parameters; `force` is shared (dismiss guard bypass *and* dirty-tree rollback override). Legacy `ids` remains handler-only and is no longer taught in schema.
 
 ## Connections
 
 - **Inbound:** `handle()` is called by the tool dispatcher (via `base_agent._dispatch_tool`).
 - **Inbound (cross-module):** `publish_notification` is imported by `base_agent/messaging.py` (both `_rerender_unread_digest` and `_enqueue_system_notification`) and by `intrinsics/soul/flow.py:_run_consultation_fire`. `clear_notification` is imported by the same call sites for the empty-state path. `_dismiss` is no longer called from `email/manager.py` — email arrivals use the single-slot unread-digest pattern, and dismiss is a no-op shim regardless.
-- **Outbound:** Depends on `...notifications` (canonical `submit`/`clear`/`collect_notifications`), `...i18n` (translations), `...handshake` (`resolve_address`, `is_agent`, `is_alive`), `...state` (`AgentState`), `...presets` (preset loading), `...preset_connectivity` (connectivity probing).
-- **Data flow:** Karma actions write signal files (`.sleep`, `.suspend`, `.interrupt`, `.clear`) into target agent working directories. Preset swap reads/writes `init.json` manifest. The `notification` action reads `.notification/*.json` (read-only); `publish_notification` re-export writes them via `tmp + rename`.
+- **Outbound:** Depends on `...notifications` (canonical `submit`/`clear`/`collect_notifications`), `...i18n` (translations), `...handshake` (`resolve_address`, `is_agent`, `is_alive`), `...state` (`AgentState`), `...presets` (preset loading), `...preset_connectivity` (connectivity probing), `...workdir.WorkingDir` (Time Machine git primitives, via `time_machine.py`).
+- **Data flow:** Karma actions write signal files (`.sleep`, `.suspend`, `.interrupt`, `.clear`) into target agent working directories. Preset swap reads/writes `init.json` manifest. The `notification` action reads `.notification/*.json` (read-only); `publish_notification` re-export writes them via `tmp + rename`. Time Machine actions operate on the agent's **own** working-directory git repo: `snapshot`/`snapshots`/`rollback_preview` are read-or-append-only; `rollback` runs `git reset --hard` after tagging a `safety/rollback-<ts>` ref of the prior HEAD.
 
 ## Key invariants
 
@@ -52,3 +62,4 @@ System intrinsic — runtime, lifecycle, and synchronization. Provides the agent
 - `_dismiss` is a channel-level generic clear: guarded producer channels (currently email) refuse unless `force=true`; legacy `ids=` calls are ignored and logged for one release; `post-molt` refuses without a non-empty `reason` so continuation reminders cannot be cleared without an acknowledgement decision.
 - Preset swap has two guards: authorization (allowed list) and context-fit (current tokens ≤ target context_limit).
 - Producer notification writes (`publish_notification`) are atomic (`tmp + rename` inside `notifications.publish`) — readers never see a half-written file.
+- Time Machine `rollback` is the only destructive system action on the agent's own tree, and it has three guards: (1) the `ref` must resolve to a commit or it is refused (`reason="invalid_ref"`); (2) a dirty/untracked working tree is refused unless `force=true` (`reason="dirty"`); (3) before `git reset --hard`, the prior HEAD is tagged `safety/rollback-<ts>` and returned, so the rollback is itself reversible. `.git` is never deleted. `snapshot`/`snapshots`/`rollback_preview` never reset and are safe to call freely.

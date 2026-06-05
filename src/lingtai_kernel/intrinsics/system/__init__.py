@@ -11,6 +11,11 @@ Actions (voluntary, agent-callable):
     nirvana   — permanently destroy an agent's working directory (requires nirvana)
     presets   — list available presets in the agent's library
     dismiss   — clear one `.notification/<channel>.json` surface (guarded by producer policy)
+    snapshot  — capture the whole working directory as a git restore point (no-op if clean)
+    snapshots — list recent snapshots (hash/date/subject) to pick a rollback target
+    rollback_preview — read-only: show what rolling back to a `ref` would change
+    rollback  — restore the working directory to a prior snapshot `ref` (git reset --hard;
+                refuses a dirty tree without force=True; tags a safety ref first; keeps .git)
 
 Action (kernel-synthesized by default — also callable voluntarily by the agent):
     notification — voluntary call returns a placeholder dict; the canonical
@@ -35,6 +40,7 @@ Sub-modules:
                        _sleep(), _lull(), _suspend(), _cpr(), _interrupt(),
                        _clear(), _nirvana().
     notification.py  — _dismiss() function.
+    time_machine.py  — _snapshot(), _snapshots(), _rollback_preview(), _rollback().
     schema.py        — get_description(), get_schema().
 """
 from __future__ import annotations
@@ -75,6 +81,14 @@ from .karma import (  # noqa: F401
     _interrupt,
     _clear,
     _nirvana,
+)
+
+# Time Machine (filesystem rollback)
+from .time_machine import (  # noqa: F401
+    _snapshot,
+    _snapshots,
+    _rollback_preview,
+    _rollback,
 )
 
 
@@ -119,6 +133,10 @@ def handle(agent, args: dict) -> dict:
         "nirvana": _nirvana,
         "presets": _presets,
         "dismiss": _dismiss,
+        "snapshot": _snapshot,
+        "snapshots": _snapshots,
+        "rollback_preview": _rollback_preview,
+        "rollback": _rollback,
     }.get(action)
     if handler is None:
         return {"status": "error", "message": f"Unknown system action: {action}"}
