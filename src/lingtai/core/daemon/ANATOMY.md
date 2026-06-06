@@ -70,6 +70,7 @@ daemon/run_dir.py
 - **No recursion:** `EMANATION_BLACKLIST` prevents emanations from spawning sub-emanations, avatars, psyche, the skill catalog, or deprecated codex.
 - **Tool surface isolation:** `_ToolCollector` ensures preset-driven capability setup does not mutate the parent agent's tool registry.
 - **Filesystem isolation:** Each emanation gets its own `daemons/em-<N>-<YYYYMMDD-HHMMSS>-<hash6>/` directory. `DaemonRunDir` uses atomic `os.replace` for `daemon.json` and single-writer append-only JSONL for events/chat history.
+- **Startup reaps stale parent-owned records:** `DaemonManager.__init__` scans only the current agent working directory's `daemons/*/daemon.json` files and marks `running`/`active` records as `failed` when their recorded `parent_pid` no longer exists. It does not reconstruct in-memory registry entries from disk.
 - **Timeout vs. cancel distinction:** Separate `timeout_event` and `cancel_event` allow the run loop to call `mark_timeout()` vs. `mark_cancelled()` based on which signal fired first.
 - **Capacity control:** `max_emanations` caps concurrent subagents; completed futures are pruned before each new batch.
 - **Preset validation is pre-flight:** Preset connectivity and capability instantiation are checked before any emanation is scheduled. A single failure refuses the whole batch.

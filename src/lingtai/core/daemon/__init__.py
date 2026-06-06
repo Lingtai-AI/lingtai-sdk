@@ -362,6 +362,67 @@ class DaemonManager:
             max_workers=max(1, max_emanations),
             thread_name_prefix="daemon-cli-ask",
         )
+        self._reap_dead_parent_daemon_records()
+
+    def _reap_dead_parent_daemon_records(self) -> None:
+        """Mark stale running daemon.json records failed after parent restart."""
+        daemons_dir = self._agent._working_dir / "daemons"
+        if not daemons_dir.is_dir():
+            return
+
+        current_pid = os.getpid()
+        for daemon_json_path in daemons_dir.glob("*/daemon.json"):
+            try:
+                state = json.loads(daemon_json_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(state, dict):
+                continue
+
+            daemon_state = state.get("state")
+            if not isinstance(daemon_state, str):
+                continue
+            if daemon_state.lower() not in {"running", "active"}:
+                continue
+            if state.get("finished_at") not in (None, ""):
+                continue
+
+            parent_pid = state.get("parent_pid")
+            if not isinstance(parent_pid, int) or isinstance(parent_pid, bool):
+                continue
+            if parent_pid == current_pid:
+                continue
+
+            try:
+                os.kill(parent_pid, 0)
+            except ProcessLookupError:
+                pass
+            except (PermissionError, OSError):
+                continue
+            else:
+                continue
+
+            state["state"] = "failed"
+            state["finished_at"] = DaemonRunDir._now_iso()
+            state["current_tool"] = None
+            state["error"] = {
+                "type": "DaemonOrphaned",
+                "message": (
+                    "Reaped running daemon record because recorded parent_pid "
+                    f"{parent_pid} is no longer alive after daemon manager startup."
+                ),
+            }
+            tmp_path = daemon_json_path.with_suffix(
+                daemon_json_path.suffix + ".tmp"
+            )
+            try:
+                tmp_path.write_text(
+                    json.dumps(state, indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                os.replace(tmp_path, daemon_json_path)
+            except OSError:
+                continue
 
     def handle(self, args: dict) -> dict:
         action = args.get("action")

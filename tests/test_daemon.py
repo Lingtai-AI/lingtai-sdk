@@ -1,6 +1,7 @@
 # tests/test_daemon.py
 """Tests for the daemon (神識) capability — subagent system."""
 import json
+import os
 import queue
 import re
 import threading
@@ -45,6 +46,25 @@ def _make_run_dir(agent, em_id="em-test"):
     )
 
 
+def _write_daemon_json(tmp_path, run_id, **overrides):
+    daemon_dir = tmp_path / "daemon-agent" / "daemons" / run_id
+    daemon_dir.mkdir(parents=True)
+    data = {
+        "handle": "em-test",
+        "run_id": run_id,
+        "parent_pid": 12345,
+        "state": "running",
+        "finished_at": None,
+        "current_tool": "read",
+        "error": None,
+        "unrelated": {"preserved": True},
+    }
+    data.update(overrides)
+    daemon_json = daemon_dir / "daemon.json"
+    daemon_json.write_text(json.dumps(data), encoding="utf-8")
+    return daemon_json
+
+
 def test_daemon_registers_tool(tmp_path):
     agent = _make_agent(tmp_path, ["daemon"])
     tool_names = {s.name for s in agent._tool_schemas}
@@ -65,6 +85,87 @@ def test_daemon_max_emanations_override_reaches_manager(tmp_path):
     mgr = agent.get_capability("daemon")
     assert mgr._max_emanations == 30
     assert mgr._handle_list()["max_emanations"] == 30
+
+
+def test_daemon_setup_reaps_dead_parent_running_record(tmp_path, monkeypatch):
+    """Startup marks stale running daemon.json records failed."""
+    from lingtai.core import daemon as daemon_mod
+
+    stale_pid = 987654
+    daemon_json = _write_daemon_json(
+        tmp_path,
+        "em-dead-20260101-000000-abcdef",
+        parent_pid=stale_pid,
+    )
+
+    calls = []
+
+    def fake_kill(pid, sig):
+        calls.append((pid, sig))
+        if pid == stale_pid:
+            raise ProcessLookupError
+
+    monkeypatch.setattr(daemon_mod.os, "kill", fake_kill)
+
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+
+    data = json.loads(daemon_json.read_text(encoding="utf-8"))
+    assert data["state"] == "failed"
+    assert data["finished_at"]
+    assert data["current_tool"] is None
+    assert data["error"] == {
+        "type": "DaemonOrphaned",
+        "message": (
+            "Reaped running daemon record because recorded parent_pid "
+            f"{stale_pid} is no longer alive after daemon manager startup."
+        ),
+    }
+    assert data["unrelated"] == {"preserved": True}
+    assert (stale_pid, 0) in calls
+    assert mgr._emanations == {}
+
+
+def test_daemon_setup_keeps_current_and_live_parent_records(tmp_path, monkeypatch):
+    """Startup skips current PID and records whose parent PID is still alive."""
+    from lingtai.core import daemon as daemon_mod
+
+    current_pid = os.getpid()
+    live_pid = current_pid + 100000
+    current_json = _write_daemon_json(
+        tmp_path,
+        "em-current-20260101-000000-abcdef",
+        parent_pid=current_pid,
+        state="active",
+    )
+    live_json = _write_daemon_json(
+        tmp_path,
+        "em-live-20260101-000000-abcdef",
+        parent_pid=live_pid,
+    )
+
+    calls = []
+
+    def fake_kill(pid, sig):
+        calls.append((pid, sig))
+        return None
+
+    monkeypatch.setattr(daemon_mod.os, "kill", fake_kill)
+
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+
+    current_data = json.loads(current_json.read_text(encoding="utf-8"))
+    live_data = json.loads(live_json.read_text(encoding="utf-8"))
+    assert current_data["state"] == "active"
+    assert current_data["current_tool"] == "read"
+    assert current_data["error"] is None
+    assert live_data["state"] == "running"
+    assert live_data["current_tool"] == "read"
+    assert live_data["error"] is None
+    assert (current_pid, 0) not in calls
+    assert (live_pid, 0) in calls
+    assert mgr._emanations == {}
 
 
 def test_build_tool_surface_expands_groups(tmp_path):
