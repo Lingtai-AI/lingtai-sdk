@@ -999,6 +999,9 @@ def test_email_dismiss_carries_instructions_in_envelope(tmp_path):
     text = payload["instructions"]
     assert "dismiss" in text
     assert "read" in text
+    assert "long primary tool call" in text
+    assert "secondary={tool:'email'" in text
+    assert "action:'reply'" in text
 
 
 def test_email_read_rerenders_notification(tmp_path):

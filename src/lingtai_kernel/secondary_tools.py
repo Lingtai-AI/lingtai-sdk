@@ -67,16 +67,19 @@ SECONDARY_EXCLUDED_PRIMARY_TOOLS: set[str] = SECONDARY_ALLOWED_TOOLS | {"imap", 
 SECONDARY_SCHEMA_PROPERTY: dict[str, Any] = {
     "type": "object",
     "description": (
-        "Optional nested communication tool call executed by the runtime before "
-        "this primary tool starts. Use for timely human replies when the primary "
-        "tool will take more than a few seconds (action=send/reply), or to pull "
-        "the full content of a just-notified message whose preview is not enough "
-        "to act (action=read). Do not use for routine short calls. Only "
-        "email/telegram/wechat/feishu/whatsapp are allowed; only send/reply/read actions "
-        "are allowed; nested secondary fields are forbidden. Secondary failure "
-        "does not block the primary tool. For read actions, a bounded slice of "
-        "the result is forwarded under _secondary.result on the primary tool "
-        "result."
+        "Use this when a human is waiting and this primary call may take >5s: "
+        "attach a quick send/reply status update before starting the primary, "
+        "or attach read to fetch the full just-notified message before acting "
+        "when the notification preview is incomplete. Examples: before a long "
+        "bash/daemon/web_search call, secondary={tool:'telegram', "
+        "args:{action:'send', chat_id:..., text:'I am checking now...'}}; "
+        "when a preview is truncated, secondary={tool:'telegram', "
+        "args:{action:'read', chat_id:..., limit:5}}. The runtime executes "
+        "the secondary first; failures never block the primary; read results "
+        "return a bounded slice under _secondary.result on the primary result. "
+        "Do not use for routine short calls. Only "
+        "email/telegram/wechat/feishu/whatsapp are allowed; only send/reply/read "
+        "actions are allowed; nested secondary fields are forbidden."
     ),
     "additionalProperties": False,
     "properties": {
