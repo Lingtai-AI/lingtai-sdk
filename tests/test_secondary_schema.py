@@ -32,9 +32,11 @@ def test_secondary_schema_injected_into_eligible_dynamic_tool(tmp_path):
 
     secondary = schemas["long_work"]["properties"]["secondary"]
     assert secondary["properties"]["tool"]["enum"] == ["email", "feishu", "telegram", "wechat", "whatsapp"]
-    assert "timely human replies" in secondary["description"]
+    assert "human is waiting" in secondary["description"]
+    assert "primary call may take >5s" in secondary["description"]
+    assert "before a long bash/daemon/web_search call" in secondary["description"]
     assert "Do not use for routine short calls" in secondary["description"]
-    assert "action=read" in secondary["description"]
+    assert "_secondary.result" in secondary["description"]
     assert secondary["properties"]["args"]["required"] == ["action"]
     assert secondary["properties"]["args"]["properties"]["action"]["enum"] == [
         "send", "reply", "read",
