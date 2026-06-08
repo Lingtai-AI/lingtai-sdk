@@ -25,6 +25,10 @@ def _build_consultation_tool_refusal(system_prompt: str) -> str:
 
 _CONSULTATION_MAX_ROUNDS = 3
 _DIARY_CUE_TOKEN_CAP = 10_000
+# Current-self insights keep the historical 70% consultation window;
+# past-self snapshots are capped lower so routed memory experts are cheap.
+_INSIGHTS_CONTEXT_RATIO = 0.7
+_PAST_CONTEXT_RATIO = 0.3
 
 
 def _send_with_timeout(agent, session, content: "str | list"):
@@ -353,6 +357,23 @@ def _kind_for_source(source: str) -> str:
     return "past"
 
 
+def _consultation_context_target(source: str, window: int) -> int:
+    """Return the fitted context budget for one consultation source.
+
+    The shared current-self (``insights``) keeps the historical large window.
+    Past-self snapshots are routed memory experts; they should be relevant but
+    cheaper, so they receive a smaller slice of the context window. This is a
+    first step toward cache/budget-friendly soul flow: select fewer memories,
+    then load less of each selected memory.
+    """
+    ratio = (
+        _INSIGHTS_CONTEXT_RATIO
+        if _kind_for_source(source) == "insights"
+        else _PAST_CONTEXT_RATIO
+    )
+    return max(1, int(window * ratio))
+
+
 def _build_consultation_cue(agent, kind: str, diary: str) -> str:
     """Localized cue prompt for a consultation voice.
 
@@ -401,7 +422,7 @@ def _run_consultation(agent, iface, source: str) -> dict | None:
             window = None
     if window is None:
         window = int(getattr(agent._config, "context_limit", None) or 200_000)
-    target = max(1, int(window * 0.7))
+    target = _consultation_context_target(source, window)
     fitted = _fit_interface_to_window(iface, target)
     if not fitted.entries:
         return None
@@ -505,15 +526,212 @@ def _list_snapshot_paths(agent):
         return []
 
 
-def _run_consultation_batch(agent) -> list[dict]:
-    """Run one full consultation fire: 1 insights + K past-snapshot
-    consultations in parallel. Returns the list of surviving voices
-    (failed/timed-out consultations are filtered out).
+# --- MoE-inspired past-self selection -------------------------------------
+#
+# DeepSeek's MoE gate routes each token to a few *relevant* experts plus a
+# shared expert, instead of running the whole pool. Soul flow borrows the
+# shape: route to the past selves whose molt summary lexically overlaps the
+# current diary cue (exploitation), then — with a small probability — let one
+# unrelated past self in for serendipity (exploration). When a human is
+# waiting (a non-soul notification is pending) or there is no diary signal,
+# expensive/random past voices are suppressed; the shared current-self
+# remains the only candidate and may still bail if it also lacks a diary spark.
+
+# Probability of admitting one random ("serendipity") past self when budget
+# remains after routing. Exploration knob — keeps the creative, non-linear
+# past-self intrusions the pure-random design had, bounded so it never
+# dominates the fire.
+_SERENDIPITY_RATE = 0.25
+# Hard cap on serendipity past selves per fire — one, and only when the
+# routed selection left headroom under max_past_count.
+_SERENDIPITY_MAX = 1
+
+# Lightweight English/Chinese-agnostic stopword set for lexical routing.
+# Tiny on purpose: the signal is summary↔diary token overlap, and these
+# words carry no topical weight.
+_ROUTE_STOPWORDS = frozenset({
+    "the", "a", "an", "and", "or", "but", "to", "of", "in", "on", "at",
+    "for", "with", "is", "are", "was", "were", "be", "been", "it", "this",
+    "that", "i", "you", "we", "they", "my", "me", "as", "by", "from",
+})
+
+
+def _route_tokens(text: str) -> set:
+    """Lowercase word-token set for lexical routing, stopwords removed.
+
+    Tokenizes on non-alphanumeric boundaries (keeps CJK runs intact since
+    they are alphanumeric to ``str.isalnum``-style regex \\w). Empty/short
+    tokens and stopwords are dropped. Returns a set for cheap overlap.
     """
-    import random
+    import re
+
+    if not text:
+        return set()
+    raw = re.findall(r"\w+", text.lower())
+    return {tok for tok in raw if len(tok) > 1 and tok not in _ROUTE_STOPWORDS}
+
+
+def _snapshot_route_summary(path) -> str:
+    """Read only a snapshot's cheap top-level ``molt_summary`` metadata.
+
+    Avoids loading/parsing the full interface (the expensive part). Reads
+    the JSON file and returns the ``molt_summary`` string, or "" on any
+    failure or missing field. Used purely as a relevance signal.
+    """
+    import json
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    summary = payload.get("molt_summary")
+    return summary if isinstance(summary, str) else ""
+
+
+def _select_relevant_snapshots(diary: str, paths: list, k: int) -> list:
+    """Route to the ``k`` past selves whose molt summary best overlaps the
+    diary cue. Returns paths ordered by descending lexical relevance,
+    keeping only snapshots with a non-zero overlap score.
+
+    Returns an empty list when ``k <= 0``, the diary is empty, or no
+    snapshot's summary shares any token with the diary — the caller then
+    falls back to random sampling so the fire never silently loses its
+    past voices for lack of a signal.
+    """
+    if k <= 0 or not paths:
+        return []
+    cue = _route_tokens(diary)
+    if not cue:
+        return []
+
+    scored = []
+    for path in paths:
+        summary_tokens = _route_tokens(_snapshot_route_summary(path))
+        score = len(cue & summary_tokens)
+        if score > 0:
+            scored.append((score, path))
+    # Highest overlap first; ties broken by path name for determinism.
+    scored.sort(key=lambda sp: (-sp[0], str(sp[1])))
+    return [path for _score, path in scored[:k]]
+
+
+def _select_serendipity_snapshot(paths: list, exclude: list, rng) -> list:
+    """With probability ``_SERENDIPITY_RATE``, pick one random past self not
+    already selected. Returns ``[path]`` or ``[]``.
+
+    ``rng`` is the ``random`` module (or a stand-in exposing ``random`` and
+    ``choice``) so the probability gate is patchable in tests. The roll
+    happens before the candidate check so a suppressed roll is observable.
+    """
+    if rng.random() >= _SERENDIPITY_RATE:
+        return []
+    excluded = set(exclude)
+    candidates = [p for p in paths if p not in excluded]
+    if not candidates:
+        return []
+    return [rng.choice(candidates)]
+
+
+def _has_pending_human(agent) -> bool:
+    """True when a non-soul notification channel is pending — a human/urgent
+    signal that should suppress expensive random/past reflection.
+
+    Uses the existing ``collect_notifications`` API. The agent's own soul
+    channel is ignored (it is not a human-facing signal). Any other channel
+    (email, mcp.*, …) counts as "a human may be waiting." Best-effort: on
+    any error, returns False so the guard never breaks the fire.
+    """
+    try:
+        from ...notifications import collect_notifications
+        notifications = collect_notifications(agent._working_dir)
+    except Exception:
+        return False
+    return any(channel != "soul" for channel in notifications)
+
+
+def _select_past_snapshots(agent, diary: str, paths: list, max_past: int) -> list:
+    """Choose which past-self snapshots to consult this fire.
+
+    Layers, in priority order (DeepSeek-MoE-inspired):
+      1. Guard — if a human/urgent notification is pending, or there is no
+         diary signal, consult NO past selves. The shared insights path
+         remains separate and may still bail if no diary spark exists.
+      2. Routed — top-N past selves by lexical overlap of molt_summary with
+         the diary cue (exploitation).
+      3. Serendipity — with small probability, one random non-selected past
+         self if budget remains (exploration).
+      4. Fallback — if routing found nothing (no lexical signal) and the
+         guard did not suppress, sample randomly as before so the fire keeps
+         its past voices.
+
+    Returns the chosen paths (<= max_past). Emits a ``consultation_route``
+    log describing the decision.
+    """
+    import random as _random
+
+    if max_past <= 0 or not paths:
+        return []
+
+    if _has_pending_human(agent):
+        try:
+            agent._log("consultation_route", decision="guard_pending_human",
+                       routed=0, serendipity=0, max_past=max_past)
+        except Exception:
+            pass
+        return []
+
+    if not diary:
+        # No useful recent diary signal — skip the expensive/random past
+        # voices, keep only the shared current-self insights.
+        try:
+            agent._log("consultation_route", decision="guard_no_diary",
+                       routed=0, serendipity=0, max_past=max_past)
+        except Exception:
+            pass
+        return []
+
+    routed = _select_relevant_snapshots(diary, paths, max_past)
+    decision = "routed"
+
+    if not routed:
+        # No lexical signal — graceful fallback to the legacy random sample
+        # so a signal-less fire still surfaces past voices.
+        routed = _random.sample(paths, min(max_past, len(paths)))
+        decision = "fallback_random"
+
+    selected = list(routed)
+    serendipity = []
+    if len(selected) < max_past:
+        serendipity = _select_serendipity_snapshot(
+            paths, exclude=selected, rng=_random,
+        )[:_SERENDIPITY_MAX]
+        selected.extend(serendipity)
+
+    try:
+        agent._log("consultation_route", decision=decision,
+                   routed=len(routed), serendipity=len(serendipity),
+                   max_past=max_past,
+                   selected=[p.stem for p in selected])
+    except Exception:
+        pass
+    return selected
+
+
+def _run_consultation_batch(agent) -> list[dict]:
+    """Run one full consultation fire: the shared current-self ("insights")
+    plus a MoE-routed set of past-snapshot voices, all in parallel. Returns
+    the list of surviving voices (failed/timed-out consultations filtered).
+
+    Past-self selection is no longer pure random. ``consultation_past_count``
+    is treated as a *maximum*; the actual past voices are chosen by
+    ``_select_past_snapshots`` (routed-by-relevance + bounded serendipity,
+    suppressed when a human is waiting or there is no diary signal).
+    """
     import threading
 
-    K = max(0, int(getattr(agent._config, "consultation_past_count", 2)))
+    max_past = max(0, int(getattr(agent._config, "consultation_past_count", 2)))
 
     # Build work items.
     work: list[tuple[str, "ChatInterface"]] = []
@@ -528,11 +746,12 @@ def _run_consultation_batch(agent) -> list[dict]:
     if insights_iface is not None and insights_iface.entries:
         work.append(("insights", insights_iface))
 
-    # Sample K snapshot paths; load each.
+    # Route to the relevant + (maybe) serendipitous past selves; load each.
     paths = _list_snapshot_paths(agent)
-    if paths and K > 0:
-        sampled = random.sample(paths, min(K, len(paths)))
-        for path in sampled:
+    if paths and max_past > 0:
+        diary = _render_current_diary(agent)
+        selected = _select_past_snapshots(agent, diary, paths, max_past)
+        for path in selected:
             iface = _load_snapshot_interface(path)
             if iface is None or not iface.entries:
                 try:

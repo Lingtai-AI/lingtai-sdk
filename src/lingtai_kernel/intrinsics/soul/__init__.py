@@ -2,19 +2,24 @@
 
 Three actions:
     flow    — past-self consultation appendix. Every ``_soul_delay`` seconds,
-              fires M=1+K parallel LLM calls (1 stepped-back read of the
-              current chat as "insights", K random past-snapshot
-              consultations sampled from history/snapshots/). Voices bundle
-              into one synthetic (assistant{tool_call}, user{tool_result})
-              pair with action="flow"; the pair is enqueued on tc_inbox
-              with replace_in_history=True so the drain side enforces a
-              single-slot invariant in chat history. Mechanical — agent
-              cannot invoke manually.
+              fires parallel LLM calls: 1 stepped-back read of the current
+              chat as "insights" (the shared current-self) plus a
+              MoE-routed set of past-snapshot consultations. Past selves are
+              chosen by lexical relevance to the current diary, with a small
+              bounded chance of one random "serendipity" voice; both are
+              suppressed when a human is waiting or there is no diary signal.
+              ``consultation_past_count`` caps (rather than guarantees) the
+              past-voice count. Voices
+              bundle into one synthetic (assistant{tool_call},
+              user{tool_result}) pair with action="flow"; the pair is
+              enqueued on tc_inbox with replace_in_history=True so the drain
+              side enforces a single-slot invariant in chat history.
+              Mechanical — agent cannot invoke manually.
     inquiry — sync mirror session. Clones conversation (text+thinking only),
               sends question, returns answer in tool result. On-demand.
     config  — adjust soul flow knobs. Accepts any subset of two optional
               fields: delay_seconds (wall-clock cadence), consultation_past_count
-              (K, number of past-self voices per fire). Updates live state,
+              (maximum past-self voices per fire). Updates live state,
               restarts the wall-clock timer if delay changed, persists to
               init.json.
 """
@@ -50,11 +55,20 @@ from .consultation import (
     _load_snapshot_interface,
     _fit_interface_to_window,
     _kind_for_source,
+    _consultation_context_target,
     _build_consultation_cue,
     _run_consultation,
     _list_snapshot_paths,
     _run_consultation_batch,
     build_consultation_pair,
+    _SERENDIPITY_RATE,
+    _SERENDIPITY_MAX,
+    _route_tokens,
+    _snapshot_route_summary,
+    _select_relevant_snapshots,
+    _select_serendipity_snapshot,
+    _has_pending_human,
+    _select_past_snapshots,
 )
 
 # Re-export inquiry

@@ -16,11 +16,15 @@ import pytest
 from lingtai_kernel.intrinsics.soul import (
     _DIARY_CUE_TOKEN_CAP,
     _fit_interface_to_window,
+    _consultation_context_target,
     _list_snapshot_paths,
     _load_snapshot_interface,
     _render_current_diary,
     _run_consultation,
     _run_consultation_batch,
+    _select_past_snapshots,
+    _select_relevant_snapshots,
+    _select_serendipity_snapshot,
     build_consultation_pair,
 )
 from lingtai_kernel.llm.interface import (
@@ -80,7 +84,8 @@ class _FakeAgent:
 
 
 def _write_snapshot(workdir: Path, *, molt_count: int, unix_ts: int,
-                    entries: list[dict] | None = None) -> Path:
+                    entries: list[dict] | None = None,
+                    molt_summary: str = "test molt") -> Path:
     """Write a snapshot file in the same shape as
     psyche._write_molt_snapshot produces."""
     snaps = workdir / "history" / "snapshots"
@@ -99,13 +104,30 @@ def _write_snapshot(workdir: Path, *, molt_count: int, unix_ts: int,
         "before_tokens": 12345,
         "agent_name": "test-agent",
         "agent_id": "test-id",
-        "molt_summary": "test molt",
+        "molt_summary": molt_summary,
         "molt_source": "agent",
         "interface": entries,
     }
     path = snaps / f"snapshot_{molt_count}_{unix_ts}.json"
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     return path
+
+
+# ---------------------------------------------------------------------------
+# _consultation_context_target
+# ---------------------------------------------------------------------------
+
+
+class TestConsultationContextTarget:
+
+    def test_insights_keeps_historical_large_window(self):
+        assert _consultation_context_target("insights", 200_000) == 140_000
+
+    def test_past_snapshot_uses_smaller_budget(self):
+        assert _consultation_context_target("snapshot:123", 200_000) == 60_000
+
+    def test_target_never_drops_below_one(self):
+        assert _consultation_context_target("snapshot:tiny", 1) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -375,6 +397,15 @@ class TestVerbatimCurrentChatForInsights:
 
 class TestRunConsultationBatch:
 
+    @staticmethod
+    def _seed_diary(tmp_path: Path, text: str = "DIARY MARKER") -> None:
+        """Seed a diary so the past-self routing guard does not suppress
+        past voices (empty diary => insights-only by design)."""
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with open(log_dir / "events.jsonl", "w", encoding="utf-8") as f:
+            f.write(json.dumps({"type": "diary", "text": text, "ts": 1_700_000_000}) + "\n")
+
     def test_empty_pool_runs_only_insights(self, tmp_path):
         agent = _FakeAgent(tmp_path)
         with patch(
@@ -393,7 +424,10 @@ class TestRunConsultationBatch:
 
     def test_with_snapshots_samples_K(self, tmp_path):
         agent = _FakeAgent(tmp_path)
-        # Five snapshots — should sample K=2.
+        # Diary required so the routing guard allows past voices.
+        self._seed_diary(tmp_path, text="some diary with no snapshot overlap")
+        # Five snapshots — should select at most max_past=2 (routed if a
+        # lexical signal exists, else random fallback; either way <= 2).
         for i in range(5):
             _write_snapshot(tmp_path, molt_count=i + 1, unix_ts=1700000000 + i)
 
@@ -413,6 +447,75 @@ class TestRunConsultationBatch:
         snapshot_sources = [s for s in sources if s.startswith("snapshot:")]
         assert len(snapshot_sources) == 2
 
+    def test_select_relevant_snapshots_prefers_summary_overlap(self, tmp_path):
+        relevant = _write_snapshot(
+            tmp_path,
+            molt_count=1,
+            unix_ts=1700000001,
+            molt_summary="nutrition evidence gate and citation matrix",
+        )
+        unrelated = _write_snapshot(
+            tmp_path,
+            molt_count=2,
+            unix_ts=1700000002,
+            molt_summary="desktop mushroom animation",
+        )
+
+        selected = _select_relevant_snapshots(
+            "Need nutrition evidence before academic writing",
+            [unrelated, relevant],
+            1,
+        )
+
+        assert selected == [relevant]
+
+    def test_select_past_snapshots_guard_skips_non_soul_notification(self, tmp_path):
+        agent = _FakeAgent(tmp_path)
+        self._seed_diary(tmp_path, text="nutrition evidence")
+        snap = _write_snapshot(
+            tmp_path,
+            molt_count=1,
+            unix_ts=1700000001,
+            molt_summary="nutrition evidence",
+        )
+        notif = tmp_path / ".notification"
+        notif.mkdir()
+        (notif / "mcp.wechat.json").write_text(json.dumps({"unread": 1}), encoding="utf-8")
+
+        assert _select_past_snapshots(agent, "nutrition evidence", [snap], 2) == []
+        assert any(event == "consultation_route" and data["decision"] == "guard_pending_human"
+                   for event, data in agent.logged)
+
+    def test_select_past_snapshots_allows_soul_notification(self, tmp_path):
+        agent = _FakeAgent(tmp_path)
+        self._seed_diary(tmp_path, text="nutrition evidence")
+        snap = _write_snapshot(
+            tmp_path,
+            molt_count=1,
+            unix_ts=1700000001,
+            molt_summary="nutrition evidence",
+        )
+        notif = tmp_path / ".notification"
+        notif.mkdir()
+        (notif / "soul.json").write_text(json.dumps({"voices": []}), encoding="utf-8")
+
+        assert _select_past_snapshots(agent, "nutrition evidence", [snap], 2) == [snap]
+
+    def test_serendipity_snapshot_is_bounded_and_probabilistic(self, tmp_path):
+        first = _write_snapshot(tmp_path, molt_count=1, unix_ts=1700000001)
+        second = _write_snapshot(tmp_path, molt_count=2, unix_ts=1700000002)
+        rng = MagicMock()
+        rng.random.return_value = 0.0
+        rng.choice.return_value = second
+
+        selected = _select_serendipity_snapshot([first, second], exclude=[first], rng=rng)
+
+        assert selected == [second]
+        rng.choice.assert_called_once_with([second])
+
+        rng.random.return_value = 1.0
+        assert _select_serendipity_snapshot([first, second], exclude=[], rng=rng) == []
+
     def test_K_zero_runs_only_insights(self, tmp_path):
         agent = _FakeAgent(tmp_path)
         agent._config.consultation_past_count = 0
@@ -431,6 +534,7 @@ class TestRunConsultationBatch:
 
     def test_failed_consultations_filtered(self, tmp_path):
         agent = _FakeAgent(tmp_path)
+        self._seed_diary(tmp_path)
         for i in range(3):
             _write_snapshot(tmp_path, molt_count=i + 1, unix_ts=1700000000 + i)
 
@@ -450,6 +554,7 @@ class TestRunConsultationBatch:
 
     def test_thread_exception_filtered(self, tmp_path):
         agent = _FakeAgent(tmp_path)
+        self._seed_diary(tmp_path)
         for i in range(2):
             _write_snapshot(tmp_path, molt_count=i + 1, unix_ts=1700000000 + i)
 
@@ -472,6 +577,266 @@ class TestRunConsultationBatch:
         agent = _FakeAgent(tmp_path, with_chat=False)
         voices = _run_consultation_batch(agent)
         assert voices == []
+
+
+# ---------------------------------------------------------------------------
+# MoE-inspired past-self selection: routed relevance + serendipity + guards
+# ---------------------------------------------------------------------------
+
+
+class TestPastSelfSelection:
+    """Covers _route_tokens, _snapshot_route_summary,
+    _select_relevant_snapshots, _select_serendipity_snapshot,
+    _has_pending_human, and _select_past_snapshots."""
+
+    def _write_summary_snapshot(self, tmp_path: Path, *, molt_count: int,
+                                unix_ts: int, summary: str) -> Path:
+        path = _write_snapshot(tmp_path, molt_count=molt_count, unix_ts=unix_ts)
+        # Rewrite the molt_summary field to the desired routing signal.
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["molt_summary"] = summary
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        return path
+
+    def _publish_notification(self, tmp_path: Path, channel: str) -> None:
+        notif_dir = tmp_path / ".notification"
+        notif_dir.mkdir(parents=True, exist_ok=True)
+        (notif_dir / f"{channel}.json").write_text(
+            json.dumps({"header": channel, "data": {}}), encoding="utf-8"
+        )
+
+    # ---- _route_tokens ----------------------------------------------------
+
+    def test_route_tokens_lowercases_and_drops_stopwords(self):
+        from lingtai_kernel.intrinsics.soul import _route_tokens
+        toks = _route_tokens("The Nutrition Project AND the website")
+        assert "nutrition" in toks
+        assert "project" in toks
+        assert "website" in toks
+        assert "the" not in toks  # stopword
+        assert "and" not in toks  # stopword
+
+    def test_route_tokens_empty(self):
+        from lingtai_kernel.intrinsics.soul import _route_tokens
+        assert _route_tokens("") == set()
+        assert _route_tokens(None) == set()  # type: ignore[arg-type]
+
+    # ---- _snapshot_route_summary -----------------------------------------
+
+    def test_snapshot_route_summary_reads_field(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _snapshot_route_summary
+        path = self._write_summary_snapshot(
+            tmp_path, molt_count=1, unix_ts=1, summary="nutrition website work")
+        assert _snapshot_route_summary(path) == "nutrition website work"
+
+    def test_snapshot_route_summary_bad_file_returns_empty(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _snapshot_route_summary
+        bad = tmp_path / "bad.json"
+        bad.write_text("{not json", encoding="utf-8")
+        assert _snapshot_route_summary(bad) == ""
+
+    # ---- _select_relevant_snapshots --------------------------------------
+
+    def test_relevance_picks_overlapping_summary(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _select_relevant_snapshots
+        match = self._write_summary_snapshot(
+            tmp_path, molt_count=1, unix_ts=1, summary="nutrition project evidence")
+        other = self._write_summary_snapshot(
+            tmp_path, molt_count=2, unix_ts=2, summary="solar wind turbulence")
+        diary = "[now: 12:00:00]\n\nworking on the nutrition project today"
+        chosen = _select_relevant_snapshots(diary, [match, other], k=2)
+        # Only the overlapping snapshot scores > 0.
+        assert chosen == [match]
+
+    def test_relevance_orders_by_overlap_then_caps_k(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _select_relevant_snapshots
+        strong = self._write_summary_snapshot(
+            tmp_path, molt_count=1, unix_ts=1, summary="nutrition project evidence payer")
+        weak = self._write_summary_snapshot(
+            tmp_path, molt_count=2, unix_ts=2, summary="nutrition only")
+        none = self._write_summary_snapshot(
+            tmp_path, molt_count=3, unix_ts=3, summary="unrelated topic")
+        diary = "nutrition project evidence payer cost"
+        chosen = _select_relevant_snapshots(diary, [weak, strong, none], k=1)
+        assert chosen == [strong]  # highest overlap wins, capped to k=1
+
+    def test_relevance_empty_diary_returns_empty(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _select_relevant_snapshots
+        p = self._write_summary_snapshot(
+            tmp_path, molt_count=1, unix_ts=1, summary="anything")
+        assert _select_relevant_snapshots("", [p], k=2) == []
+
+    def test_relevance_no_signal_returns_empty(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _select_relevant_snapshots
+        p = self._write_summary_snapshot(
+            tmp_path, molt_count=1, unix_ts=1, summary="solar wind")
+        assert _select_relevant_snapshots("nutrition project", [p], k=2) == []
+
+    # ---- _select_serendipity_snapshot ------------------------------------
+
+    def test_serendipity_fires_below_rate(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _select_serendipity_snapshot
+        a = self._write_summary_snapshot(tmp_path, molt_count=1, unix_ts=1, summary="a")
+        b = self._write_summary_snapshot(tmp_path, molt_count=2, unix_ts=2, summary="b")
+
+        class _RNG:
+            def random(self):
+                return 0.0  # below rate => fires
+
+            def choice(self, seq):
+                return seq[0]
+
+        out = _select_serendipity_snapshot([a, b], exclude=[a], rng=_RNG())
+        assert out == [b]  # excluded `a` not eligible
+
+    def test_serendipity_suppressed_above_rate(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _select_serendipity_snapshot
+        a = self._write_summary_snapshot(tmp_path, molt_count=1, unix_ts=1, summary="a")
+
+        class _RNG:
+            def random(self):
+                return 0.99  # above rate => suppressed
+
+            def choice(self, seq):
+                raise AssertionError("choice must not be called when suppressed")
+
+        assert _select_serendipity_snapshot([a], exclude=[], rng=_RNG()) == []
+
+    def test_serendipity_no_candidates_returns_empty(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _select_serendipity_snapshot
+        a = self._write_summary_snapshot(tmp_path, molt_count=1, unix_ts=1, summary="a")
+
+        class _RNG:
+            def random(self):
+                return 0.0
+
+            def choice(self, seq):
+                return seq[0]
+
+        # All candidates excluded => empty even when the roll fires.
+        assert _select_serendipity_snapshot([a], exclude=[a], rng=_RNG()) == []
+
+    # ---- _has_pending_human ----------------------------------------------
+
+    def test_pending_human_true_for_non_soul_channel(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _has_pending_human
+        agent = _FakeAgent(tmp_path)
+        self._publish_notification(tmp_path, "email")
+        assert _has_pending_human(agent) is True
+
+    def test_pending_human_false_for_soul_only(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _has_pending_human
+        agent = _FakeAgent(tmp_path)
+        self._publish_notification(tmp_path, "soul")
+        assert _has_pending_human(agent) is False
+
+    def test_pending_human_false_when_none(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _has_pending_human
+        agent = _FakeAgent(tmp_path)
+        assert _has_pending_human(agent) is False
+
+    # ---- _select_past_snapshots (integration of the layers) --------------
+
+    def test_select_guard_suppresses_on_pending_human(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _select_past_snapshots
+        agent = _FakeAgent(tmp_path)
+        self._publish_notification(tmp_path, "email")
+        p = self._write_summary_snapshot(
+            tmp_path, molt_count=1, unix_ts=1, summary="nutrition project")
+        out = _select_past_snapshots(agent, "nutrition project", [p], max_past=2)
+        assert out == []
+        decisions = [kw.get("decision") for e, kw in agent.logged
+                     if e == "consultation_route"]
+        assert "guard_pending_human" in decisions
+
+    def test_select_guard_suppresses_on_empty_diary(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _select_past_snapshots
+        agent = _FakeAgent(tmp_path)
+        p = self._write_summary_snapshot(
+            tmp_path, molt_count=1, unix_ts=1, summary="nutrition project")
+        out = _select_past_snapshots(agent, "", [p], max_past=2)
+        assert out == []
+        decisions = [kw.get("decision") for e, kw in agent.logged
+                     if e == "consultation_route"]
+        assert "guard_no_diary" in decisions
+
+    def test_select_routed_when_signal_present(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _select_past_snapshots
+        agent = _FakeAgent(tmp_path)
+        match = self._write_summary_snapshot(
+            tmp_path, molt_count=1, unix_ts=1, summary="nutrition project evidence")
+        other = self._write_summary_snapshot(
+            tmp_path, molt_count=2, unix_ts=2, summary="solar wind")
+        # Force the serendipity roll to NOT fire so the assertion is exact.
+        with patch("random.random", return_value=0.99):
+            out = _select_past_snapshots(
+                agent, "the nutrition project", [match, other], max_past=2)
+        assert out == [match]
+        decisions = [kw.get("decision") for e, kw in agent.logged
+                     if e == "consultation_route"]
+        assert "routed" in decisions
+
+    def test_select_fallback_random_when_no_signal(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _select_past_snapshots
+        agent = _FakeAgent(tmp_path)
+        # Summaries share no token with the diary => routing finds nothing.
+        a = self._write_summary_snapshot(tmp_path, molt_count=1, unix_ts=1, summary="alpha")
+        b = self._write_summary_snapshot(tmp_path, molt_count=2, unix_ts=2, summary="beta")
+        with patch("random.random", return_value=0.99):  # no serendipity
+            out = _select_past_snapshots(agent, "totally different words", [a, b], max_past=2)
+        # Fallback fills up to max_past from the pool.
+        assert len(out) == 2
+        assert set(out) == {a, b}
+        decisions = [kw.get("decision") for e, kw in agent.logged
+                     if e == "consultation_route"]
+        assert "fallback_random" in decisions
+
+    def test_select_adds_serendipity_within_budget(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _select_past_snapshots
+        agent = _FakeAgent(tmp_path)
+        match = self._write_summary_snapshot(
+            tmp_path, molt_count=1, unix_ts=1, summary="nutrition project")
+        spare = self._write_summary_snapshot(
+            tmp_path, molt_count=2, unix_ts=2, summary="solar wind")
+        # max_past=2, routed picks 1 (match) => 1 slot of headroom.
+        # Force serendipity roll to fire and pick the remaining snapshot.
+        with patch("random.random", return_value=0.0), \
+             patch("random.choice", return_value=spare):
+            out = _select_past_snapshots(
+                agent, "the nutrition project", [match, spare], max_past=2)
+        assert match in out
+        assert spare in out
+        assert len(out) == 2  # bounded by max_past
+        serendipity_counts = [kw.get("serendipity") for e, kw in agent.logged
+                              if e == "consultation_route"]
+        assert 1 in serendipity_counts
+
+    def test_select_no_serendipity_when_routed_fills_budget(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _select_past_snapshots
+        agent = _FakeAgent(tmp_path)
+        m1 = self._write_summary_snapshot(
+            tmp_path, molt_count=1, unix_ts=1, summary="nutrition project")
+        m2 = self._write_summary_snapshot(
+            tmp_path, molt_count=2, unix_ts=2, summary="nutrition project")
+        spare = self._write_summary_snapshot(
+            tmp_path, molt_count=3, unix_ts=3, summary="nutrition project")
+        # max_past=2; all three overlap, routed fills both slots => no
+        # serendipity headroom even if the roll would fire.
+        with patch("random.random", return_value=0.0), \
+             patch("random.choice", return_value=spare):
+            out = _select_past_snapshots(
+                agent, "nutrition project", [m1, m2, spare], max_past=2)
+        assert len(out) == 2
+        serendipity_counts = [kw.get("serendipity") for e, kw in agent.logged
+                              if e == "consultation_route"]
+        assert serendipity_counts == [0]
+
+    def test_select_max_past_zero_returns_empty(self, tmp_path):
+        from lingtai_kernel.intrinsics.soul import _select_past_snapshots
+        agent = _FakeAgent(tmp_path)
+        p = self._write_summary_snapshot(
+            tmp_path, molt_count=1, unix_ts=1, summary="nutrition")
+        assert _select_past_snapshots(agent, "nutrition", [p], max_past=0) == []
 
 
 class TestRunConsultationRedirectLoop:
@@ -641,6 +1006,67 @@ class TestRunConsultationRedirectLoop:
 
         assert result is not None
         assert captured_session_kwargs["system_prompt"] == "CUSTOM FLOW PROMPT"
+
+    def test_consultation_insights_uses_large_context_budget(self, tmp_path):
+        from lingtai_kernel.llm.base import LLMResponse
+        from lingtai_kernel.intrinsics.soul import consultation as consultation_mod
+
+        agent = _FakeAgent(tmp_path)
+        agent._chat.context_window.return_value = 1_000
+        self._seed_diary(tmp_path, text="diary")
+        captured = {}
+
+        def _fake_fit(interface, target):
+            captured["target"] = target
+            return interface
+
+        class _MockSession:
+            def __init__(self, interface):
+                self.interface = interface
+
+            def send(self, content):
+                self.interface.add_user_message(content)
+                self.interface.add_assistant_message([TextBlock(text="done")])
+                return LLMResponse(text="done")
+
+        agent.service.create_session.side_effect = lambda *, interface, **kw: _MockSession(interface)
+        iface = ChatInterface(); iface.add_user_message("substrate")
+        with patch.object(consultation_mod, "_fit_interface_to_window", _fake_fit):
+            result = _run_consultation(agent, iface, "insights")
+
+        assert result is not None
+        assert captured["target"] == 700
+
+    def test_consultation_past_uses_smaller_context_budget(self, tmp_path):
+        from lingtai_kernel.llm.base import LLMResponse
+        from lingtai_kernel.intrinsics.soul import consultation as consultation_mod
+
+        agent = _FakeAgent(tmp_path)
+        agent._chat.context_window.return_value = 1_000
+        self._seed_diary(tmp_path, text="diary")
+        captured = {}
+
+        def _fake_fit(interface, target):
+            captured["target"] = target
+            return interface
+
+        class _MockSession:
+            def __init__(self, interface):
+                self.interface = interface
+
+            def send(self, content):
+                self.interface.add_user_message(content)
+                self.interface.add_assistant_message([TextBlock(text="done")])
+                return LLMResponse(text="done")
+
+        agent.service.create_session.side_effect = lambda *, interface, **kw: _MockSession(interface)
+        iface = ChatInterface(); iface.add_user_message("substrate")
+        with patch.object(consultation_mod, "_fit_interface_to_window", _fake_fit):
+            result = _run_consultation(agent, iface, "snapshot:budget")
+
+        assert result is not None
+        # Past-self consultations use 30% rather than 70% of the same window.
+        assert captured["target"] == 300
 
 
 # ---------------------------------------------------------------------------
