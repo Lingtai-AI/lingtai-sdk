@@ -1316,9 +1316,9 @@ class BaseAgent:
             "not necessarily a human instruction. Identify the source, interpret "
             "the relevant channel payload, and verify intent before deciding "
             "whether to act. If it contains an identifiable human message whose "
-            "preview is truncated and your next step is a long-running eligible "
-            "primary tool, use that tool's read-only secondary field to fetch "
-            "the full message before the long work starts."
+            "preview is truncated, ambiguous, includes media, or needs exact "
+            "anchoring, first use the producer channel's normal read action; if "
+            "a human is waiting, acknowledge directly before long work."
         )
         summary_text = (
             f"[synthesized — kernel notification sync] "
