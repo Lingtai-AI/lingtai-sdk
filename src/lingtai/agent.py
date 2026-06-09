@@ -1094,6 +1094,7 @@ class Agent(BaseAgent):
             max_turns=m.get("max_turns", 50),
             language=m.get("language", "en"),
             context_limit=m.get("context_limit"),
+            thinking=llm.get("thinking", "high"),
             molt_pressure=m.get("molt_pressure", 0.8),
             molt_prompt=m.get("molt_prompt", ""),
             snapshot_interval=m.get("snapshot_interval"),

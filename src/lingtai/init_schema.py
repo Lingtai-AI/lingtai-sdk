@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import logging
 
+from lingtai_kernel.config import THINKING_LEVELS
+
 log = logging.getLogger(__name__)
 
 # Schema tables lifted to module scope so tests can assert internal consistency
@@ -244,6 +246,18 @@ def validate_init(data: dict) -> list[str]:
         if isinstance(compact_threshold, int) and compact_threshold <= 0:
             raise ValueError(
                 "manifest.llm.compact_threshold: expected positive int or null"
+            )
+    if "thinking" in llm:
+        if llm["provider"].lower() != "codex":
+            raise ValueError(
+                "manifest.llm.thinking is currently supported only for "
+                "the Codex provider (provider='codex')"
+            )
+        thinking = llm["thinking"]
+        if not isinstance(thinking, str) or thinking not in THINKING_LEVELS:
+            raise ValueError(
+                "manifest.llm.thinking: expected one of "
+                f"{', '.join(THINKING_LEVELS)}"
             )
 
     # If api_key_env is set without api_key, env_file must be provided
