@@ -1,13 +1,16 @@
 ---
 name: bash-manual
 description: >
-  **Read this before setting up cron, launchd, systemd timers, crontab jobs, or
-  scheduled reminders.** Router for Bash-related operational depth beyond the
-  bash tool schema: host-scheduler setup, LingTai wake-by-mailbox-drop, script
-  hygiene, one-shot `.notification/cron.json` reminders, debugging silent jobs,
-  and safe cleanup. Start here for any time-driven recurring work ("every hour",
-  "weekdays at 9", "remind me later") or when a scheduled job misbehaves.
-version: 1.2.0
+  **Read this before running long-lived agent/coding CLIs (`claude -p`,
+  `codex exec`, `opencode run`, Cursor agent CLI), or before setting up cron,
+  launchd, systemd timers, crontab jobs, or scheduled reminders.** Router for
+  Bash-related operational depth beyond the bash tool schema: async + poll
+  discipline for long-running child agents, host-scheduler setup, LingTai
+  wake-by-mailbox-drop, script hygiene, one-shot `.notification/cron.json`
+  reminders, debugging silent jobs, and safe cleanup. Start here for any
+  long-running agent CLI, time-driven recurring work ("every hour", "weekdays at
+  9", "remind me later"), or when a scheduled job misbehaves.
+version: 1.3.0
 ---
 
 # Bash Manual — Router
@@ -16,8 +19,10 @@ The `bash` tool schema covers one-off command execution. This manual routes to
 operational depth that is too long for the schema: host scheduling, mailbox-drop
 wakeups, reminder files, debugging, and cleanup.
 
-For ordinary one-off shell commands, use the tool schema. For anything involving
-time, recurring work, external schedulers, or a silent scheduled job, start here.
+For ordinary short, deterministic one-off shell commands, use the tool schema
+synchronously. For anything involving time, recurring work, external schedulers,
+a silent scheduled job, or a **long-running agent/coding CLI** (see the resident
+rule below), start here.
 
 ## Nested reference catalog
 
@@ -50,21 +55,50 @@ files, not standalone top-level skills.
 
 | Need / keywords | Read |
 |---|---|
+| Running a long-running agent/coding CLI as a sub-process: `claude -p`, `codex exec`, `opencode run`, Cursor agent CLI; "run an agent in the background"; avoid blocking the turn | "Core rules to keep resident" below (use `bash(async=true)` + poll) |
 | Human asks for time-driven recurring work: "every hour", "daily", "weekdays at 9", "write/check/send on a schedule"; choose cron vs event watcher; create launchd/systemd/crontab wiring; understand wake-by-mailbox-drop; write scheduler prompt/script hygiene | `reference/scheduled-work/SKILL.md` |
 | Need a one-shot reminder or wakeup nudge while work is pending; `.notification/cron.json`; atomic reminder writer; rest checklist | `reference/notification-reminders/SKILL.md` |
 | Scheduled job is silent, fires twice, exits immediately, gets killed by launchd, fails to deliver mail, or must be retired/cleaned up | `reference/debugging-cleanup/SKILL.md` |
 
 ## Quick decision tree
 
-1. **One-off deterministic host work?** Use `bash` directly; this manual is not
-   needed unless the command is risky, scheduled, or failing mysteriously.
-2. **Time itself is the trigger?** Read `reference/scheduled-work/SKILL.md`.
-3. **You only need a single future nudge?** Read
+1. **Short deterministic host work** (finishes in seconds: `ls`, `git status`,
+   `grep`, a quick build)? Use `bash` synchronously; this manual is not needed
+   unless the command is risky, scheduled, or failing mysteriously.
+2. **Long-running agent/coding CLI** (`claude -p`, `codex exec`, `opencode run`,
+   Cursor agent CLI, or any sub-agent that may think/run tools for minutes)?
+   **Never run it synchronously.** Use `bash(async=true)` and poll — see the
+   resident rule below.
+3. **Time itself is the trigger?** Read `reference/scheduled-work/SKILL.md`.
+4. **You only need a single future nudge?** Read
    `reference/notification-reminders/SKILL.md`.
-4. **A scheduled job already exists and is misbehaving?** Read
+5. **A scheduled job already exists and is misbehaving?** Read
    `reference/debugging-cleanup/SKILL.md` before editing blindly.
 
 ## Core rules to keep resident
+
+- **Synchronous `bash` is only for short, deterministic commands.** A long-running
+  agent/coding CLI session — `claude -p`, `codex exec`, `opencode run`, the Cursor
+  agent CLI, or any sub-agent that may think and run tools for minutes — must
+  **never** be a synchronous `bash` call. Run it with `bash(async=true)` and poll
+  the returned `job_id`. A synchronous call blocks the whole turn until the child
+  exits: you stay `ACTIVE` and stop seeing channel notifications (mail, refresh,
+  interrupts) for the entire duration. Async + poll keeps you responsive and
+  prevents ACTIVE blockage while the child CLI works.
+
+  ```text
+  # Start the child agent in the background — returns immediately with a job_id:
+  bash(async=true, command="claude -p 'refactor the auth module' --output-format json")
+  # → {"status": "ok", "job_id": "ab12…", "pid": 4321}
+
+  # Later turns: poll until done (handle mail/other work between polls):
+  bash(action="poll", job_id="ab12…")
+  # → {"status": "running", …}   then eventually
+  # → {"status": "done", "exit_code": 0, "stdout": "…", "stderr": "…"}
+
+  # Abandon it if needed:
+  bash(action="cancel", job_id="ab12…")
+  ```
 
 - LingTai has no built-in recurring scheduler. Host schedulers wake agents by
   producing channel input, usually a mailbox-drop or notification file.
