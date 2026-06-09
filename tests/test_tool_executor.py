@@ -95,7 +95,10 @@ def test_lifecycle_trace_events_for_sequential_success():
     received = logs[_log_index(logs, "tool_call_received", trace_id="tc-seq")][1]
     normalized = logs[_log_index(logs, "tool_call_normalized", trace_id="tc-seq")][1]
     model_visible = logs[_log_index(logs, "tool_result_model_visible", trace_id="tc-seq")][1]
-    assert received["tool_args"] == {"path": "/tmp"}
+    assert received["raw_arg_keys"] == ["path"]
+    assert received["raw_arg_count"] == 1
+    assert "tool_args" not in received
+    assert normalized["tool_args"] == {"path": "/tmp"}
     assert normalized["removed_args"] == []
     assert model_visible["spilled"] is False
 
@@ -253,6 +256,63 @@ def test_lifecycle_trace_events_cover_spilled_result(tmp_path):
     )
     assert _log_index(logs, "tool_result_spilled", trace_id="spill-trace") < _log_index(
         logs, "tool_result_model_visible", trace_id="spill-trace"
+    )
+
+
+def test_lifecycle_trace_id_fallback_when_provider_id_missing():
+    logs = []
+    executor = make_executor(
+        logger_fn=lambda event_type, **fields: logs.append((event_type, fields)),
+    )
+
+    results, intercepted, _ = executor.execute([ToolCall(name="manual", args={})])
+
+    assert not intercepted
+    assert len(results) == 1
+    trace_ids = {
+        fields.get("tool_trace_id")
+        for _event, fields in logs
+        if fields.get("tool_trace_id")
+    }
+    assert len(trace_ids) == 1
+    trace_id = next(iter(trace_ids))
+    assert trace_id.startswith("tool-")
+    for _event, fields in logs:
+        if fields.get("tool_trace_id") == trace_id:
+            assert fields.get("tool_call_id") is None
+
+
+def test_lifecycle_trace_events_for_dispatch_exception():
+    logs = []
+
+    def dispatch(tc):
+        raise RuntimeError("boom")
+
+    executor = make_executor(
+        dispatch_fn=dispatch,
+        logger_fn=lambda event_type, **fields: logs.append((event_type, fields)),
+    )
+    errors = []
+
+    results, intercepted, _ = executor.execute(
+        [ToolCall(name="explode", args={}, id="err-trace")],
+        collected_errors=errors,
+    )
+
+    assert not intercepted
+    assert results[0]["result"]["status"] == "error"
+    assert any("boom" in error for error in errors)
+    events = _trace_events(logs, "err-trace")
+    assert "tool_call_dispatch_failed" in events
+    assert "tool_call_dispatch_done" not in events
+    assert _log_index(logs, "tool_call_dispatch_start", trace_id="err-trace") < _log_index(
+        logs, "tool_call_dispatch_failed", trace_id="err-trace"
+    )
+    assert _log_index(logs, "tool_call_dispatch_failed", trace_id="err-trace") < _log_index(
+        logs, "tool_result", trace_id="err-trace"
+    )
+    assert _log_index(logs, "tool_result_durable_log_visible", trace_id="err-trace") < _log_index(
+        logs, "tool_result_model_visible", trace_id="err-trace"
     )
 
 

@@ -90,7 +90,8 @@ class ToolExecutor:
             tool_name=tc.name,
             tool_call_id=tc_id,
             tool_trace_id=tool_trace_id,
-            tool_args=raw_args,
+            raw_arg_keys=sorted(str(key) for key in raw_args.keys()),
+            raw_arg_count=len(raw_args),
         )
 
         args = dict(raw_args)

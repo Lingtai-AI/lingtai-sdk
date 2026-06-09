@@ -47,7 +47,7 @@
     <table>
       <thead><tr><th>Event</th><th>含义</th><th>是否改变执行语义</th></tr></thead>
       <tbody>
-        <tr><td><code>tool_call_received</code></td><td>收到模型提出的原始顶层 tool call args。</td><td>否</td></tr>
+        <tr><td><code>tool_call_received</code></td><td>收到模型提出的顶层 tool call；为避免隐藏/控制字段或旧 payload 落 durable log，只记录 <code>raw_arg_keys</code> / <code>raw_arg_count</code>，不记录完整 raw args。</td><td>否</td></tr>
         <tr><td><code>tool_call_normalized</code></td><td>完成既有 normalization：移除 <code>reasoning</code>/<code>commentary</code>/<code>_sync</code>/遗留 <code>secondary</code>，保留等价执行 args。</td><td>否</td></tr>
         <tr><td><code>tool_call_validation_failed</code></td><td>duplicate block 或 unknown tool 这类执行前失败点。</td><td>否；只是显式记录既有结果</td></tr>
         <tr><td><code>tool_call_approved</code></td><td>Phase 1 的默认 pass-through approval 边界：<code>approval_mode=pass_through</code>, <code>policy=default_allow</code>。</td><td>否；没有 gate</td></tr>
@@ -90,6 +90,7 @@
       <li>新增 unknown-tool validation failure 测试，确认不会出现 approval/dispatch events。</li>
       <li>新增 duplicate-block validation failure 测试，确认 blocked call 不 dispatch。</li>
       <li>新增 spilled result lifecycle 测试，确认 <code>tool_result_spilled</code> / durable / model visible events 共享 trace id。</li>
+      <li>Review follow-up: 新增 id-less trace-id fallback 与 dispatch exception lifecycle 测试。</li>
     </ul>
     <pre>git diff --check
 PYTHONPATH=src /Users/huangzesen/anaconda3/bin/python -m py_compile src/lingtai_kernel/tool_executor.py
@@ -112,7 +113,7 @@ PYTHONPATH=src /Users/huangzesen/anaconda3/bin/python -m pytest -q
     <h2>Risk / review notes</h2>
     <ul>
       <li><span class="warn">Central file touched:</span> <code>ToolExecutor</code> is central, so the PR keeps the change constrained to logging/trace boundaries and uses full pytest validation.</li>
-      <li><span class="warn">More logs:</span> each tool call emits several extra structured events. This is intentional for the ledger; if log volume becomes an issue later, we can add compaction/filtering at query/report layers.</li>
+      <li><span class="warn">More logs:</span> each tool call emits several extra structured events. Full normalized args are still present on execution-boundary events, but <code>tool_call_received</code> deliberately stores only raw arg keys/count to avoid durable retention of stripped hidden/control fields. If log volume becomes an issue later, we can add compaction/filtering at query/report layers.</li>
       <li><span class="warn">No policy yet:</span> <code>tool_call_approved</code> is deliberately pass-through. Real approval policy should be a later PR after the event contract has stabilized.</li>
     </ul>
   </section>
