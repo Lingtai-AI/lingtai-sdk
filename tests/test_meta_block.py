@@ -429,16 +429,16 @@ def test_attach_active_notifications_moves_to_latest_and_clears_prior(tmp_path):
                 "human instruction. Identify the source, interpret the channel "
                 "payload, and verify intent before deciding whether to act. If "
                 "this channel payload is a human message whose preview is "
-                "truncated and the next action is a long-running eligible primary "
-                "tool, use that tool's read-only secondary field to fetch the full "
-                "message before the primary starts (replies go through the "
-                "communication tool directly, not through secondary)."
+                "truncated, ambiguous, includes media, or needs exact anchoring, "
+                "use the producer channel's normal read action before long work; "
+                "acknowledgements and replies go through the communication tool "
+                "directly."
             ),
         }
     }
     assert "email" in first.content["_notification_guidance"]
-    assert "secondary read" in first.content["_notification_guidance"]
-    assert "send/reply" not in first.content["_notification_guidance"]
+    assert "normal read tool" in first.content["_notification_guidance"]
+    assert "secondary" not in first.content["_notification_guidance"]
     # Successful stamping must commit the fingerprint, so the IDLE-path
     # synthesized pair will treat this same state as already delivered.
     expected_fp = notification_fingerprint(tmp_path)
@@ -480,7 +480,8 @@ def test_attach_active_notifications_uses_canonical_mcp_payload(tmp_path):
         {"from": "bob", "subject": "status", "preview": "second body"},
     ]
     assert "'mcp.telegram' notification channel" in payload["_notification_guidance"]
-    assert "secondary field" in payload["_notification_guidance"]
+    assert "normal read action" in payload["_notification_guidance"]
+    assert "secondary" not in payload["_notification_guidance"]
 
 
 def test_attach_active_notifications_uses_canonical_system_payload(tmp_path):
