@@ -129,7 +129,15 @@ def _iter_stdout_with_deadline(
 
 
 # Tools emanations can never use (no recursion, no spawning, no identity mutation)
-EMANATION_BLACKLIST = {"daemon", "avatar", "psyche", "skills", "knowledge"}
+EMANATION_BLACKLIST = {
+    "daemon",
+    "avatar",
+    "avatar_spawn",
+    "avatar_rules",
+    "psyche",
+    "skills",
+    "knowledge",
+}
 
 # Env vars that override Claude Code's normal first-party OAuth credentials.
 # LingTai loads ``.env`` from ``~/.lingtai-tui/`` early, so auth intended for

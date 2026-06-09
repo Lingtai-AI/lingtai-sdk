@@ -17,8 +17,9 @@ every spawn event.
 
 Usage:
     Agent(capabilities=["avatar"])
-    # avatar(name="researcher")                    — shallow (初生)
-    # avatar(name="clone", type="deep")            — deep (二重身)
+    # avatar_spawn(name="researcher")              — shallow (初生)
+    # avatar_spawn(name="clone", type="deep")      — deep (二重身)
+    # avatar_rules(rules_content="...")            — distribute rules
 """
 from __future__ import annotations
 
@@ -81,14 +82,16 @@ def get_description(lang: str = "en") -> str:
 
 
 def get_schema(lang: str = "en") -> dict:
+    """Schema for the public ``avatar_spawn`` tool.
+
+    Rules distribution is exposed as a separate ``avatar_rules`` tool so both
+    tools can use simple top-level object schemas with ordinary ``required``
+    fields. Some OpenAI-compatible strict validators reject top-level JSON
+    Schema combinators such as ``allOf``.
+    """
     return {
         "type": "object",
         "properties": {
-            "action": {
-                "type": "string",
-                "enum": ["spawn", "rules"],
-                "description": t(lang, "avatar.action"),
-            },
             "name": {
                 "type": "string",
                 "description": t(lang, "avatar.name"),
@@ -102,10 +105,6 @@ def get_schema(lang: str = "en") -> dict:
                 "type": "string",
                 "description": t(lang, "avatar.comment"),
             },
-            "rules_content": {
-                "type": "string",
-                "description": t(lang, "avatar.rules_content"),
-            },
             "dry_run": {
                 "type": "boolean",
                 "description": t(lang, "avatar.dry_run"),
@@ -115,24 +114,24 @@ def get_schema(lang: str = "en") -> dict:
                 "description": t(lang, "avatar.confirm"),
             },
         },
-        "allOf": [
-            {
-                "if": {
-                    "not": {
-                        "properties": {"action": {"const": "rules"}},
-                        "required": ["action"],
-                    },
-                },
-                "then": {"required": ["name"]},
+        "required": ["name"],
+    }
+
+
+def get_rules_description(lang: str = "en") -> str:
+    return t(lang, "avatar.rules_description")
+
+
+def get_rules_schema(lang: str = "en") -> dict:
+    return {
+        "type": "object",
+        "properties": {
+            "rules_content": {
+                "type": "string",
+                "description": t(lang, "avatar.rules_content"),
             },
-            {
-                "if": {
-                    "properties": {"action": {"const": "rules"}},
-                    "required": ["action"],
-                },
-                "then": {"required": ["rules_content"]},
-            },
-        ],
+        },
+        "required": ["rules_content"],
     }
 
 
@@ -157,6 +156,12 @@ class AvatarManager:
         if action == "rules":
             return self._rules(args)
         return self._spawn(args)
+
+    def handle_spawn(self, args: dict) -> dict:
+        return self._spawn(args)
+
+    def handle_rules(self, args: dict) -> dict:
+        return self._rules(args)
 
     # ------------------------------------------------------------------
     # Ledger (append-only JSONL log of avatar spawn events)
@@ -214,7 +219,7 @@ class AvatarManager:
         # Mission-quality gate. The reasoning field becomes the avatar's first
         # prompt, so an empty / very-short / debug-placeholder mission almost
         # always means an accidental spawn (a real incident: an agent batched
-        # avatar(spawn) into a parallel call with mission "test" and a process
+        # avatar_spawn into a parallel call with mission "test" and a process
         # was created). Refuse unless the caller explicitly passes confirm=True.
         # The dry-run path is exempt — its whole purpose is preview without
         # commitment, and forcing confirm=True there would defeat that.
@@ -227,7 +232,7 @@ class AvatarManager:
                     "warning": (
                         f"Mission appears short/test-like ({reason}). "
                         f"Pass confirm=true to proceed, or dry_run=true to preview. "
-                        f"Each avatar(spawn) creates an independent process — "
+                        f"Each avatar_spawn call creates an independent process — "
                         f"double-check your reasoning field before retrying."
                     ),
                     "reason": reason,
@@ -782,6 +787,16 @@ def setup(agent: "Agent", **kwargs) -> AvatarManager:
     """Set up the avatar capability on an agent."""
     lang = agent._config.language
     mgr = AvatarManager(agent)
-    schema = get_schema(lang)
-    agent.add_tool("avatar", schema=schema, handler=mgr.handle, description=get_description(lang))
+    agent.add_tool(
+        "avatar_spawn",
+        schema=get_schema(lang),
+        handler=mgr.handle_spawn,
+        description=get_description(lang),
+    )
+    agent.add_tool(
+        "avatar_rules",
+        schema=get_rules_schema(lang),
+        handler=mgr.handle_rules,
+        description=get_rules_description(lang),
+    )
     return mgr

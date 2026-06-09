@@ -154,7 +154,7 @@ def make_mock_service():
 
 
 class TestAvatarRulesAction:
-    """Test avatar(action=rules) distribution."""
+    """Test avatar_rules distribution."""
 
     def test_rules_requires_admin(self, tmp_path):
         """Non-admin agent cannot set rules."""
@@ -301,7 +301,7 @@ class TestAvatarRulesAction:
         assert (grandchild_dir / ".rules").read_text() == "Be concise."
 
     def test_rules_requires_content(self, tmp_path):
-        """action=rules without rules_content should error."""
+        """avatar_rules without rules_content should error."""
         from lingtai.agent import Agent
 
         agent = Agent(
@@ -390,7 +390,7 @@ class TestAvatarRulesAction:
 
 
 class TestAutoDistributeAfterSpawn:
-    """After avatar(action=spawn), parent's rules should be distributed to newborn.
+    """After avatar_spawn, parent's rules should be distributed to newborn.
 
     These tests mock _launch to avoid actually spawning subprocesses, and
     pre-create the parent's init.json so the spawn code path can proceed

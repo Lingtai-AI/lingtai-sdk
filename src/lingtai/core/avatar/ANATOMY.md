@@ -14,23 +14,30 @@ independent life — its existence does not depend on yours.
 
 ## Components
 
-- `avatar/__init__.py` — the entire capability in a single file. `_mission_looks_unsafe` (mission-quality heuristic, near top of module), `get_description`, `get_schema`, `setup`. The core class is `AvatarManager`.
+- `avatar/__init__.py` — the entire capability in a single file. `_mission_looks_unsafe` (mission-quality heuristic, near top of module), `get_description`, `get_schema`, `get_rules_schema`, `setup`. The core class is `AvatarManager`.
 
 ## Public API
 
-The `avatar` tool exposes two actions:
+The capability exposes two public tools:
 
-| Action   | Description |
-|----------|-------------|
-| `spawn`  | Spawn a new avatar agent (shallow or deep) with a given name, optional type, and optional comment. Accepts `dry_run` (preview-only) and `confirm` (acknowledge mission-quality gate). |
-| `rules`  | Set rules content and distribute via `.rules` signal files to self + all descendants |
+| Tool | Description |
+|------|-------------|
+| `avatar_spawn` | Spawn a new avatar agent (shallow or deep) with a given name, optional type, and optional comment. Accepts `dry_run` (preview-only) and `confirm` (acknowledge mission-quality gate). |
+| `avatar_rules` | Set rules content and distribute via `.rules` signal files to self + all descendants. |
+
+`avatar_spawn` and `avatar_rules` are separate tools so both schemas can stay
+as simple top-level `type: object` declarations with ordinary `required`
+fields. Some OpenAI-compatible strict tool validators reject top-level JSON
+Schema combinators such as `allOf`.
 
 ## Internal Module Layout
 
 ```
 avatar/__init__.py
   ├── AvatarManager.__init__        — stores parent agent ref
-  ├── handle()                      — dispatcher (spawn/rules)
+  ├── handle()                      — legacy action dispatcher used internally
+  ├── handle_spawn()                — spawn handler for the avatar_spawn tool
+  ├── handle_rules()                — rules handler for the avatar_rules tool
   │
   │  Spawn pipeline:
   ├── _spawn()                      — validates name, checks liveness, prepares working dir, launches process
@@ -73,4 +80,4 @@ avatar/__init__.py
 
 - **Parent:** `src/lingtai/core/` (capability package).
 - **Siblings:** `daemon/`, `mcp/`, `knowledge/` (private durable memory), `skills/` (skill catalog), `bash/`.
-- **Kernel hooks:** `setup()` is called during capability initialization; `AvatarManager.handle()` is registered as the `avatar` tool handler. The daemon capability blacklists `avatar` to prevent avatar-in-daemon recursion.
+- **Kernel hooks:** `setup()` is called during capability initialization; `AvatarManager.handle_spawn()` is registered as the `avatar_spawn` tool handler and `AvatarManager.handle_rules()` as `avatar_rules`. The daemon capability blacklists both tools to prevent avatar-in-daemon recursion and rules mutation from emanations.

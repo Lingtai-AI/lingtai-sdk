@@ -88,7 +88,7 @@ class TestAvatarManager:
         from lingtai.agent import Agent
         parent = Agent(service=make_mock_service(), agent_name="parent", working_dir=tmp_path / "test",
                             capabilities={"bash": {"yolo": True}, "avatar": {}})
-        result = parent._tool_handlers["avatar"]({"name": "child", "confirm": True})
+        result = parent._tool_handlers["avatar_spawn"]({"name": "child", "confirm": True})
         assert result["status"] == "ok"
         # New architecture: avatars run as their own processes; introspection
         # is via the avatar's on-disk init.json, not an in-process _peers map.
@@ -185,7 +185,7 @@ class TestAvatarManager:
 
 
 class TestMissionQualityGate:
-    """Issue #33 — mission/dry_run/confirm guardrails on avatar(spawn)."""
+    """Issue #33 — mission/dry_run/confirm guardrails on avatar_spawn."""
 
     @pytest.fixture(autouse=True)
     def _autopatch(self, fake_avatar_launch):
@@ -301,12 +301,20 @@ class TestMissionQualityGate:
         assert result["preview"]["mission_reason"] == ""
 
     def test_schema_exposes_dry_run_and_confirm(self):
-        from lingtai.core.avatar import get_schema
+        from lingtai.core.avatar import get_rules_schema, get_schema
         sch = get_schema("en")
         assert "dry_run" in sch["properties"]
         assert sch["properties"]["dry_run"]["type"] == "boolean"
         assert "confirm" in sch["properties"]
         assert sch["properties"]["confirm"]["type"] == "boolean"
+        assert "rules_content" not in sch["properties"]
+        assert sch["required"] == ["name"]
+        assert not {"oneOf", "anyOf", "allOf", "enum", "not"} & set(sch)
+
+        rules_sch = get_rules_schema("en")
+        assert rules_sch["required"] == ["rules_content"]
+        assert "rules_content" in rules_sch["properties"]
+        assert not {"oneOf", "anyOf", "allOf", "enum", "not"} & set(rules_sch)
 
     def test_description_points_to_avatar_manual_after_prompt_compaction(self):
         """The terse tool description should route safety guidance to the manual.
@@ -323,6 +331,7 @@ class TestMissionQualityGate:
         assert "WARNING" not in desc
         assert "confirm" in schema["properties"]
         assert "dry_run" in schema["properties"]
+        assert "action" not in schema["properties"]
 
 
 class TestSetupAvatar:
@@ -330,7 +339,9 @@ class TestSetupAvatar:
         agent = MagicMock()
         mgr = setup_avatar(agent)
         assert isinstance(mgr, AvatarManager)
-        agent.add_tool.assert_called_once()
+        assert agent.add_tool.call_count == 2
+        tool_names = {call.args[0] for call in agent.add_tool.call_args_list}
+        assert tool_names == {"avatar_spawn", "avatar_rules"}
 
 
 class TestAddCapability:
@@ -340,7 +351,12 @@ class TestAddCapability:
                            capabilities=["avatar"])
         mgr = agent.get_capability("avatar")
         assert isinstance(mgr, AvatarManager)
-        assert "avatar" in agent._tool_handlers
+        assert "avatar_spawn" in agent._tool_handlers
+        assert "avatar_spawn" in {s.name for s in agent._tool_schemas}
+        assert "avatar_rules" in agent._tool_handlers
+        assert "avatar_rules" in {s.name for s in agent._tool_schemas}
+        assert "avatar" not in agent._tool_handlers
+        assert "avatar" not in {s.name for s in agent._tool_schemas}
 
     def test_add_capability_unknown(self, tmp_path):
         """Unknown capability is logged + skipped (not raised) so a bad name
