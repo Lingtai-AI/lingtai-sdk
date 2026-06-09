@@ -1,12 +1,15 @@
 ---
 name: bash-manual
 description: >
-  **Read this before setting up cron, launchd, systemd timers, crontab jobs, or
-  scheduled reminders.** Router for Bash-related operational depth beyond the
-  bash tool schema: host-scheduler setup, LingTai wake-by-mailbox-drop, script
-  hygiene, one-shot `.notification/cron.json` reminders, debugging silent jobs,
-  and safe cleanup. Start here for any time-driven recurring work ("every hour",
-  "weekdays at 9", "remind me later") or when a scheduled job misbehaves.
+  **Read this before running long-lived agent/coding CLIs (`claude -p`,
+  `codex exec`, `opencode run`, Cursor agent CLI), or before setting up cron,
+  launchd, systemd timers, crontab jobs, or scheduled reminders.** Router for
+  Bash-related operational depth beyond the bash tool schema: async + poll
+  discipline for long-running child agents, host-scheduler setup, LingTai
+  wake-by-mailbox-drop, script hygiene, one-shot `.notification/cron.json`
+  reminders, debugging silent jobs, and safe cleanup. Start here for any
+  long-running agent CLI, time-driven recurring work ("every hour", "weekdays at
+  9", "remind me later"), or when a scheduled job misbehaves.
 version: 1.3.0
 ---
 
