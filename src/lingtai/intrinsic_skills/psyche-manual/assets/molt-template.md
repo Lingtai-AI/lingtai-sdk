@@ -43,6 +43,11 @@ Fill every section. Write `None` rather than omitting a section. This template i
 
 Before you call `psyche(object="context", action="molt", ...)`, verify:
 
+- The just-finished session segment is recorded as a session-journal sub-entry
+  (your molt history) under
+  `knowledge/session-journal/<YYYY-MM-DD>-molt-<molt-count>-<slug>/`, written
+  from `assets/session-journal-entry-template.md`, before the summary — and the
+  summary points at its path.
 - Pad, lingtai/character, knowledge, skills, and session journal were updated where needed before writing the summary.
 - Every outstanding task has an action checklist entry.
 - Every action names who/where and what exact content or command is needed.

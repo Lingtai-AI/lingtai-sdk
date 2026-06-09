@@ -13,6 +13,7 @@ This manual is the router for `psyche` operations. Keep routine guidance here; l
 
 | Asset | When to load | What it contains |
 |---|---|---|
+| `assets/session-journal-entry-template.md` (read from this skill directory) | Whenever you write the molt-history record for a session segment before a molt | Frontmatter + section template for a `knowledge/session-journal/<YYYY-MM-DD>-molt-<molt-count>-<slug>/KNOWLEDGE.md` entry |
 | `assets/molt-template.md` (read from this skill directory) | Consequential molt, long-running task, multiple collaborators, pending human commitments, open worktrees/artifacts, active background jobs, or any successor briefing that would be risky to improvise | 9-section summary scaffold plus pre-molt verification checklist |
 
 ## 1. Molt Overview
@@ -41,32 +42,35 @@ All five happen *before* the molt call. They are not optional. Without them, the
 
 ## 4. Session Journal
 
-The four stores capture *who you are*, *what you're working on*, *verifiable truths*, and *reusable procedures*. None of them captures the *story* of a session. The session journal is that missing layer.
+The four stores capture *who you are*, *what you're working on*, *verifiable truths*, and *reusable procedures*. None of them captures the *story* of a session. The session journal is that missing layer — it is also your **molt history**: each sub-entry is the record of one session segment that you write *before* you molt, so the chain of entries reconstructs how you got here across many molts.
 
 Write it as a parent/child knowledge structure under `knowledge/session-journal/`:
 
 ```
 knowledge/session-journal/
-├── KNOWLEDGE.md                                       # parent index
-├── 2026-05-13-nudge-service/KNOWLEDGE.md              # one session
-├── 2026-05-13-procedures-to-kernel/KNOWLEDGE.md       # another session
-└── 2026-05-14-wechat-fixes/KNOWLEDGE.md               # ...
+├── KNOWLEDGE.md                                            # parent index
+├── 2026-05-13-molt-7-nudge-service/KNOWLEDGE.md            # one session
+├── 2026-05-13-molt-8-procedures-to-kernel/KNOWLEDGE.md     # another, same day
+└── 2026-05-14-molt-9-wechat-fixes/KNOWLEDGE.md             # ...
 ```
+
+The directory name is `<YYYY-MM-DD>-molt-<molt-count>-<slug>`. Read the molt count from your resident system prompt's identity section — "You have undergone N molts since birth." Use that N: the entry records the pre-molt segment, written *before* you call `psyche(context, molt)`. (The molt tool result afterward reports the next count, N+1; that belongs to the next segment, not this one.) Embedding the count keeps chronology stable when you molt more than once on the same date: the date alone cannot order two same-day entries, but the molt count always can.
 
 **The parent `knowledge/session-journal/KNOWLEDGE.md` is the index** — short, scannable, progressive-disclosure. One line per sub-entry: date, slug, one-sentence hook.
 
-**The sub-entry `<date>-<slug>/KNOWLEDGE.md` is the substance** — write it long. Several thousand tokens is fine. Include:
+**The sub-entry `<YYYY-MM-DD>-molt-<molt-count>-<slug>/KNOWLEDGE.md` is the substance** — write it as the molt-history record of the segment, *before* you molt. Use `assets/session-journal-entry-template.md` from this skill directory for the frontmatter (including the `molt_count` field) and section layout. It is a journal, not a transcript — capture, in roughly this shape:
 
-- **What the session was about** — the original ask, the framing
-- **What you actually did** — the sequence, including pivots and reasons for them
-- **What you learned** — non-obvious facts, surprises, dead ends
-- **Decisions and their reasoning** — the *why*, especially when an alternative was rejected
-- **Open threads** — things noticed but deferred
-- **Pointers** — knowledge entries, skills, commits/PRs/files that anchor the work
+- **What the segment was about** — the original ask, the framing
+- **Accomplishments** — what you completed/moved forward, the outputs, who was told and where
+- **Decisions and their reasoning** — the *why*, especially where an alternative was rejected
+- **Artifacts and paths** — files, reports, branches, PRs, commits, message IDs that anchor the work; reference paths/IDs, never inline secrets or large blobs
+- **Open tasks** — things noticed or started but deferred, each with a next step
+- **Collaborators** — who is involved, their channels, who is waiting on what
+- **Gotchas and lessons** — actionable warnings and failed approaches
 
-Use a date-prefix slug so chronology is visible in `ls`. The kernel `knowledge` mechanic auto-discovers subdirectories containing `KNOWLEDGE.md`. Write files via `write`/`edit` directly.
+Several thousand tokens is fine when the segment was rich; keep it concise when it was small. The `<YYYY-MM-DD>-molt-<molt-count>-<slug>` prefix keeps chronology visible and stable in `ls` even across multiple molts on one day. The kernel `knowledge` mechanic auto-discovers subdirectories containing `KNOWLEDGE.md`. Write files via `write`/`edit` directly.
 
-Updating the parent index at each session is part of the practice — append one line referencing the new sub-entry.
+Updating the parent index at each session is part of the practice — append one line referencing the new sub-entry. Then write the successor summary (§6), which points back at this entry's path.
 
 ## 5. Tending the Pad
 
@@ -125,6 +129,10 @@ Quick routing:
 
 Before you call `psyche(object="context", action="molt", ...)`, always verify at minimum:
 
+- The just-finished session segment is recorded as a session-journal sub-entry
+  (your molt history) under `knowledge/session-journal/`, using
+  `assets/session-journal-entry-template.md` — see §4. Write this *before* the
+  summary; it is the narrative the summary points back to.
 - Durable stores and session journal were updated where needed before writing the summary.
 - Every outstanding task has an explicit next action.
 - Collaborators, channels, approvals, and key paths are named where relevant.

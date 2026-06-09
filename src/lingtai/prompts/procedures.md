@@ -35,23 +35,11 @@ operations, preset swaps, notification handling, and karma actions.
 
 ### Molt and Durable Stores
 
-**If you are about to molt, first read `psyche-manual`; for consequential
-handoffs it routes to the molt-template asset and verification checklist.** Do
-this while context is still cheap; do not wait until the last moment.
-
-Before context exhaustion, update pad, knowledge, character, and skills as
-needed, then molt deliberately with a successor briefing — not a transcript.
-For routine molts, include current task/state/next step, accomplishments,
-remaining blockers, contacts, important durable-memory paths, and gotchas.
-
-For consequential molts — long task in flight, multiple collaborators, pending
-human commitments, active background work, or non-trivial artifacts — make the
-briefing operational: role/context, accomplishments, outstanding tasks,
-prioritized action checklist with recipient/channel + exact next action/content,
-collaborators/pending replies, durable memory/execution notes to load, key
-paths, risks/lessons, and context status. Verify every outstanding task has a
-concrete action, durable stores were tended first, and the first five minutes
-after wake are obvious. For the broader memory model, read `system-manual`.
+**If you are about to molt, first read `psyche-manual`.** It owns the molt
+procedure — tending the durable stores, writing the session-journal / molt-history
+record, and routing consequential handoffs to the molt-template and entry
+templates. Read it while context is still cheap; do not wait until the last
+moment. For the broader memory model, read `system-manual`.
 
 ### Skill Routing — When to Load What
 

@@ -112,41 +112,14 @@ lifecycle.
 
 ## 6. Molt and durable stores
 
-Before context exhaustion:
+**The molt procedure lives in `psyche-manual`, not here.** It owns durable-store
+tending, the session-journal / molt-history record, the successor summary, and
+the consequential-handoff templates. Read it before molting — while context is
+still cheap, not at the last moment.
 
-1. Update pad with current work, open branches, reports, and next steps.
-2. Update knowledge with durable facts/journal entries.
-3. Update character if identity, capability, or stable collaborator topology
-   changed.
-4. Create/update skills for reusable procedures.
-5. Write a molt summary as a successor briefing.
-6. Molt deliberately.
-
-A good molt summary is not a transcript. It is an operational briefing for the
-next self: what to do first, what is done, what remains, what is forbidden
-without authorization, who is waiting, and where the durable state lives.
-
-Use `psyche-manual` when a long task is mid-stream, multiple collaborators are
-active, human commitments are pending, or the next self would otherwise need to
-reconstruct state from logs. Resident `procedures.md` only carries the compact
-cue; `psyche-manual` routes consequential handoffs to its
-`assets/molt-template.md` file, which holds the full summary template and
-pre-molt verification checklist.
-
-Minimum handoff checks:
-
-- Durable stores are tended before the summary is written.
-- Routine molts stay compact; consequential molts get the full scaffold.
-- Every outstanding task has a concrete action item with owner/recipient,
-  channel, and exact next action/content.
-- Collaborators, pending replies, authorization limits, and next human-facing
-  reports are explicit.
-- Active background work (daemons, bash jobs, avatars, schedules) is listed or
-  explicitly absent.
-- Key artifact paths are absolute and still useful.
-- Safety constraints are explicit: approvals required, secrets not shared, and
-  external side effects not implied.
-- The first five minutes after wake are obvious from the summary.
+The invariant in this procedures reference is routing: do not reconstruct molt
+mechanics here. For the checklist, templates, and summary rules, go to
+`psyche-manual`.
 
 ## 7. Skill routing
 

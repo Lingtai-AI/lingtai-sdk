@@ -166,10 +166,10 @@ Flow knowledge outward:
 4. Reusable procedures become skills.
 5. Identity/relationship changes update character.
 
-When context pressure rises, tend durable stores before molting. The molt summary
-is a briefing to the next self, not a transcript. It should say what changed,
-what remains, who to contact, which paths/knowledge/skills matter, and what must
-not be done without authorization.
+When context pressure rises, tend durable stores before molting. The detailed
+molt procedure, session-journal / molt-history record, and successor briefing
+rules live in `psyche-manual`; this substrate reference only describes the
+memory model.
 
 ## 6. Runtime logs and trace inspection
 
