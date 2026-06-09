@@ -42,6 +42,7 @@ class EmptyLLMResponseError(RuntimeError):
 
 
 _TRANSIENT_AED_RETRY_LIMIT = 3
+_REPEATED_IDENTICAL_ERROR_HARD_STOP_COUNT = 3
 _TRANSIENT_EXC_NAMES = {
     "APIConnectionError",
     "APITimeoutError",
@@ -124,6 +125,18 @@ def _tool_call_summary(tool_calls) -> dict:
         "call_ids": [getattr(call, "id", None) for call in calls],
         "tool_names": [getattr(call, "name", None) for call in calls],
     }
+
+
+def _trailing_identical_count(items: list[str]) -> int:
+    if not items:
+        return 0
+    last = items[-1]
+    count = 0
+    for item in reversed(items):
+        if item != last:
+            break
+        count += 1
+    return count
 
 
 def _pending_tool_call_summary(iface) -> dict:
@@ -1273,16 +1286,25 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
 
         guard.record_calls(len(response.tool_calls))
 
-        # Break on repeated identical errors
-        if (
-            len(collected_errors) >= 2
-            and collected_errors[-1] == collected_errors[-2]
-        ):
+        # Break on repeated identical errors, but only after committing the
+        # current tool results so the assistant tool_calls are not left pending.
+        repeated_error_count = _trailing_identical_count(collected_errors)
+        if repeated_error_count >= _REPEATED_IDENTICAL_ERROR_HARD_STOP_COUNT:
             logger.warning(
                 "[%s] Same error repeated, breaking early: %s",
                 agent.agent_name,
                 collected_errors[-1],
             )
+            agent._log(
+                "repeated_tool_error_hard_stop",
+                ledger_source=ledger_source,
+                repeated_error_count=repeated_error_count,
+                threshold=_REPEATED_IDENTICAL_ERROR_HARD_STOP_COUNT,
+                error=collected_errors[-1],
+            )
+            if tool_results and agent._chat:
+                agent._chat.commit_tool_results(tool_results)
+                agent._save_chat_history(ledger_source=ledger_source)
             break
 
         in_tool_loop = True

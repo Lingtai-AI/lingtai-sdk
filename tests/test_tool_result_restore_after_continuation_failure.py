@@ -47,12 +47,16 @@ class _FakeChat:
 class _FakeAgent:
     def __init__(self) -> None:
         self._chat = _FakeChat()
+        self.agent_name = "test-agent"
         self._notification_live_holder = None
+        self._intrinsics = {}
         self.saved = 0
+        self.save_sources: list[str | None] = []
         self.logs: list[tuple[str, dict]] = []
 
     def _save_chat_history(self, *, ledger_source: str | None = None) -> None:
         self.saved += 1
+        self.save_sources.append(ledger_source)
 
     def _log(self, event: str, **kwargs) -> None:
         self.logs.append((event, kwargs))
@@ -184,6 +188,25 @@ class _ProcessExecutor:
         return [self.result], False, ""
 
 
+class _RepeatedErrorExecutor:
+    def __init__(self, error: str = "tool failed identically") -> None:
+        self.guard = _FakeGuard()
+        self.error = error
+        self.calls: list[list] = []
+
+    def execute(self, tool_calls, **kwargs):
+        calls = list(tool_calls)
+        self.calls.append(calls)
+        collected_errors = kwargs.get("collected_errors")
+        if collected_errors is not None:
+            collected_errors.append(self.error)
+        results = [
+            ToolResultBlock(id=tc.id or f"call_{idx}", name=tc.name, content=self.error)
+            for idx, tc in enumerate(calls)
+        ]
+        return results, False, ""
+
+
 class _NoopSentTracker:
     pass
 
@@ -195,6 +218,28 @@ class _FailingSession:
     def send(self, content):
         self.sent.append(content)
         raise RuntimeError("provider continuation failed")
+
+
+class _ContinuingSession:
+    def __init__(self, chat: _FakeChat, responses: list[LLMResponse]) -> None:
+        self.chat = chat
+        self.responses = list(responses)
+        self.sent = []
+
+    def send(self, content):
+        self.sent.append(content)
+        self.chat.commit_tool_results(content)
+        response = self.responses.pop(0)
+        blocks = []
+        if response.text:
+            blocks.append(TextBlock(response.text))
+        blocks.extend(
+            ToolCallBlock(id=tc.id or "", name=tc.name, args=tc.args)
+            for tc in response.tool_calls
+        )
+        if blocks:
+            self.chat.interface.add_assistant_message(blocks)
+        return response
 
 
 class _CancelAfterInitialClear:
@@ -241,6 +286,104 @@ def test_process_response_restores_real_results_when_continuation_send_fails():
     assert agent.logs[-1] == (
         "tool_results_restored_after_continuation_failure",
         {"result_count": 1},
+    )
+
+
+def test_process_response_hard_stop_commits_third_identical_tool_error():
+    """After the third identical tool error, stop without leaving pending calls."""
+    agent = _FakeAgent()
+    agent._executor = _RepeatedErrorExecutor(error="same tool error")
+    agent._cancel_event = threading.Event()
+    agent._on_tool_result_hook = None
+    agent._intermediate_text_streamed = True
+    agent._sent_tracker = _NoopSentTracker()
+    agent._working_dir = Path("/nonexistent/lingtai-test-repeated-errors")
+
+    responses = [
+        LLMResponse(
+            text="",
+            tool_calls=[ToolCall(id="call_2", name="bash", args={"command": "fail"})],
+        ),
+        LLMResponse(
+            text="",
+            tool_calls=[ToolCall(id="call_3", name="bash", args={"command": "fail"})],
+        ),
+    ]
+    agent._session = _ContinuingSession(agent._chat, responses)
+
+    response = LLMResponse(
+        text="",
+        tool_calls=[ToolCall(id="call_1", name="bash", args={"command": "fail"})],
+    )
+
+    result = _process_response(agent, response, ledger_source="test")
+
+    assert result == {
+        "text": "",
+        "failed": True,
+        "errors": ["same tool error", "same tool error", "same tool error"],
+    }
+    assert len(agent._session.sent) == 2
+    assert [batch[0].id for batch in agent._chat.committed] == [
+        "call_1",
+        "call_2",
+        "call_3",
+    ]
+    assert not agent._chat.interface.has_pending_tool_calls()
+    assert agent._chat.interface.entries[-1].content[0].id == "call_3"
+    assert agent.saved == 3
+    assert agent.save_sources == ["test", "test", "test"]
+    hard_stop_logs = [
+        fields for event, fields in agent.logs
+        if event == "repeated_tool_error_hard_stop"
+    ]
+    assert hard_stop_logs == [
+        {
+            "ledger_source": "test",
+            "repeated_error_count": 3,
+            "threshold": 3,
+            "error": "same tool error",
+        }
+    ]
+
+
+def test_process_response_second_identical_tool_error_still_continues():
+    """The second identical tool error should still be sent to the model."""
+    agent = _FakeAgent()
+    agent._executor = _RepeatedErrorExecutor(error="same tool error")
+    agent._cancel_event = threading.Event()
+    agent._on_tool_result_hook = None
+    agent._intermediate_text_streamed = True
+    agent._sent_tracker = _NoopSentTracker()
+    agent._working_dir = Path("/nonexistent/lingtai-test-repeated-errors")
+    agent._session = _ContinuingSession(
+        agent._chat,
+        [
+            LLMResponse(
+                text="",
+                tool_calls=[ToolCall(id="call_2", name="bash", args={"command": "fail"})],
+            ),
+            LLMResponse(text="done", tool_calls=[]),
+        ],
+    )
+
+    response = LLMResponse(
+        text="",
+        tool_calls=[ToolCall(id="call_1", name="bash", args={"command": "fail"})],
+    )
+
+    result = _process_response(agent, response, ledger_source="test")
+
+    assert result == {
+        "text": "done",
+        "failed": False,
+        "errors": ["same tool error", "same tool error"],
+    }
+    assert len(agent._session.sent) == 2
+    assert [batch[0].id for batch in agent._chat.committed] == ["call_1", "call_2"]
+    assert not agent._chat.interface.has_pending_tool_calls()
+    assert not any(
+        event == "repeated_tool_error_hard_stop" for event, _ in agent.logs
     )
 
 
