@@ -32,20 +32,20 @@ def test_secondary_schema_injected_into_eligible_dynamic_tool(tmp_path):
 
     secondary = schemas["long_work"]["properties"]["secondary"]
     assert secondary["properties"]["tool"]["enum"] == ["email", "feishu", "telegram", "wechat", "whatsapp"]
-    assert "human is waiting" in secondary["description"]
     assert "primary call may take >5s" in secondary["description"]
     assert "before a long bash/daemon/web_search call" in secondary["description"]
     assert "Do not use for routine short calls" in secondary["description"]
     assert "_secondary.result" in secondary["description"]
+    # read-only boundary: the secondary channel must not advertise send/reply.
+    assert "send" not in secondary["description"]
+    assert "reply" not in secondary["description"]
     assert secondary["properties"]["args"]["required"] == ["action"]
-    assert secondary["properties"]["args"]["properties"]["action"]["enum"] == [
-        "send", "reply", "read",
-    ]
+    assert secondary["properties"]["args"]["properties"]["action"]["enum"] == ["read"]
     assert "chat_id" in secondary["properties"]["args"]["properties"]
-    assert "text" in secondary["properties"]["args"]["properties"]
     assert "limit" in secondary["properties"]["args"]["properties"]
-    assert "telegram.send needs chat_id+text" in secondary["properties"]["args"]["description"]
     assert "telegram.read needs chat_id" in secondary["properties"]["args"]["description"]
+    assert "send" not in secondary["properties"]["args"]["description"]
+    assert "reply" not in secondary["properties"]["args"]["description"]
     assert "reasoning" in schemas["long_work"]["properties"]
     agent.stop(timeout=1.0)
 

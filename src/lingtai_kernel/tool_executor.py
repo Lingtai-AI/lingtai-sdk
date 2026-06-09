@@ -255,9 +255,11 @@ class ToolExecutor:
         primary_tool: str,
         primary_tool_call_id: str | None,
     ) -> dict | None:
-        """Run a validated secondary communication call before its primary.
+        """Run a validated secondary communication read before its primary.
 
-        Secondary exists only for timely human replies during long primary work.
+        Secondary is a read-only channel: it exists only to fetch the full
+        content of a just-notified message before long primary work, never to
+        contact a human (send/reply are rejected in ``_validate_secondary``).
         It deliberately bypasses LoopGuard and never raises to the primary path;
         failures are summarized in the primary tool-result metadata.
         """
@@ -321,10 +323,9 @@ class ToolExecutor:
                     message=result.get("message", "secondary returned status=error") if isinstance(result, dict) else None,
                 )
             elif action == "read":
-                # ``read`` is the only secondary action whose payload is
-                # interesting to the primary turn — send/reply only need
-                # confirmation. Forward a bounded slice so the agent can
-                # decide what to do without an extra round-trip.
+                # ``read`` is the only allowed secondary action. Forward a
+                # bounded slice of its payload so the agent can act on the full
+                # message in this same turn without an extra round-trip.
                 summary = _secondary_summary(
                     tool=tool_name,
                     action=action,
@@ -332,6 +333,8 @@ class ToolExecutor:
                     result=result,
                 )
             else:
+                # Defensive only: validation rejects every non-read action, so
+                # this branch is unreachable for dispatched secondaries.
                 summary = _secondary_summary(tool=tool_name, action=action, status="success")
             self._log(
                 "tool_result",

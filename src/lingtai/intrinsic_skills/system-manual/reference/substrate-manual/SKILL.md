@@ -141,8 +141,11 @@ Notification previews are hints. Read the producer channel when:
 - the channel has producer-owned read/dismiss state.
 
 For human instructions, acknowledge promptly. If work will take longer than a few
-seconds, send a progress message or use a secondary communication call before the
-long tool call. During long work, report meaningful progress or blockers.
+seconds, send a progress message with the communication tool directly before the
+long tool call. The reserved secondary channel on a long primary call is
+read-only — it can only fetch the full body of a just-notified message before the
+work starts, never send or reply. During long work, report meaningful progress or
+blockers.
 
 ## 5. Memory layers and molt model
 

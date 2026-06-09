@@ -204,7 +204,7 @@ def test_secondary_executes_before_primary_and_is_stripped():
     def dispatch(tc):
         seen.append((tc.name, dict(tc.args)))
         if tc.name == "telegram":
-            return {"status": "sent", "message_id": "secret-should-not-leak"}
+            return {"status": "ok", "messages": [{"id": "m1", "text": "hi"}]}
         assert "secondary" not in tc.args
         return {"status": "ok", "echo": tc.args}
 
@@ -215,7 +215,7 @@ def test_secondary_executes_before_primary_and_is_stripped():
             "path": "/tmp",
             "secondary": {
                 "tool": "telegram",
-                "args": {"action": "send", "chat_id": 123, "text": "starting"},
+                "args": {"action": "read", "chat_id": 123, "limit": 5},
             },
         },
         id="tc1",
@@ -228,12 +228,75 @@ def test_secondary_executes_before_primary_and_is_stripped():
     assert "secondary" not in seen[1][1]
     payload = results[0]["result"]
     assert payload["status"] == "ok"
-    assert payload["_secondary"] == {
-        "status": "success",
-        "tool": "telegram",
-        "action": "send",
-    }
-    assert "secret-should-not-leak" not in str(payload["_secondary"])
+    assert payload["_secondary"]["status"] == "success"
+    assert payload["_secondary"]["tool"] == "telegram"
+    assert payload["_secondary"]["action"] == "read"
+
+
+def test_secondary_send_action_is_rejected():
+    """The secondary channel is read-only — send must be rejected at runtime
+    without blocking the primary."""
+    seen = []
+
+    def dispatch(tc):
+        seen.append(tc.name)
+        return {"status": "ok"}
+
+    executor = make_executor(dispatch_fn=dispatch, known_tools={"read", "telegram"})
+    calls = [ToolCall(
+        name="read",
+        args={
+            "secondary": {
+                "tool": "telegram",
+                "args": {"action": "send", "chat_id": 123, "text": "starting"},
+            },
+        },
+        id="tc1",
+    )]
+
+    results, intercepted, _ = executor.execute(calls)
+
+    assert not intercepted
+    # secondary send must never reach the communication handler
+    assert seen == ["read"]
+    payload = results[0]["result"]
+    assert payload["status"] == "ok"
+    assert payload["_secondary"]["status"] == "error"
+    assert payload["_secondary"]["tool"] == "telegram"
+    assert payload["_secondary"]["action"] == "send"
+    assert "action" in payload["_secondary"]["message"]
+
+
+def test_secondary_reply_action_is_rejected():
+    """The secondary channel is read-only — reply must be rejected at runtime
+    without blocking the primary."""
+    seen = []
+
+    def dispatch(tc):
+        seen.append(tc.name)
+        return {"status": "ok"}
+
+    executor = make_executor(dispatch_fn=dispatch, known_tools={"read", "email"})
+    calls = [ToolCall(
+        name="read",
+        args={
+            "secondary": {
+                "tool": "email",
+                "args": {"action": "reply", "email_id": ["e1"], "message": "ack"},
+            },
+        },
+        id="tc1",
+    )]
+
+    results, intercepted, _ = executor.execute(calls)
+
+    assert not intercepted
+    assert seen == ["read"]
+    payload = results[0]["result"]
+    assert payload["_secondary"]["status"] == "error"
+    assert payload["_secondary"]["tool"] == "email"
+    assert payload["_secondary"]["action"] == "reply"
+    assert "action" in payload["_secondary"]["message"]
 
 
 def test_secondary_unknown_tool_does_not_block_primary():
@@ -305,10 +368,9 @@ def test_secondary_recursive_call_rejected():
             "secondary": {
                 "tool": "telegram",
                 "args": {
-                    "action": "send",
+                    "action": "read",
                     "chat_id": 123,
-                    "text": "starting",
-                    "secondary": {"tool": "telegram", "args": {"action": "send"}},
+                    "secondary": {"tool": "telegram", "args": {"action": "read"}},
                 },
             }
         },
@@ -339,7 +401,7 @@ def test_secondary_exception_does_not_block_primary():
         args={
             "secondary": {
                 "tool": "telegram",
-                "args": {"action": "send", "chat_id": 123, "text": "starting"},
+                "args": {"action": "read", "chat_id": 123},
             }
         },
         id="tc1",
@@ -376,7 +438,7 @@ def test_secondary_parallel_path():
                 "path": "/tmp/a",
                 "secondary": {
                     "tool": "telegram",
-                    "args": {"action": "send", "chat_id": 123, "text": "a"},
+                    "args": {"action": "read", "chat_id": 123},
                 },
             },
             id="tc1",
@@ -410,7 +472,7 @@ def test_secondary_rejected_when_primary_is_communication_tool():
             "text": "primary message",
             "secondary": {
                 "tool": "telegram",
-                "args": {"action": "send", "chat_id": 123, "text": "nested message"},
+                "args": {"action": "read", "chat_id": 123},
             },
         },
         id="tc1",
@@ -442,9 +504,8 @@ def test_secondary_reasoning_fields_are_stripped_from_secondary_args():
             "secondary": {
                 "tool": "telegram",
                 "args": {
-                    "action": "send",
+                    "action": "read",
                     "chat_id": 123,
-                    "text": "starting",
                     "reasoning": "nested reason should not reach handler",
                     "commentary": "nested commentary should not reach handler",
                     "_sync": True,
@@ -503,10 +564,9 @@ def test_secondary_deep_recursive_key_rejected():
             "secondary": {
                 "tool": "telegram",
                 "args": {
-                    "action": "send",
+                    "action": "read",
                     "chat_id": 123,
-                    "text": "starting",
-                    "reply_markup": {"secondary": {"tool": "telegram", "args": {"action": "send"}}},
+                    "reply_markup": {"secondary": {"tool": "telegram", "args": {"action": "read"}}},
                 },
             }
         },
@@ -534,7 +594,7 @@ def test_secondary_still_reports_when_primary_unknown_sequential():
         args={
             "secondary": {
                 "tool": "telegram",
-                "args": {"action": "send", "chat_id": 123, "text": "starting"},
+                "args": {"action": "read", "chat_id": 123},
             }
         },
         id="tc1",
@@ -571,7 +631,7 @@ def test_secondary_still_reports_when_primary_unknown_parallel():
             args={
                 "secondary": {
                     "tool": "telegram",
-                    "args": {"action": "send", "chat_id": 123, "text": "starting"},
+                    "args": {"action": "read", "chat_id": 123},
                 }
             },
             id="tc1",
@@ -593,7 +653,7 @@ def test_secondary_still_reports_when_primary_unknown_parallel():
 def test_secondary_wraps_non_dict_primary_result_under_reserved_key():
     def dispatch(tc):
         if tc.name == "telegram":
-            return {"status": "sent", "message_id": "secret-should-not-leak"}
+            return {"status": "ok", "messages": [{"id": "m1"}]}
         return "plain primary result"
 
     executor = make_executor(dispatch_fn=dispatch, known_tools={"read", "telegram"})
@@ -602,7 +662,7 @@ def test_secondary_wraps_non_dict_primary_result_under_reserved_key():
         args={
             "secondary": {
                 "tool": "telegram",
-                "args": {"action": "send", "chat_id": 123, "text": "starting"},
+                "args": {"action": "read", "chat_id": 123},
             }
         },
         id="tc1",
@@ -613,13 +673,15 @@ def test_secondary_wraps_non_dict_primary_result_under_reserved_key():
     assert not intercepted
     payload = results[0]["result"]
     assert payload["result"] == "plain primary result"
-    assert payload["_secondary"] == {"status": "success", "tool": "telegram", "action": "send"}
+    assert payload["_secondary"]["status"] == "success"
+    assert payload["_secondary"]["tool"] == "telegram"
+    assert payload["_secondary"]["action"] == "read"
 
 
 def test_secondary_survives_canonical_tool_result_block_wire_shape():
     def dispatch(tc):
         if tc.name == "telegram":
-            return {"status": "sent", "message_id": "secret-should-not-leak"}
+            return {"status": "ok", "messages": [{"id": "m1"}]}
         return {"status": "ok"}
 
     def make_result(name, result, **kw):
@@ -642,7 +704,7 @@ def test_secondary_survives_canonical_tool_result_block_wire_shape():
         args={
             "secondary": {
                 "tool": "telegram",
-                "args": {"action": "send", "chat_id": 123, "text": "starting"},
+                "args": {"action": "read", "chat_id": 123},
             }
         },
     )])
@@ -650,7 +712,8 @@ def test_secondary_survives_canonical_tool_result_block_wire_shape():
     assert not intercepted
     block = results[0]
     assert isinstance(block, ToolResultBlock)
-    assert block.content["_secondary"] == {"status": "success", "tool": "telegram", "action": "send"}
+    assert block.content["_secondary"]["status"] == "success"
+    assert block.content["_secondary"]["action"] == "read"
     assert block.to_dict()["content"]["_secondary"]["status"] == "success"
 
 
@@ -776,11 +839,14 @@ def test_secondary_read_result_is_truncated_under_payload_cap():
     assert "truncated" in forwarded_body
 
 
-def test_secondary_send_does_not_forward_handler_result():
-    """For send/reply (not read), the comm handler's result is never echoed
-    under _secondary.result — only a small confirmation summary is exposed.
-    This guards against accidental leakage of message_ids / handler internals."""
+def test_secondary_send_never_reaches_handler_so_nothing_leaks():
+    """send is forbidden on the read-only secondary channel, so the comm
+    handler never runs and its internals (message_ids etc.) can never leak
+    under _secondary."""
+    seen = []
+
     def dispatch(tc):
+        seen.append(tc.name)
         if tc.name == "telegram":
             return {"status": "sent", "message_id": "secret-should-not-leak"}
         return {"status": "ok"}
@@ -800,9 +866,12 @@ def test_secondary_send_does_not_forward_handler_result():
     results, intercepted, _ = executor.execute(calls)
 
     assert not intercepted
+    assert seen == ["read"]  # telegram send handler never invoked
     sec = results[0]["result"]["_secondary"]
-    assert sec == {"status": "success", "tool": "telegram", "action": "send"}
+    assert sec["status"] == "error"
+    assert sec["action"] == "send"
     assert "result" not in sec
+    assert "secret-should-not-leak" not in str(sec)
 
 
 def test_secondary_read_disallowed_for_imap_excluded_target():

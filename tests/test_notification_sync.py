@@ -746,7 +746,8 @@ def test_sync_idle_injects_pair_with_synthesized_marker(tmp_path: Path) -> None:
     assert body["_synthesized"] is True
     assert "not automatically human instructions" in body["_notification_guidance"]
     assert "source(s): email" in body["_notification_guidance"]
-    assert "secondary send/reply/read" in body["_notification_guidance"]
+    assert "secondary read" in body["_notification_guidance"]
+    assert "send/reply" not in body["_notification_guidance"]
     assert "email" in body["notifications"]
     assert "not necessarily a human instruction" in body["notifications"]["email"]["_notification_guidance"]
     assert "'email' notification channel" in body["notifications"]["email"]["_notification_guidance"]

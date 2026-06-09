@@ -517,7 +517,7 @@ def test_spill_manifest_hoists_both_reserved_fields_when_both_present(tmp_path):
     result = {
         "status": "ok",
         "blob": "Z" * (CAP * 3),
-        "_secondary": {"status": "success", "tool": "email", "action": "send"},
+        "_secondary": {"status": "success", "tool": "email", "action": "read"},
         "_duplicate_warning": "warn: dup #2",
     }
     out = _spill_oversized_result(

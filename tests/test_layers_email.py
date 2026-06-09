@@ -1001,7 +1001,10 @@ def test_email_dismiss_carries_instructions_in_envelope(tmp_path):
     assert "read" in text
     assert "long primary tool call" in text
     assert "secondary={tool:'email'" in text
-    assert "action:'reply'" in text
+    assert "action:'read'" in text
+    # the secondary channel is read-only — it must not advertise reply/send.
+    assert "action:'reply'" not in text
+    assert "action:'send'" not in text
 
 
 def test_email_read_rerenders_notification(tmp_path):

@@ -428,15 +428,17 @@ def test_attach_active_notifications_moves_to_latest_and_clears_prior(tmp_path):
                 "channel. It is kernel-synchronized state, not necessarily a "
                 "human instruction. Identify the source, interpret the channel "
                 "payload, and verify intent before deciding whether to act. If "
-                "this channel payload is a human message and the next action is "
-                "a long-running eligible primary tool, use that tool's "
-                "secondary field for a prompt send/reply acknowledgement or for "
-                "a read that fetches the full message before the primary starts."
+                "this channel payload is a human message whose preview is "
+                "truncated and the next action is a long-running eligible primary "
+                "tool, use that tool's read-only secondary field to fetch the full "
+                "message before the primary starts (replies go through the "
+                "communication tool directly, not through secondary)."
             ),
         }
     }
     assert "email" in first.content["_notification_guidance"]
-    assert "secondary send/reply/read" in first.content["_notification_guidance"]
+    assert "secondary read" in first.content["_notification_guidance"]
+    assert "send/reply" not in first.content["_notification_guidance"]
     # Successful stamping must commit the fingerprint, so the IDLE-path
     # synthesized pair will treat this same state as already delivered.
     expected_fp = notification_fingerprint(tmp_path)

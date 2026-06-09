@@ -57,8 +57,9 @@ def _build_tool_schemas(agent) -> list[FunctionSchema]:
     explain why it's calling this tool. Reasoning is logged as part of
     the agent's diary and stripped before the handler runs. Eligible
     non-communication capability/MCP tools also get the reserved
-    ``secondary`` parameter for a restricted human-reply tool call that the
-    runtime executes mechanically before the primary handler.
+    ``secondary`` parameter for a restricted, read-only communication call
+    (fetching a just-notified message) that the runtime executes mechanically
+    before the primary handler.
     """
     reasoning_prop = {
         "reasoning": {
