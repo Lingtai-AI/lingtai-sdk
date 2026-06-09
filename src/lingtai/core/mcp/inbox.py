@@ -47,6 +47,10 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+# Keep these contract constants and validate_event() lightweight at module
+# import time: the client-side producer (licc.py) imports/re-exports them so
+# out-of-process MCP servers can share the receiver's source of truth without
+# starting the poller or pulling in heavy runtime machinery.
 INBOX_DIRNAME = ".mcp_inbox"
 DEAD_DIRNAME = ".dead"
 TMP_SUFFIX = ".json.tmp"
