@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>MCP inbox preview docstring cleanup</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.55;max-width:920px;margin:40px auto;padding:0 24px;color:#18212f;background:#f8fafc}main{background:white;border:1px solid #e2e8f0;border-radius:18px;padding:28px;box-shadow:0 10px 28px rgba(15,23,42,.06)}h1{margin-top:0}code{background:#f1f5f9;border-radius:6px;padding:.1em .35em}.ok{color:#047857;font-weight:700}.box{border-left:4px solid #2563eb;background:#eff6ff;padding:12px 16px;border-radius:10px;margin:16px 0}ul{padding-left:1.4rem}</style>
+</head>
+<body><main>
+<h1>MCP inbox preview docstring cleanup</h1>
+<p class="ok">结论：只清理过期注释/文档字符串，不改变运行时行为。</p>
+<div class="box">
+<p>背景：PR #251 合并后，Claude Code final review 指出 <code>src/lingtai/core/mcp/inbox.py</code> 中相关 docstring 仍描述旧行为：100-char snippet、body 不进入 preview。实际行为已经是 body preview 进入 <code>data.previews[*].preview</code>，且不会复制到顶层 <code>instructions</code>。</p>
+</div>
+<h2>改动</h2>
+<ul>
+<li>更新 <code>_consume_event()</code> docstring：说明 preview 包含 sender、subject、bounded body preview；<code>preview</code> 由 <code>_PREVIEW_FIELD_CAP</code> 截断。</li>
+<li>明确 body preview 只保留在结构化 <code>data.previews[*].preview</code> 中，不再复制到 coalesced notification 的顶层 <code>instructions</code>。</li>
+<li>更新 <code>_dispatch_summary()</code> docstring：说明 <code>instructions</code> 只保留 read/check guidance、sender/subject 和 lightweight routing metadata。</li>
+<li>更新 <code>_scan_once()</code> docstring：去掉旧的 “只包含 count / body-sender-subject never inlined / _format_notification_summary” 描述，改成当前 coalesced notification + structured previews 的描述。</li>
+</ul>
+<h2>验证计划</h2>
+<ul>
+<li><code>git diff --check</code></li>
+<li><code>PYTHONPATH=src python -m py_compile src/lingtai/core/mcp/inbox.py</code></li>
+<li><code>PYTHONPATH=src python -m pytest -q tests/test_mcp_inbox.py tests/test_mcp_licc_client.py tests/test_notification_sync.py</code></li>
+</ul>
+<h2>风险</h2>
+<p>低。改动只涉及 docstring 文本，不触碰逻辑、测试断言或通知 payload 结构。</p>
+</main></body></html>

@@ -176,16 +176,17 @@ def _extract_preview_meta(event: dict) -> dict:
 def _consume_event(agent: "BaseAgent", mcp_name: str, event: dict) -> tuple[bool, dict]:
     """Record the per-event log entry; return (wake, preview).
 
-    The preview surfaces sender + subject + a 100-char snippet of the body
-    so the agent can triage what arrived without calling read() on every
-    event. ``from`` and ``subject`` pass through uncapped — both are bounded
-    by upstream MCP construction (subject is also validated <= 200 chars).
-    Only ``preview`` is truncated, since bodies can be arbitrarily large
-    (multi-paragraph emails, OCR text, voice transcripts).
+    The preview surfaces sender, subject, and a bounded body preview so the
+    agent can triage what arrived without calling read() on every event.
+    ``from`` and ``subject`` pass through as supplied by the upstream MCP
+    event construction; ``preview`` is truncated at ``_PREVIEW_FIELD_CAP``
+    because bodies can be arbitrarily large (multi-paragraph emails, OCR
+    text, voice transcripts, chat conversation digests).
 
-    The full body is NOT included — it stays behind the MCP's read action
-    so the agent has one source of truth and avoids the re-processing loop
-    that issue #37 fixed.
+    The preview body is included once in structured notification data
+    (``data.previews[*].preview``) and is not duplicated into the coalesced
+    notification's top-level ``instructions`` text. The MCP's read action
+    remains the source of truth for exact/full message content.
 
     Optional IM/chat metadata fields (``conversation_ref``, ``message_ref``,
     ``platform``) from ``event["metadata"]`` are copied into the preview
@@ -226,9 +227,11 @@ def _dispatch_summary(
 ) -> None:
     """Publish one coalesced notification covering ``count`` events from ``mcp_name``.
 
-    Each preview entry has ``{"from": <sender>, "subject": <subject>}`` with
-    both fields capped at ``_PREVIEW_FIELD_CAP`` chars. Full message bodies
-    are NOT included — those stay behind the MCP's read action (issue #37).
+    Each preview entry carries the sender, subject, a bounded body preview,
+    and optional lightweight routing metadata. Body preview text is kept in
+    structured ``data.previews[*].preview`` only; top-level ``instructions``
+    contains read/check guidance plus sender/subject/metadata context, not a
+    second copy of the body preview.
 
     Uses the kernel's canonical ``.notification/`` filesystem-as-protocol
     instead of the legacy inbox queue.  The notification file is written as
@@ -314,9 +317,10 @@ def _scan_once(agent: "BaseAgent", inbox_root: Path) -> int:
     """One sweep through .mcp_inbox/<mcp_name>/*.json. Returns count dispatched.
 
     Per MCP per sweep: consume up to ``MAX_EVENTS_PER_CYCLE`` valid events
-    (logging each individually), then post a single coalesced [system]
-    notification carrying only the count. Body / sender / subject are
-    intentionally never inlined — see ``_format_notification_summary``.
+    (logging each individually), then post a single coalesced notification.
+    The notification includes lightweight instructions plus structured
+    preview entries; body preview text stays in ``data.previews[*].preview``
+    rather than being duplicated into the top-level ``instructions`` string.
     """
     if not inbox_root.is_dir():
         return 0
