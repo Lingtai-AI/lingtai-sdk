@@ -119,14 +119,24 @@ def test_send_preserves_interaction_id():
     assert sm.interaction_id == "new-id"
 
 
-def test_send_logs_llm_call():
+def test_send_logs_llm_call_with_api_call_id():
     events = []
+
     def log_fn(event_type, **fields):
-        events.append(event_type)
-    sm, _, _ = make_session_manager(logger_fn=log_fn)
+        events.append((event_type, fields))
+
+    sm, _, response = make_session_manager(logger_fn=log_fn)
     sm.send("hello")
-    assert "llm_call" in events
-    assert "llm_response" in events
+
+    event_types = [event for event, _ in events]
+    assert "llm_call" in event_types
+    assert "llm_response" in event_types
+
+    llm_call = next(fields for event, fields in events if event == "llm_call")
+    llm_response = next(fields for event, fields in events if event == "llm_response")
+    assert llm_call["api_call_id"].startswith("api_")
+    assert llm_response["api_call_id"] == llm_call["api_call_id"]
+    assert response.send.return_value.api_call_id == llm_call["api_call_id"]
 
 
 # ------------------------------------------------------------------

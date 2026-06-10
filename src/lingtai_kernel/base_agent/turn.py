@@ -1283,6 +1283,7 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
                 in_tool_loop=in_tool_loop,
                 output_tokens=response.usage.output_tokens,
                 thinking_tokens=response.usage.thinking_tokens,
+                api_call_id=getattr(response, "api_call_id", None),
                 **_diag,
             )
             raise EmptyLLMResponseError(
@@ -1344,6 +1345,7 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         # Delegate to ToolExecutor
         tool_results, intercepted, intercept_text = agent._executor.execute(
             response.tool_calls,
+            api_call_id=getattr(response, "api_call_id", None),
             on_result_hook=agent._on_tool_result_hook,
             cancel_event=agent._cancel_event,
             collected_errors=collected_errors,

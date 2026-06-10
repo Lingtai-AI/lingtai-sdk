@@ -50,6 +50,7 @@ class ToolExecutor:
         self._meta_fn = meta_fn or (lambda: {})
         self._working_dir = Path(working_dir) if working_dir is not None else None
         self._max_result_chars = max_result_chars
+        self._current_api_call_id: str | None = None
 
     def _tool_trace_id(self, tc: ToolCall) -> str:
         """Return the stable trace id for one top-level tool-call execution.
@@ -305,6 +306,8 @@ class ToolExecutor:
         self._guard = value
 
     def _log(self, event_type: str, **fields) -> None:
+        if self._current_api_call_id and "api_call_id" not in fields:
+            fields["api_call_id"] = self._current_api_call_id
         if self._logger_fn:
             self._logger_fn(event_type, **fields)
 
@@ -315,11 +318,37 @@ class ToolExecutor:
         on_result_hook: Callable | None = None,
         cancel_event: Any | None = None,
         collected_errors: list[str] | None = None,
+        api_call_id: str | None = None,
     ) -> tuple[list, bool, str]:
-        """Execute tool calls. Returns (results, intercepted, intercept_text)."""
+        """Execute tool calls. Returns (results, intercepted, intercept_text).
+
+        ``api_call_id`` identifies the LLM API response that produced this
+        batch. When present it is stamped onto every tool lifecycle/result
+        event for UI grouping and trace reconstruction.
+        """
         if collected_errors is None:
             collected_errors = []
 
+        previous_api_call_id = self._current_api_call_id
+        self._current_api_call_id = api_call_id
+        try:
+            return self._execute_with_current_api_call_id(
+                tool_calls,
+                collected_errors,
+                on_result_hook=on_result_hook,
+                cancel_event=cancel_event,
+            )
+        finally:
+            self._current_api_call_id = previous_api_call_id
+
+    def _execute_with_current_api_call_id(
+        self,
+        tool_calls: list[ToolCall],
+        collected_errors: list[str],
+        *,
+        on_result_hook: Callable | None = None,
+        cancel_event: Any | None = None,
+    ) -> tuple[list, bool, str]:
         all_parallel_safe = (
             len(tool_calls) > 1
             and self._parallel_safe_tools

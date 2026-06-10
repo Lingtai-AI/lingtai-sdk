@@ -104,6 +104,27 @@ def test_lifecycle_trace_events_for_sequential_success():
     assert model_visible["spilled"] is False
 
 
+def test_api_call_id_is_stamped_on_tool_events():
+    logs = []
+    executor = make_executor(
+        known_tools={"read"},
+        logger_fn=lambda event_type, **fields: logs.append((event_type, fields)),
+    )
+
+    executor.execute(
+        [ToolCall(name="read", args={"path": "/tmp"}, id="tc-api")],
+        api_call_id="api_test123",
+    )
+
+    for event_type, fields in logs:
+        assert fields.get("api_call_id") == "api_test123", event_type
+
+    # The temporary execution context must not leak to later calls.
+    logs.clear()
+    executor.execute([ToolCall(name="read", args={"path": "/tmp"}, id="tc-next")])
+    assert all("api_call_id" not in fields for _, fields in logs)
+
+
 def test_lifecycle_trace_events_for_parallel_success_preserve_result_order():
     logs = []
 

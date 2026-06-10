@@ -6,6 +6,7 @@ BaseAgent delegates all session operations here.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import uuid
 from typing import Any, Callable, TYPE_CHECKING
 
 from .config import AgentConfig
@@ -217,9 +218,11 @@ class SessionManager:
 
         self._health_check(message)
 
+        api_call_id = f"api_{uuid.uuid4().hex[:12]}"
         self._log(
             "llm_call",
             model=self._config.model or self._llm_service.model or "unknown",
+            api_call_id=api_call_id,
         )
 
         retry_timeout = self._config.retry_timeout
@@ -236,6 +239,7 @@ class SessionManager:
                 logger=logger,
             )
 
+        response.api_call_id = api_call_id
         self._track_usage(response)
         # Preserve interaction ID for session reuse
         if hasattr(self._chat, "interaction_id") and self._chat.interaction_id:
@@ -330,6 +334,7 @@ class SessionManager:
                 usage=usage,
                 thoughts=response.thoughts,
                 raw=response.raw,
+                api_call_id=response.api_call_id,
             )
             fallback = True
             if not self._token_fallback_warned:
@@ -369,6 +374,7 @@ class SessionManager:
                 thinking_tokens=response.usage.thinking_tokens,
                 cached_tokens=response.usage.cached_tokens,
                 estimated=fallback,
+                api_call_id=response.api_call_id,
             )
 
     def get_token_usage(self) -> dict:

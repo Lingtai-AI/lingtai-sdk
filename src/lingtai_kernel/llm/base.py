@@ -67,6 +67,11 @@ class LLMResponse:
     usage: UsageMetadata = field(default_factory=UsageMetadata)
     thoughts: list[str] = field(default_factory=list)
     raw: Any = None
+    # Stable identifier for this kernel-level LLM API round-trip.
+    # SessionManager assigns it before logging llm_call/llm_response;
+    # BaseAgent/ToolExecutor propagate it to every tool event produced from
+    # the same assistant response so UI/replay code can group tool batches.
+    api_call_id: str | None = None
 
 
 @dataclass
