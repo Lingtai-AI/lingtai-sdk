@@ -633,22 +633,22 @@ class ChatInterface:
     def remove_pair_by_call_id(self, call_id: str) -> bool:
         """Remove a strict ``(assistant{tool_call}, user{tool_result})`` pair.
 
-        Scans for an assistant entry whose content is exactly one
-        ``ToolCallBlock`` with the given ``call_id``, immediately followed
-        by a user entry whose content is exactly one ``ToolResultBlock``
-        with the same id. Removes both entries and returns True. Returns
-        False if no such strict pair exists.
+        Scans for an assistant entry with exactly one ``ToolCallBlock``
+        with the given ``call_id`` (plus optional legacy ``TextBlock``s),
+        immediately followed by a user entry whose content is exactly one
+        ``ToolResultBlock`` with the same id. Removes both entries and
+        returns True. Returns False if no such removable pair exists.
 
-        The strict-shape requirement is intentional: this helper exists
+        The removable-shape requirement is intentional: this helper exists
         to maintain the single-slot invariant for synthesized appendix
         pairs (soul flow), which always have exactly that shape. Refusing
         to operate on mixed-content entries protects regular tool-call
         history from being corrupted by accidental id collisions.
 
         The assistant entry may contain one ``ToolCallBlock`` plus any
-        number of ``TextBlock``s (the synthesized notification pair
-        carries a leading text summary alongside the tool call).  The
-        user entry must still be exactly one ``ToolResultBlock``.
+        number of ``TextBlock``s for backward compatibility with older
+        synthesized pairs.  New notification-sync pairs are tool-only.
+        The user entry must still be exactly one ``ToolResultBlock``.
         """
         for i in range(len(self._entries) - 1):
             a = self._entries[i]
@@ -682,23 +682,24 @@ class ChatInterface:
     def remove_pair_by_notif_id(self, notif_id: str) -> bool:
         """Remove a synthetic notification pair matched by ``args.notif_id``.
 
-        Scans for an assistant entry whose content is exactly one
-        ``ToolCallBlock`` with ``args.get("action") == "notification"`` and
-        ``args.get("notif_id") == notif_id``, immediately followed by a user
-        entry whose content is exactly one ``ToolResultBlock`` whose ``id``
-        matches the call's ``id``. Removes both entries and returns True.
-        Returns False if no such strict pair exists (idempotent).
+        Scans for an assistant entry with exactly one ``ToolCallBlock``
+        whose ``args.get("action") == "notification"`` and
+        ``args.get("notif_id") == notif_id`` (plus optional legacy
+        ``TextBlock``s), immediately followed by a user entry whose content
+        is exactly one ``ToolResultBlock`` whose ``id`` matches the call's
+        ``id``. Removes both entries and returns True. Returns False if no
+        such removable pair exists (idempotent).
 
-        The strict-shape requirement matches ``remove_pair_by_call_id``'s
+        The removable-shape requirement matches ``remove_pair_by_call_id``'s
         rationale: this helper exists to dismiss kernel-synthesized
         notification pairs only. Refusing to operate on mixed-content
         entries or non-notification calls protects regular tool-call
         history from being corrupted.
 
         The assistant entry may contain one ``ToolCallBlock`` plus any
-        number of ``TextBlock``s (the synthesized notification pair
-        carries a leading text summary alongside the tool call).  The
-        user entry must still be exactly one ``ToolResultBlock``.
+        number of ``TextBlock``s for backward compatibility with older
+        synthesized pairs.  New notification-sync pairs are tool-only.
+        The user entry must still be exactly one ``ToolResultBlock``.
         """
         for i in range(len(self._entries) - 1):
             a = self._entries[i]

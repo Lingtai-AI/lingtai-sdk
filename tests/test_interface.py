@@ -115,9 +115,9 @@ def test_remove_pair_by_call_id_returns_false_when_missing():
 
 def test_remove_pair_by_call_id_allows_text_plus_tool_call():
     """An assistant entry containing one ToolCallBlock plus TextBlocks IS
-    accepted: the synthesized notification pair carries a leading text
-    summary alongside the tool call (see ChatInterface.remove_pair_by_call_id
-    docstring). The user entry must still be exactly one ToolResultBlock."""
+    accepted for backward compatibility with older synthesized pairs (see
+    ChatInterface.remove_pair_by_call_id docstring). The user entry must
+    still be exactly one ToolResultBlock."""
     iface = ChatInterface()
     iface.add_system("sys")
     iface.add_user_message("hi")

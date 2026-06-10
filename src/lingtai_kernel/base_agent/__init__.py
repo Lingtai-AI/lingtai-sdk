@@ -1196,13 +1196,10 @@ class BaseAgent:
         appends to the wire interface.  Records the call_id for later
         stripping.
 
-        The assistant turn carries a ``TextBlock`` summary alongside the
-        synthetic ``ToolCallBlock`` — e.g. ``"通知至：3 email, 1 soul"`` —
-        which (a) is honest about what's on the wire from the agent's
-        introspective POV and (b) provides substantive prefix novelty
-        that defeats DeepSeek's cache fast-path empty-response failure
-        mode (see deepseek/adapter.py for the protocol-level fix; this
-        is the semantic-layer companion).
+        The assistant turn carries only the synthetic ``ToolCallBlock``.
+        The model-visible notification details and guidance live in the
+        matching ``ToolResultBlock`` body, so notification wakes do not
+        surface as transcript text / diary-like synthesized summaries.
 
         The ``ToolResultBlock`` is created with ``synthesized=True``
         (the existing flag the kernel already uses for heal-path
@@ -1219,9 +1216,9 @@ class BaseAgent:
         real tool calls produce (build_meta → current_time, context,
         stamina_left_seconds, plus a monotonic injection_seq). This makes
         every synthesized pair tokenize uniquely even when the underlying
-        notification payload repeats — a second protection layer against
-        the DeepSeek cache fast-path empty-response failure beyond the
-        TextBlock prefix novelty.
+        notification payload repeats — a protection layer against the
+        DeepSeek cache fast-path empty-response failure without needing a
+        visible assistant text prefix.
 
         Returns True if injection succeeded, False if it had to abort
         (e.g. pending tool_calls block append).  When False is returned,
@@ -1229,7 +1226,7 @@ class BaseAgent:
         change would be silently dropped instead of retried.
         """
         import secrets
-        from ..llm.interface import TextBlock, ToolCallBlock, ToolResultBlock
+        from ..llm.interface import ToolCallBlock, ToolResultBlock
 
         if self._chat is None:
             try:
@@ -1327,7 +1324,10 @@ class BaseAgent:
             else f"[synthesized — kernel notification sync] Notification received. {guidance_text}"
         )
 
-        text_block = TextBlock(text=summary_text)
+        # ``summary_text`` is log-only.  Do not place it in a TextBlock on the
+        # wire: successful notification sync should be a structured
+        # system(action="notification") call/result pair, not a visible
+        # synthesized diary/text-input row.
         # call.args carries injection_seq only — real tool calls don't have
         # current_time/context/stamina in their args (those live in results).
         # The seq is enough to defeat byte-equality on the assistant turn.
@@ -1346,7 +1346,7 @@ class BaseAgent:
             synthesized=True,
         )
 
-        iface.add_assistant_message(content=[text_block, call_block])
+        iface.add_assistant_message(content=[call_block])
         iface.add_tool_results([result_block])
 
         # The append succeeded.  Now skeletonize the previous live holder

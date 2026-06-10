@@ -724,16 +724,16 @@ def test_sync_idle_injects_pair_with_synthesized_marker(tmp_path: Path) -> None:
     # First is assistant (call), second is user (result).
     assert entries[0].role == "assistant"
     assert entries[1].role == "user"
-    # Assistant entry: [TextBlock(summary), ToolCallBlock(notification)]
-    assert len(entries[0].content) == 2
+    # Assistant entry is tool-only: no visible synthesized TextBlock summary
+    # should appear in the transcript / diary surface on the successful path.
+    assert len(entries[0].content) == 1
     from lingtai_kernel.llm.interface import TextBlock
-    assert isinstance(entries[0].content[0], TextBlock)
-    summary_text = entries[0].content[0].text
-    assert "Notification received: 1 email" in summary_text
-    assert "not necessarily a human instruction" in summary_text
-    assert "Identify the source" in summary_text
-    assert "normal read action" in summary_text
-    call_block = entries[0].content[1]
+    assert not any(isinstance(block, TextBlock) for block in entries[0].content)
+    injected_logs = [fields for evt, fields in agent._logs if evt == "notification_pair_injected"]
+    assert injected_logs
+    assert "Notification received: 1 email" in injected_logs[-1]["summary"]
+    assert "not necessarily a human instruction" in injected_logs[-1]["summary"]
+    call_block = entries[0].content[0]
     result_block = entries[1].content[0]
     assert isinstance(call_block, ToolCallBlock)
     assert call_block.name == "system"
@@ -757,8 +757,8 @@ def test_sync_idle_injects_pair_with_synthesized_marker(tmp_path: Path) -> None:
     assert agent._notification_block_id == call_block.id
 
 
-def test_sync_idle_strip_then_reinject(tmp_path: Path) -> None:
-    """Two consecutive sync calls — first injects, second replaces."""
+def test_sync_idle_skeletonizes_then_reinjects(tmp_path: Path) -> None:
+    """Two consecutive sync calls — old payload is skeletonized, new pair appended."""
     from lingtai_kernel.base_agent import BaseAgent
     from lingtai_kernel.state import AgentState
 
