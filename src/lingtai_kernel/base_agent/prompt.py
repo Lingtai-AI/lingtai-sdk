@@ -7,7 +7,7 @@ from __future__ import annotations
 
 
 def _build_system_prompt(agent) -> str:
-    """Build the system prompt from base + sections + tool inventory."""
+    """Build the system prompt from language principle + sections + tool inventory."""
     from .tools import _refresh_tool_inventory_section
     from ..prompt import build_system_prompt
 

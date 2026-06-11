@@ -20,11 +20,57 @@ as the packaged default (v1); the `Agent` subclass copies it to
 `system/substrate.md` on first boot, where the agent (or human) can
 edit it freely.
 
-build_system_prompt() assembles base_prompt + rendered sections.
+build_system_prompt() assembles language principle + base_prompt + rendered
+sections. The language principle is a kernel-injected runtime constraint
+derived from the agent's configured language (en/zh/wen) — it always renders
+first, before base_prompt, so the agent's working language is the very first
+thing in the prompt.
 """
 from __future__ import annotations
 
 from typing import Optional
+
+# Kernel-injected dynamic runtime principle, keyed by language code. Each
+# entry is written in the target language itself. Unknown codes fall back
+# to English wording with the raw code embedded (see _language_principle).
+_LANGUAGE_PRINCIPLES: dict[str, str] = {
+    "en": (
+        "Agent language: English. Write all ordinary prose and human-facing "
+        "replies in English, unless an explicit instruction from a human or "
+        "the task at hand asks otherwise. Do not switch languages just "
+        "because nearby prompt or source material is in another language. "
+        "Quoting source text, and using code or identifiers as-is, is fine."
+    ),
+    "zh": (
+        "智能体语言：简体中文。所有日常行文与面向人类的回复一律使用简体中文，"
+        "除非人类或当前任务明确要求使用其他语言。不要仅因周围的提示词或资料"
+        "是其他语言就切换语言。引用原文、保留代码与标识符的原样不受此限。"
+    ),
+    "wen": (
+        "器灵之言：文言。凡寻常行文、对人之复，皆以文言书之；"
+        "非人或当下之务明命改易，毋得擅换。毋因旁近提示、材料为他语而随之。"
+        "引录原文、代码、名号，仍其旧貌可也。"
+    ),
+}
+
+
+def _language_principle(language: str) -> str:
+    """Return the dynamic runtime language principle for `language`.
+
+    Known codes (en/zh/wen) get a principle written in the target language.
+    Unknown codes fall back to English wording carrying the raw code.
+    """
+    principle = _LANGUAGE_PRINCIPLES.get(language)
+    if principle is not None:
+        return principle
+    return (
+        f"Agent language: {language}. Write all ordinary prose and "
+        f"human-facing replies in that language ({language}), unless an "
+        "explicit instruction from a human or the task at hand asks "
+        "otherwise. Do not switch languages just because nearby prompt or "
+        "source material is in another language. Quoting source text, and "
+        "using code or identifiers as-is, is fine."
+    )
 
 
 class SystemPromptManager:
@@ -165,18 +211,22 @@ def build_system_prompt(
 ) -> str:
     """Build the full system prompt from components.
 
-    Order: base prompt → sections.
-    base_prompt is framework-level guidance injected by the wrapper package (lingtai).
+    Order: language principle → base prompt → section batches.
+    The language principle is kernel-injected from `language` and always
+    comes first. base_prompt is framework-level guidance injected by the
+    wrapper package (lingtai).
+
+    This delegates to build_system_prompt_batches() and joins non-empty
+    batches with ``\\n\\n``. That matches LLMChatSession.update_system_prompt_batches()
+    so cached-batch and single-string callers see byte-identical text.
     """
-    parts = []
-    if base_prompt:
-        parts.append(base_prompt)
-
-    sections_text = prompt_manager.render()
-    if sections_text:
-        parts.append(sections_text)
-
-    return "\n\n---\n\n".join(parts)
+    return "\n\n".join(
+        seg
+        for seg in build_system_prompt_batches(
+            prompt_manager, base_prompt=base_prompt, language=language
+        )
+        if seg
+    )
 
 
 def build_system_prompt_batches(
@@ -189,24 +239,26 @@ def build_system_prompt_batches(
     Same ordering as build_system_prompt, but returned as segments so
     adapters that support per-block prompt caching (e.g. Anthropic's
     `cache_control`) can place breakpoints at batch boundaries. Callers
-    that want a string can do ``"\\n\\n---\\n\\n".join(filter(None, batches))``
+    that want a string can do ``"\\n\\n".join(filter(None, batches))``
     — and build_system_prompt() does exactly that composition.
 
-    The ``base_prompt`` is prepended to the first non-empty batch (i.e.
-    Batch 1) with the same ``\\n\\n---\\n\\n`` separator build_system_prompt
-    uses, so the concatenated output is byte-identical. Empty batches
-    become empty strings so caller indexing stays stable.
+    The language principle (and ``base_prompt``, if any) is prepended to
+    Batch 1, the cache-stable prefix batch, using the same
+    ``\\n\\n---\\n\\n`` prefix separator that the historical single-string
+    builder used between framework-level guidance and sections. Empty
+    non-prefix batches stay empty so caller indexing remains stable.
     """
     batches = prompt_manager.render_batches()
 
+    prefix = _language_principle(language)
     if base_prompt:
-        # Find the first non-empty batch and prepend base_prompt to it.
-        for i, seg in enumerate(batches):
-            if seg:
-                batches[i] = f"{base_prompt}\n\n---\n\n{seg}"
-                break
-        else:
-            # All batches empty — base_prompt becomes the only content.
-            batches = [base_prompt] + batches[1:]
+        prefix = f"{prefix}\n\n---\n\n{base_prompt}"
+
+    if batches[0]:
+        batches[0] = f"{prefix}\n\n---\n\n{batches[0]}"
+    else:
+        # Keep the dynamic principle in the first/cache-stable batch even when
+        # an otherwise-minimal prompt only has tail sections (or no sections).
+        batches[0] = prefix
 
     return batches
