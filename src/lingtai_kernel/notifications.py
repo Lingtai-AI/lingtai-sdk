@@ -40,6 +40,7 @@ _NOTIFICATION_CHANNEL_ALLOWLIST: set[str] = {
     "goal",
     "molt",
     "nudge",
+    "post-child-delegation",
     "post-molt",
     "soul",
     "system",

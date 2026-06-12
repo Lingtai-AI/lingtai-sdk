@@ -8,7 +8,11 @@ Contains:
 """
 from __future__ import annotations
 
+import json
+import os
+import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from ...llm.interface import ToolCallBlock, ToolResultBlock
@@ -18,6 +22,31 @@ from ...llm.interface import ToolCallBlock, ToolResultBlock
 # pressure-warning ``molt`` channel owned by base_agent.turn._check_molt_pressure
 # so a pressure-clear under threshold cannot sweep the reminder.
 _POST_MOLT_CHANNEL = "post-molt"
+_POST_CHILD_DELEGATION_CHANNEL = "post-child-delegation"
+
+_MAX_AVATAR_LEDGER_LINES = 1000
+_MAX_AVATAR_ENTRIES = 20
+_MAX_DAEMON_DIRS = 200
+_MAX_DAEMON_ENTRIES = 20
+_MISSION_PREVIEW_MAX = 200
+_TASK_PREVIEW_MAX = 200
+_LAST_OUTPUT_PREVIEW_MAX = 300
+_AVATAR_HEARTBEAT_STALE_AFTER_S = 10.0
+_DAEMON_HEARTBEAT_STALE_AFTER_S = 30.0
+_DAEMON_TERMINAL_STATES = {"done", "failed", "cancelled", "timeout"}
+
+
+_POST_CHILD_DELEGATION_INSTRUCTIONS = (
+    "You just molted while delegated work may still exist. This is an "
+    "awareness snapshot, not an instruction to run lifecycle actions. Do not "
+    "CPR, interrupt, reclaim, suspend, or message any child automatically. "
+    "First reorient from the post-molt reminder. Then inspect deliberately: "
+    "for daemons, use daemon(action='list') or daemon(action='check', id='...'); "
+    "for avatars, contact them through the normal mail/email route or inspect "
+    "their heartbeat/manifest if needed. Dismiss this channel when you have "
+    "recorded or acted on the delegation state: system(action='dismiss', "
+    "channel='post-child-delegation', reason='aware: ...')."
+)
 
 
 def _first_nonempty_line(text: str | None) -> str:
@@ -28,6 +57,285 @@ def _first_nonempty_line(text: str | None) -> str:
         if stripped:
             return stripped
     return ""
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _preview(value, limit: int) -> str:
+    if value is None:
+        return ""
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)] + "…"
+
+
+def _relative_path(path: Path, base: Path) -> str:
+    try:
+        return os.path.relpath(path, base)
+    except (OSError, ValueError):
+        return str(path)
+
+
+def _read_json_object(path: Path) -> dict | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _avatar_heartbeat_age(child_dir: Path, now: float) -> float | None:
+    heartbeat = child_dir / ".agent.heartbeat"
+    if not heartbeat.is_file():
+        return None
+    try:
+        ts = float(heartbeat.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+    return max(0.0, now - ts)
+
+
+def _daemon_heartbeat_age(run_dir: Path, now: float) -> float | None:
+    heartbeat = run_dir / ".heartbeat"
+    if not heartbeat.is_file():
+        return None
+    try:
+        return max(0.0, now - heartbeat.stat().st_mtime)
+    except OSError:
+        return None
+
+
+def _read_avatar_records(agent) -> tuple[list[dict], bool]:
+    ledger_path = agent._working_dir / "delegates" / "ledger.jsonl"
+    if not ledger_path.is_file():
+        return [], False
+
+    from ...handshake import resolve_address
+
+    records_by_child: dict[str, dict] = {}
+    truncated = False
+    try:
+        with open(ledger_path, "r", encoding="utf-8") as f:
+            for idx, line in enumerate(f):
+                if idx >= _MAX_AVATAR_LEDGER_LINES:
+                    truncated = True
+                    break
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(record, dict) or record.get("event") != "avatar":
+                    continue
+                working_dir = record.get("working_dir") or record.get("address")
+                if not working_dir:
+                    continue
+
+                child_dir = resolve_address(working_dir, agent._working_dir.parent)
+                records_by_child[str(child_dir)] = {
+                    "record": record,
+                    "child_dir": child_dir,
+                }
+    except (OSError, UnicodeDecodeError):
+        return [], False
+
+    return list(records_by_child.values()), truncated
+
+
+def _collect_avatar_entries(agent, now: float) -> tuple[list[dict], dict, bool]:
+    rows, scan_truncated = _read_avatar_records(agent)
+    entries: list[dict] = []
+    counts = {"alive": 0, "stale": 0, "missing": 0, "boot_failed": 0}
+
+    for row in rows:
+        record = row["record"]
+        child_dir = row["child_dir"]
+        boot_status = str(record.get("boot_status") or "")
+        manifest = _read_json_object(child_dir / ".agent.json")
+        heartbeat_age = _avatar_heartbeat_age(child_dir, now)
+
+        if boot_status == "failed":
+            state = "boot_failed"
+        elif not child_dir.exists():
+            state = "missing"
+        elif heartbeat_age is not None and heartbeat_age <= _AVATAR_HEARTBEAT_STALE_AFTER_S:
+            state = "alive"
+        else:
+            state = "stale"
+
+        counts[state] += 1
+        if len(entries) >= _MAX_AVATAR_ENTRIES:
+            scan_truncated = True
+            continue
+
+        entry = {
+            "name": record.get("name") or child_dir.name,
+            "address": record.get("address") or record.get("working_dir") or child_dir.name,
+            "relative_path": _relative_path(child_dir, agent._working_dir),
+            "depth": 1,
+            "type": record.get("type") or "unknown",
+            "boot_status": boot_status or None,
+            "spawned_at": record.get("ts"),
+            "state": state,
+            "manifest_state": (
+                manifest.get("state") if isinstance(manifest, dict) else None
+            ),
+            "heartbeat_age_s": (
+                round(heartbeat_age, 1) if heartbeat_age is not None else None
+            ),
+            "mission_preview": _preview(record.get("mission"), _MISSION_PREVIEW_MAX),
+            "suggested_action": (
+                "Contact via mail/email or inspect heartbeat/manifest; do not "
+                "CPR automatically."
+            ),
+        }
+        entries.append(entry)
+
+    return entries, counts, scan_truncated
+
+
+def _iter_daemon_state_files(agent) -> tuple[list[Path], bool]:
+    daemons_dir = agent._working_dir / "daemons"
+    if not daemons_dir.is_dir():
+        return [], False
+    try:
+        run_dirs = [p for p in daemons_dir.iterdir() if p.is_dir()]
+    except OSError:
+        return [], False
+
+    def _mtime(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    run_dirs.sort(key=_mtime, reverse=True)
+    truncated = len(run_dirs) > _MAX_DAEMON_DIRS
+    return [p / "daemon.json" for p in run_dirs[:_MAX_DAEMON_DIRS]], truncated
+
+
+def _collect_daemon_entries(agent, now: float) -> tuple[list[dict], dict, bool]:
+    state_files, scan_truncated = _iter_daemon_state_files(agent)
+    entries: list[dict] = []
+    counts = {"running": 0, "stale_running": 0}
+
+    for state_file in state_files:
+        data = _read_json_object(state_file)
+        if not data:
+            continue
+        daemon_state = str(data.get("state") or "").lower()
+        if not daemon_state or daemon_state in _DAEMON_TERMINAL_STATES:
+            continue
+
+        run_dir = state_file.parent
+        heartbeat_age = _daemon_heartbeat_age(run_dir, now)
+        state = (
+            "running"
+            if heartbeat_age is not None and heartbeat_age <= _DAEMON_HEARTBEAT_STALE_AFTER_S
+            else "stale_running"
+        )
+        counts[state] += 1
+        if len(entries) >= _MAX_DAEMON_ENTRIES:
+            scan_truncated = True
+            continue
+
+        handle = data.get("handle") or data.get("id") or run_dir.name
+        entry = {
+            "id": handle,
+            "run_id": data.get("run_id") or run_dir.name,
+            "relative_path": _relative_path(run_dir, agent._working_dir),
+            "state": state,
+            "daemon_state": daemon_state or None,
+            "backend": data.get("backend"),
+            "task_preview": _preview(data.get("task"), _TASK_PREVIEW_MAX),
+            "elapsed_s": data.get("elapsed_s"),
+            "turn": data.get("turn"),
+            "current_tool": data.get("current_tool"),
+            "last_output_preview": _preview(
+                data.get("last_output"), _LAST_OUTPUT_PREVIEW_MAX
+            ),
+            "heartbeat_age_s": (
+                round(heartbeat_age, 1) if heartbeat_age is not None else None
+            ),
+            "suggested_action": f"daemon(action='check', id='{handle}')",
+        }
+        entries.append(entry)
+
+    return entries, counts, scan_truncated
+
+
+def _publish_post_child_delegation_reminder(
+    agent,
+    *,
+    initiator: str,
+    source: str,
+    molt_count: int,
+) -> None:
+    """Publish a best-effort post-molt reminder about delegated work.
+
+    The snapshot intentionally only reads bounded parent-side state. It does
+    not contact, wake, CPR, interrupt, reclaim, suspend, or message children.
+    """
+    try:
+        from ..system import clear_notification, publish_notification
+
+        now = time.time()
+        avatars, avatar_counts, avatar_truncated = _collect_avatar_entries(agent, now)
+        daemons, daemon_counts, daemon_truncated = _collect_daemon_entries(agent, now)
+
+        if not avatars and not daemons:
+            clear_notification(agent._working_dir, _POST_CHILD_DELEGATION_CHANNEL)
+            return
+
+        total = sum(avatar_counts.values()) + sum(daemon_counts.values())
+        source_agent = getattr(agent, "agent_name", None) or ""
+        truncated = avatar_truncated or daemon_truncated
+        data = {
+            "schema_version": 1,
+            "created_at": _now_iso(),
+            "source_agent": source_agent,
+            "initiator": initiator,
+            "source": source,
+            "molt_count": molt_count,
+            "awareness_only": True,
+            "automatic_lifecycle_actions": False,
+            "descendant_scan": "direct_only",
+            "counts": {
+                "avatars": avatar_counts,
+                "daemons": daemon_counts,
+            },
+            "avatars": avatars,
+            "daemons": daemons,
+            "limits": {
+                "max_avatar_ledger_lines": _MAX_AVATAR_LEDGER_LINES,
+                "max_avatar_entries": _MAX_AVATAR_ENTRIES,
+                "max_daemon_dirs": _MAX_DAEMON_DIRS,
+                "max_daemon_entries": _MAX_DAEMON_ENTRIES,
+                "truncated": truncated,
+                "avatars_truncated": avatar_truncated,
+                "daemons_truncated": daemon_truncated,
+            },
+        }
+        publish_notification(
+            agent._working_dir,
+            _POST_CHILD_DELEGATION_CHANNEL,
+            header=f"post-molt delegation reminder — {total} active work item"
+            f"{'' if total == 1 else 's'}",
+            icon="🧭",
+            priority="high",
+            instructions=_POST_CHILD_DELEGATION_INSTRUCTIONS,
+            data=data,
+        )
+    except Exception as e:
+        try:
+            agent._log("post_child_delegation_notification_failed", error=str(e))
+        except Exception:
+            pass
 
 
 def _publish_post_molt(
@@ -443,6 +751,12 @@ def _context_molt(agent, args: dict) -> dict:
         before_tokens=before_tokens,
         after_tokens=after_tokens,
     )
+    _publish_post_child_delegation_reminder(
+        agent,
+        initiator="agent",
+        source="agent",
+        molt_count=agent._molt_count,
+    )
 
     # The faint-memory result.
     from ...i18n import t
@@ -650,6 +964,12 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0,
         summary_path=summary_path,
         before_tokens=before_tokens,
         after_tokens=after_tokens,
+    )
+    _publish_post_child_delegation_reminder(
+        agent,
+        initiator="system",
+        source=source,
+        molt_count=agent._molt_count,
     )
 
     result_dict = {
