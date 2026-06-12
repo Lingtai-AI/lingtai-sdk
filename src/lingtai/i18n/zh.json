@@ -47,7 +47,7 @@
   "daemon.action": "执行的操作：'emanate'（派遣分神），'list'（显示状态），'ask'（跟进消息），'check'（查看某分神最近的事件），'reclaim'（终止所有）",
   "daemon.last": "'check' 操作：从 events.jsonl 返回最近多少条事件。默认 20。每一轮约产生 2 条事件（tool_call + tool_result），故 last=20 约覆盖 10 次工具调用。",
   "daemon.truncate": "'check' 操作：返回事件中任意字符串字段的最大长度，超出部分以省略号截断。默认 500。设为 0 以关闭截断。",
-  "daemon.max_turns": "'emanate' 操作：每个分神的工具循环最大轮数。默认：父灵上限（200）。简单任务可设较小之值以加约束。",
+  "daemon.max_turns": "'emanate' 操作：每个分神的工具循环最大轮数。默认：父灵上限（1000）。简单任务可设较小之值以加约束。",
   "daemon.timeout": "'emanate' 操作：整批的最大壁钟秒数。默认：父灵上限（3600 秒）。超时仍在运行的分神由看门狗强制终止。",
   "daemon.tasks": "'emanate' 的任务列表。每项：{task: str（必填——包含保存位置的指令），tools: list[str]（必填——能力名称列表，如 ['file', 'bash']），preset: str（可选——预设文件路径，用 system(action='presets') 返回的 name 字段）。省略 preset 则继承父灵的工具面。MCP 工具始终从父灵继承。预设继承与能力解析详见 daemon-manual。",
   "daemon.tasks.preset": "可选预设文件路径。必须是 .json/.jsonc 路径，使用 system(action='presets') 返回的 name 字段。不要用简写名——用 presets 列表里的完整 name。示例：'~/.lingtai-tui/presets/saved/cheap.json'。省略则继承父灵工具面。",
