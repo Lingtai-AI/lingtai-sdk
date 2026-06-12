@@ -67,10 +67,11 @@ agent:
 6. **Migration drift hints** — stale Linux `/home/...` paths on macOS-style
    hosts, stale macOS `/Users/...` paths on Linux-style hosts, and likely
    `~/.lingtai-tui/runtime/venv/bin/python` replacements.
-7. **First-party addon imports** — if a configured stdio command points at a
+7. **First-party MCP server imports** — if a configured stdio command points at a
    usable Python executable, the script can try importing configured LingTai
-   addon modules (`lingtai_telegram`, `lingtai_feishu`, `lingtai_wechat`,
-   `lingtai_imap`) without reading credentials.
+   curated MCP modules (`lingtai.mcp_servers.telegram`, `lingtai.mcp_servers.feishu`,
+   `lingtai.mcp_servers.wechat`, `lingtai.mcp_servers.whatsapp`,
+   `lingtai.mcp_servers.imap`) without reading credentials.
 
 ## Reading the result
 

@@ -17,14 +17,14 @@ Invalid registry lines are skipped silently with a warning at refresh time, so a
 ## Common boot failures
 
 **Boot failure with cryptic `KeyError`**
-The MCP subprocess hit a missing config field. The error message *is* the missing field name. Re-read the addon's README via:
+The MCP subprocess hit a missing config field. The error message *is* the missing field name. For kernel-curated addons, first re-read `reference/curated-addons.md`, then use the catalog homepage for deep provider docs if needed. For third-party Python MCPs, fetch the server README via:
 
 ```bash
 ~/.lingtai-tui/runtime/venv/bin/python3 \
   .library/intrinsic/capabilities/mcp/scripts/find_readme.py <pkg-name>
 ```
 
-for the exact field name spelling — `email_password` not `password`, `bot_token` not `token`, etc. This is the single most common failure mode and the README always has the correct field name.
+Check the exact field name spelling — `email_password` not `password`, `bot_token` not `token`, etc. This is the single most common failure mode and the docs always have the correct field name.
 
 **`MCP server failed to start` / "command not found"**
 The `command` path in your `init.json` `mcp.<name>` entry doesn't have the executable. For Python addons, confirm the venv path is correct (typically `~/.lingtai-tui/runtime/venv/bin/python`). For `npx`/`uvx` servers, confirm those tools are on `PATH`.
@@ -40,11 +40,11 @@ Eager-start failed silently. Check the agent's stderr / `logs/agent.log` for the
 
 ## When in doubt
 
-1. Read the addon's README — always step 1:
+1. Read the relevant docs — `reference/curated-addons.md` for kernel-curated addons, or a third-party README via:
    ```bash
    ~/.lingtai-tui/runtime/venv/bin/python3 \
      .library/intrinsic/capabilities/mcp/scripts/find_readme.py <pkg-name>
    ```
 2. `mcp(action="show")` to see registry + problems.
 3. Tail `logs/agent.log` for the actual error message.
-4. Re-read the README's troubleshooting section — most addon READMEs document their common errors with exact symptom strings.
+4. Re-read the setup/troubleshooting section — most MCP docs document common errors with exact symptom strings.

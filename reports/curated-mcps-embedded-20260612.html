@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Curated MCPs embedded in lingtai-kernel — 2026-06-12</title>
+<style>
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.6;margin:0;background:#f7f8fb;color:#1f2937}
+  main{max-width:1040px;margin:0 auto;padding:40px 24px 64px}
+  h1{font-size:32px;margin:0 0 8px;color:#111827}
+  h2{margin-top:32px;color:#111827;border-bottom:1px solid #e5e7eb;padding-bottom:6px}
+  .card{background:white;border:1px solid #e5e7eb;border-radius:14px;padding:20px;margin:18px 0;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+  .ok{color:#047857;font-weight:700}.warn{color:#b45309;font-weight:700}
+  code{background:#eef2ff;padding:2px 5px;border-radius:5px} pre{background:#111827;color:#e5e7eb;padding:14px;border-radius:10px;overflow:auto}
+  table{border-collapse:collapse;width:100%;background:white} th,td{border:1px solid #e5e7eb;padding:9px;text-align:left} th{background:#f3f4f6}
+  ul{padding-left:22px}
+</style>
+</head>
+<body><main>
+<h1>Curated MCPs embedded in <code>lingtai-kernel</code></h1>
+<p><strong>Branch:</strong> <code>feat/embed-curated-mcps</code> &nbsp; <strong>Worktree:</strong> <code>/Users/huangzesen/work/GitHub/lingtai-kernel/.worktrees/embed-curated-mcps</code></p>
+
+<div class="card">
+<h2>结论</h2>
+<p><span class="ok">已完成第一刀并通过验证。</span> 五个 LingTai curated MCP（IMAP、Telegram、Feishu、WeChat、WhatsApp）已并入 <code>lingtai</code> kernel wheel，不再依赖独立 addon PyPI wheels。catalog 改以 <code>python -m lingtai.mcp_servers.*</code> 启动；同时保留顶层 <code>lingtai_*</code> 与 <code>lingtai.addons.*</code> 兼容命名空间，避免 TUI importability check 与旧 import 断裂。</p>
+</div>
+
+<h2>改动概要</h2>
+<ul>
+  <li>新增内部实现包：<code>src/lingtai/mcp_servers/{imap,telegram,feishu,wechat,whatsapp}/</code>；保留顶层 <code>src/lingtai_*</code> 兼容 wrappers。</li>
+  <li>新增兼容 wrappers：<code>src/lingtai/addons/{imap,telegram,feishu,wechat,whatsapp}/</code>，均薄转发到顶层包。</li>
+  <li><code>pyproject.toml</code> 移除独立 addon wheel 依赖，改为列出第三方 runtime deps：<code>imapclient</code>、<code>lark-oapi</code>、<code>cryptography</code>、<code>qrcode</code>、<code>faster-whisper</code>；并新增六个 console scripts。</li>
+  <li>Feishu 嵌入源码来自已合并事件循环修复后的 <code>lingtai-feishu</code> <code>origin/main</code>，故不再需要等待 <code>lingtai-feishu 0.2.1</code> PyPI 发布。</li>
+  <li>更新 MCP manual / curated-addons / troubleshooting 文档，去除“必须先读独立 addon README / 独立 wheel”的主路径表述。</li>
+  <li>新增回归测试：顶层包 import、<code>lingtai.addons.*</code> 兼容 import、notification header resource、catalog 解压命令均覆盖。</li>
+</ul>
+
+<h2>嵌入包与启动名</h2>
+<table>
+<tr><th>Registry name</th><th>Embedded module</th><th>Catalog args</th><th>Compatibility import</th></tr>
+<tr><td><code>imap</code></td><td><code>lingtai.mcp_servers.imap</code></td><td><code>[-m, lingtai.mcp_servers.imap]</code></td><td><code>lingtai_imap</code>, <code>lingtai.addons.imap</code></td></tr>
+<tr><td><code>telegram</code></td><td><code>lingtai.mcp_servers.telegram</code></td><td><code>[-m, lingtai.mcp_servers.telegram]</code></td><td><code>lingtai_telegram</code>, <code>lingtai.addons.telegram</code></td></tr>
+<tr><td><code>feishu</code></td><td><code>lingtai.mcp_servers.feishu</code></td><td><code>[-m, lingtai.mcp_servers.feishu]</code></td><td><code>lingtai_feishu</code>, <code>lingtai.addons.feishu</code></td></tr>
+<tr><td><code>wechat</code></td><td><code>lingtai.mcp_servers.wechat</code></td><td><code>[-m, lingtai.mcp_servers.wechat]</code></td><td><code>lingtai_wechat</code>, <code>lingtai.addons.wechat</code></td></tr>
+<tr><td><code>whatsapp</code></td><td><code>lingtai.mcp_servers.whatsapp</code></td><td><code>[-m, lingtai.mcp_servers.whatsapp]</code></td><td><code>lingtai_whatsapp</code>, <code>lingtai.addons.whatsapp</code></td></tr>
+</table>
+
+<h2>验证</h2>
+<pre><code># Source tree parity against addon repos
+compare imap source file lists       PASS
+compare telegram source file lists   PASS
+compare feishu source file lists     PASS
+compare wechat source file lists     PASS
+compare whatsapp source file lists   PASS
+
+# Static / tests
+git diff --check                                                               PASS
+import/resource/entrypoint wrapper smoke                                        PASS
+compileall mcp_servers + compatibility wrappers                                PASS
+PYTHONPATH=src /Users/huangzesen/anaconda3/bin/python -m pytest -q \
+  tests/test_mcp_capability.py tests/test_init_schema.py tests/test_cli.py \
+  tests/test_utf8_read_text.py                                                 93 passed
+PYTHONPATH=src /Users/huangzesen/anaconda3/bin/python -m pytest -q            2107 passed, 2 skipped
+
+# Wheel build
+LINGTAI_SKIP_RUST_BUILD=1 /Users/huangzesen/anaconda3/bin/python -m build --wheel PASS
+
+# Wheel inspection
+lingtai/mcp_servers/imap/        present
+lingtai/mcp_servers/telegram/    present + notification_header.md
+lingtai/mcp_servers/feishu/      present + notification_header.md
+lingtai/mcp_servers/wechat/      present + notification_header.md
+lingtai/mcp_servers/whatsapp/    present + notification_header.md
+lingtai_imap/ etc.   present as compatibility wrappers
+lingtai/addons/      present as compatibility wrappers
+console_scripts      lingtai-imap, lingtai-telegram, lingtai-feishu,
+                     lingtai-wechat, lingtai-wechat-bootstrap, lingtai-whatsapp
+                     -> lingtai.mcp_servers.* entrypoints
+requires             imapclient, lark-oapi, cryptography, qrcode, faster-whisper
+
+# Temp venv install from built wheel, with dependencies
+lingtai.mcp_servers.* imports ok
+legacy lingtai_* imports ok
+lingtai.addons.* imports ok
+resources ok
+entry points ok</code></pre>
+
+<h2>兼容性与风险</h2>
+<ul>
+  <li><strong>兼容：</strong>现有 <code>mcp_catalog.json</code> 以 <code>python -m lingtai.mcp_servers.*</code> 启动；旧 <code>lingtai_*</code> 入口仅作兼容。</li>
+  <li><strong>兼容：</strong><code>lingtai.addons.&lt;name&gt;</code> import 仍可用，服务于旧代码与 TUI addon 检测。</li>
+  <li><strong>版本：</strong>IMAP / Telegram / Feishu / WeChat 的 server version helper 先尝试历史 dist 名，再 fallback 到 <code>lingtai</code> dist 版本，最后 <code>0+local</code>，兼容 editable checkout。</li>
+  <li><strong>风险：</strong>kernel wheel 体积与依赖集合增加，尤其 <code>faster-whisper</code> 依赖较重；这是把 curated MCP 原子化发布的代价。</li>
+  <li><strong>layout fix：</strong>Jason requested the embedded servers live as an internal MCP server tree, not as standalone-looking top-level packages. Real implementations now live under <code>lingtai.mcp_servers.*</code>; <code>lingtai_*</code> and <code>lingtai.addons.*</code> are compatibility wrappers only.</li>
+  <li><strong>review fix：</strong>DeepSeek review pointed out that WhatsApp's entry point lacked stderr logging. The PR now aligns <code>lingtai_whatsapp.__main__</code> with the other MCP entry points: logs go to stderr and <code>KeyboardInterrupt</code> is swallowed cleanly. Feishu/Telegram voice dependency error messages now say to reinstall <code>lingtai</code>, not the historical standalone addon wheels.</li>
+  <li><strong>后续：</strong>待该 PR 合并并发布后，再关闭/标记 superseded 旧的 kernel #262 与 TUI #318；不建议在 release/compat 窗口前硬删除历史 PyPI 包。</li>
+</ul>
+
+</main></body></html>

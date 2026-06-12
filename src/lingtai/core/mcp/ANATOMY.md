@@ -132,6 +132,8 @@ mcp/licc.py  (client-side producer; mirrors inbox.py's consumer)
 - `lingtai_kernel.notifications` — `submit` (as `publish_notification`) for `.notification/` dispatch (in `inbox.py`)
 - `lingtai_kernel.base_agent.BaseAgent` — agent type (TYPE_CHECKING only)
 - `lingtai.mcp_catalog.json` — kernel-shipped MCP catalog file (read at runtime)
+- `src/lingtai/mcp_servers/{imap,telegram,feishu,wechat,whatsapp}/` — first-party curated MCP stdio server implementations shipped in the `lingtai` wheel; catalog entries launch them with `{python} -m lingtai.mcp_servers.<name>` so no separate addon wheel is required. Historical `src/lingtai_*` packages and `src/lingtai/addons/*` remain thin compatibility wrappers.
+- `src/lingtai/addons/` — compatibility wrappers for older imports and TUI importability checks (`lingtai.addons.<name>` → `lingtai.mcp_servers.<name>`).
 - `lingtai.core.mcp.inbox` — `licc.py` imports the contract constants (`LICC_VERSION`, `INBOX_DIRNAME`, `TMP_SUFFIX`, `EVENT_SUFFIX`) from it; stdlib only otherwise (`json`, `os`, `uuid`, `datetime`, `pathlib`, `logging`)
 - env: `LINGTAI_AGENT_DIR` / `LINGTAI_MCP_NAME` — kernel-injected per spawned MCP (see `lingtai.agent`); the default source for `push_inbox_event`'s target
 

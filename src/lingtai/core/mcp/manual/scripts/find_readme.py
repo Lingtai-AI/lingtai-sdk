@@ -2,8 +2,8 @@
 """Find and print the locally-installed README for an MCP server's Python package.
 
 Usage:
-    python3 find_readme.py <pkg-name>          # e.g. lingtai-imap
-    python3 find_readme.py --module <modname>  # e.g. lingtai_imap (resolves to dist)
+    python3 find_readme.py <pkg-name>          # e.g. some-mcp-package
+    python3 find_readme.py --module <modname>  # e.g. some_mcp_server (resolves to dist)
 
 Resolution order:
     1. Editable install     -> repo's README.md / .rst / .txt on disk
@@ -115,8 +115,8 @@ def find_readme(pkg_name: str) -> tuple[str | None, str]:
 
 
 def _resolve_module_to_dist(module_name: str) -> str | None:
-    """Map an importable module name (e.g. `lingtai_imap`) to its distribution
-    name (e.g. `lingtai-imap`). Returns None if no install can be located.
+    """Map an importable module name (e.g. `some_mcp_server`) to its owning
+    distribution name. Returns None if no install can be located.
 
     Tries `packages_distributions()` first (works for normal wheels via
     `top_level.txt`), then falls back to the standard underscore-to-hyphen

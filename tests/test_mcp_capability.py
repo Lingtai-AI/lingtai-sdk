@@ -8,6 +8,7 @@ registry membership.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -439,5 +440,62 @@ def test_curated_catalog_includes_whatsapp(tmp_path: Path):
     records, problems = read_registry(tmp_path)
     assert problems == []
     assert records[0]["name"] == "whatsapp"
-    assert records[0]["args"] == ["-m", "lingtai_whatsapp"]
+    assert records[0]["args"] == ["-m", "lingtai.mcp_servers.whatsapp"]
     assert records[0]["homepage"] == "https://github.com/Lingtai-AI/lingtai-whatsapp"
+
+
+def test_curated_mcp_modules_ship_inside_lingtai_distribution():
+    """Curated MCPs are importable from the kernel distribution."""
+    import importlib
+    from importlib import resources
+
+    modules = {
+        "imap": "lingtai.mcp_servers.imap",
+        "telegram": "lingtai.mcp_servers.telegram",
+        "feishu": "lingtai.mcp_servers.feishu",
+        "wechat": "lingtai.mcp_servers.wechat",
+        "whatsapp": "lingtai.mcp_servers.whatsapp",
+    }
+    legacy_modules = {
+        "imap": "lingtai_imap",
+        "telegram": "lingtai_telegram",
+        "feishu": "lingtai_feishu",
+        "wechat": "lingtai_wechat",
+        "whatsapp": "lingtai_whatsapp",
+    }
+    for name, module in modules.items():
+        imported = importlib.import_module(module)
+        assert imported is not None
+        legacy = importlib.import_module(legacy_modules[name])
+        assert legacy is not None
+        compat = importlib.import_module(f"lingtai.addons.{name}")
+        assert compat is not None
+
+    for module in (
+        "lingtai.mcp_servers.telegram",
+        "lingtai.mcp_servers.feishu",
+        "lingtai.mcp_servers.wechat",
+        "lingtai.mcp_servers.whatsapp",
+    ):
+        header = resources.files(module).joinpath("notification_header.md")
+        assert header.is_file()
+        assert header.read_text(encoding="utf-8").strip()
+
+
+def test_curated_mcp_catalog_launches_embedded_modules(tmp_path: Path):
+    modules = {
+        "imap": "lingtai.mcp_servers.imap",
+        "telegram": "lingtai.mcp_servers.telegram",
+        "feishu": "lingtai.mcp_servers.feishu",
+        "wechat": "lingtai.mcp_servers.wechat",
+        "whatsapp": "lingtai.mcp_servers.whatsapp",
+    }
+    rep = decompress_addons(tmp_path, list(modules))
+    assert rep["appended"] == list(modules)
+    records, problems = read_registry(tmp_path)
+    assert problems == []
+    by_name = {r["name"]: r for r in records}
+    for name, module in modules.items():
+        assert by_name[name]["command"] == sys.executable
+        assert by_name[name]["args"] == ["-m", module]
+        assert by_name[name]["source"] == "lingtai-curated"

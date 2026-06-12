@@ -7,7 +7,7 @@
     "command": "{python}",
     "args": [
       "-m",
-      "lingtai_imap"
+      "lingtai.mcp_servers.imap"
     ],
     "source": "lingtai-curated",
     "homepage": "https://github.com/Lingtai-AI/lingtai-imap"
@@ -19,7 +19,7 @@
     "command": "{python}",
     "args": [
       "-m",
-      "lingtai_telegram"
+      "lingtai.mcp_servers.telegram"
     ],
     "source": "lingtai-curated",
     "homepage": "https://github.com/Lingtai-AI/lingtai-telegram"
@@ -31,7 +31,7 @@
     "command": "{python}",
     "args": [
       "-m",
-      "lingtai_feishu"
+      "lingtai.mcp_servers.feishu"
     ],
     "source": "lingtai-curated",
     "homepage": "https://github.com/Lingtai-AI/lingtai-feishu"
@@ -43,7 +43,7 @@
     "command": "{python}",
     "args": [
       "-m",
-      "lingtai_wechat"
+      "lingtai.mcp_servers.wechat"
     ],
     "source": "lingtai-curated",
     "homepage": "https://github.com/Lingtai-AI/lingtai-wechat"
@@ -55,7 +55,7 @@
     "command": "{python}",
     "args": [
       "-m",
-      "lingtai_whatsapp"
+      "lingtai.mcp_servers.whatsapp"
     ],
     "source": "lingtai-curated",
     "homepage": "https://github.com/Lingtai-AI/lingtai-whatsapp"

@@ -9,24 +9,21 @@ description: >
   Reach for this manual when:
     - The human asks to install, set up, configure, or remove an MCP server.
       Decision tree: is it kernel-curated (imap/telegram/feishu/wechat/whatsapp) → the
-      `addons:` + `init.json mcp.<name>` workflow with the per-addon README is
-      here. Is it third-party → the registry route OR the legacy
+      `addons:` + `init.json mcp.<name>` workflow using modules shipped inside
+      the `lingtai` wheel is here. Is it third-party → the registry route OR the legacy
       `mcp/servers.json` route, both documented here.
     - The human asks to set up the `imap` / `telegram` / `feishu` / `wechat`
       addon, or any LingTai email/chat integration. **Step 1 is always**:
-      fetch the addon's README with the bundled script —
-      `~/.lingtai-tui/runtime/venv/bin/python3 .library/intrinsic/capabilities/mcp/scripts/find_readme.py <pkg-name>`
-      (where `<pkg-name>` is `lingtai-imap` / `lingtai-telegram` /
-      `lingtai-feishu` / `lingtai-wechat` / `lingtai-whatsapp`). Field names like `email_password`,
-      `bot_token`, `app_id`/`app_secret`, gewechat hosts are documented in
-      each addon's README and nowhere else. Do NOT guess at config; ALWAYS
-      read the README first.
+      read the curated-addon setup section and, when exact config fields are
+      needed, inspect the shipped module docs/resources or the catalog homepage.
+      Field names like `email_password`, `bot_token`, `app_id`/`app_secret`,
+      and gewechat hosts are documented by the addon docs — do NOT guess.
     - You want to know what MCPs you currently have. `mcp(action="show")`
       returns the registry plus health; this manual explains the output.
     - An MCP isn't behaving — registry validation, `problems` list,
       refresh-after-edit verification, common boot errors are here.
-    - You're exploring an unfamiliar MCP. The doc-discovery flow (local
-      `scripts/find_readme.py` first, homepage URL fallback) is here.
+    - You're exploring an unfamiliar third-party MCP. The doc-discovery flow
+      (local `scripts/find_readme.py` first, homepage URL fallback) is here.
 
   Covers (progressively, via reference/): the three states (catalog →
   registry → active), the curated-vs-third-party install paths, the legacy
@@ -73,22 +70,24 @@ Promotion path: catalog → registry → active. You move things along by editin
 | Update or deregister an MCP | `reference/troubleshooting.md` |
 | Spec-level questions (schema, env injection, LICC) | `lingtai-kernel-anatomy reference/mcp-protocol.md` |
 
-**Before any setup or troubleshooting**, fetch the relevant addon's README with:
+**Before curated addon setup**, start with `reference/curated-addons.md`; those first-party servers now ship inside the `lingtai` wheel under `lingtai.mcp_servers.*`; historical `lingtai_*` packages remain as thin compatibility wrappers.
+
+**Before third-party setup or troubleshooting**, fetch the relevant server README with:
 
 ```bash
 ~/.lingtai-tui/runtime/venv/bin/python3 \
   .library/intrinsic/capabilities/mcp/scripts/find_readme.py <pkg-name>
 ```
 
-`<pkg-name>` is `lingtai-imap`, `lingtai-telegram`, `lingtai-feishu`, `lingtai-wechat`, or `lingtai-whatsapp` (or any other Python-installed MCP). Full details: see §Reading an MCP's README below.
+For third-party Python MCPs, `<pkg-name>` is the installed distribution name. Full details: see §Reading an MCP's README below.
 
 ## Reading an MCP's README
 
-Every MCP server's README is the canonical install + config + troubleshooting doc — config field names, env vars, error meanings, the lot. **Always read the README before guessing at config.** For curated addons in particular, field names like `email_password` (imap) or `bot_token` (telegram) are documented there and nowhere else.
+Every MCP server's README is the canonical install + config + troubleshooting doc — config field names, env vars, error meanings, the lot. **Always read the relevant docs before guessing at config.** For kernel-curated addons, begin with `reference/curated-addons.md` and use the catalog homepage when provider-specific detail exceeds the bundled note. For third-party servers, read the README.
 
-### 1. Local README (preferred)
+### 1. Local README (preferred for third-party Python MCPs)
 
-If the MCP is installed as a Python package (all five kernel-curated addons are), run the script with the **runtime venv's Python** — the same interpreter where `lingtai_imap` / `lingtai_telegram` / etc. are actually installed:
+If the MCP is installed as its own Python package, run the script with the **runtime venv's Python** — the same interpreter where the server package is actually installed:
 
 ```bash
 ~/.lingtai-tui/runtime/venv/bin/python3 \
@@ -97,17 +96,17 @@ If the MCP is installed as a Python package (all five kernel-curated addons are)
 
 (`python3` from your `$PATH` may resolve to a system or conda interpreter that doesn't see the venv's installed packages — always use the venv's Python explicitly.)
 
-The script tries the editable repo on disk first, then falls back to the README embedded in the wheel's `METADATA` file (PEP 566). Works for editable installs and normal PyPI wheels alike. Pass `--module <modname>` if you only know the importable module name (e.g. `lingtai_imap`) instead of the distribution name.
+The script tries the editable repo on disk first, then falls back to the README embedded in the wheel's `METADATA` file (PEP 566). Works for editable installs and normal PyPI wheels alike. Pass `--module <modname>` if you only know the importable module name instead of the distribution name. For embedded curated modules, `--module lingtai.mcp_servers.imap` resolves to the owning `lingtai` distribution, so use `reference/curated-addons.md` for the concise setup contract and the homepage for deep provider docs.
 
-Distribution names for the five kernel-curated addons:
+Curated addon modules shipped by the `lingtai` wheel:
 
-| Registry name | `<pkg-name>`       | Module name        |
-|---------------|--------------------|--------------------|
-| `imap`        | `lingtai-imap`     | `lingtai_imap`     |
-| `telegram`    | `lingtai-telegram` | `lingtai_telegram` |
-| `feishu`      | `lingtai-feishu`   | `lingtai_feishu`   |
-| `wechat`      | `lingtai-wechat`   | `lingtai_wechat`   |
-| `whatsapp`    | `lingtai-whatsapp` | `lingtai_whatsapp` |
+| Registry name | Historical distribution | Module name        |
+|---------------|-------------------------|--------------------|
+| `imap`        | formerly `lingtai-imap`     | `lingtai.mcp_servers.imap`     |
+| `telegram`    | formerly `lingtai-telegram` | `lingtai.mcp_servers.telegram` |
+| `feishu`      | formerly `lingtai-feishu`   | `lingtai.mcp_servers.feishu`   |
+| `wechat`      | formerly `lingtai-wechat`   | `lingtai.mcp_servers.wechat`   |
+| `whatsapp`    | formerly `lingtai-whatsapp` | `lingtai.mcp_servers.whatsapp` |
 
 ### 2. Homepage URL (fallback)
 

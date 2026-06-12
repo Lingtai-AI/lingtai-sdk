@@ -27,20 +27,26 @@ dependencies = [
     "trafilatura>=2.0",
     "filelock>=3.0",
     "pyyaml>=6.0",
-    # Curated MCP servers (formerly bundled in lingtai.addons; v0.7.3 split
-    # into separate sibling repos and PyPI packages). Required so
-    # `pip install lingtai` ships the same capability surface as previous
-    # releases. See lingtai-anatomy reference/mcp-protocol.md for the
-    # catalog → registry → activation chain that wires them up.
-    "lingtai-imap>=0.1.0",
-    "lingtai-telegram>=0.1.0",
-    "lingtai-feishu>=0.1.0",
-    "lingtai-wechat>=0.1.0",
-    "lingtai-whatsapp>=0.1.0",
+    # Curated MCP server implementations live in this distribution under
+    # `lingtai.mcp_servers.*` so the catalog can launch them with `python -m`
+    # without separate PyPI wheels. Historical top-level packages remain as
+    # thin compatibility wrappers.
+    # Keep their third-party runtime dependencies here.
+    "imapclient>=3.0.0",
+    "lark-oapi>=1.4.0",
+    "cryptography>=42.0.0",
+    "qrcode>=7.4.0",
+    "faster-whisper>=1.0.0",
 ]
 
 [project.scripts]
 lingtai-agent = "lingtai.cli:main"
+lingtai-imap = "lingtai.mcp_servers.imap.__main__:main"
+lingtai-telegram = "lingtai.mcp_servers.telegram.__main__:main"
+lingtai-feishu = "lingtai.mcp_servers.feishu.__main__:main"
+lingtai-wechat = "lingtai.mcp_servers.wechat.__main__:main"
+lingtai-wechat-bootstrap = "lingtai.mcp_servers.wechat.login:_bootstrap_main"
+lingtai-whatsapp = "lingtai.mcp_servers.whatsapp.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -62,6 +68,10 @@ lingtai = [
     "bin/lingtai-search-sidecar",
     "bin/lingtai-search-sidecar.exe",
 ]
+"lingtai.mcp_servers.telegram" = ["notification_header.md"]
+"lingtai.mcp_servers.feishu" = ["notification_header.md"]
+"lingtai.mcp_servers.wechat" = ["notification_header.md"]
+"lingtai.mcp_servers.whatsapp" = ["notification_header.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

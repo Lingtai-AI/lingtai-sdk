@@ -17,6 +17,8 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 | `init_schema.py` | `validate_init()` plus `strip_deprecated()` — strict schema for active init.json fields, simple deprecated-field cleanup, and known-but-inactive legacy fields migrated by `lingtai_kernel.migrate` |
 | `venv_resolve.py` | Python venv resolution — init.json → global runtime → auto-create |
 | `intrinsic_skills/__init__.py` | Standalone skill bundles (docs-only) copied into `.library/intrinsic/` |
+| `addons/` | Compatibility namespace for legacy `lingtai.addons.<name>` imports; wrappers re-export `lingtai.mcp_servers.<name>` implementations |
+| `mcp_servers/` | Curated MCP server implementations shipped in the `lingtai` distribution and launched by `mcp_catalog.json` via `python -m lingtai.mcp_servers.<name>`; historical top-level `lingtai_*` packages remain thin wrappers |
 
 ### Key functions / classes
 

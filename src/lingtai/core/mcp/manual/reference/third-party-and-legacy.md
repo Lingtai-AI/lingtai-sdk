@@ -60,6 +60,6 @@ Use the registry route for anything you want to keep. Use `mcp/servers.json` whe
 
 Plaintext credentials in `mcp_registry.jsonl` or `mcp/servers.json` are the simplest path. For sensitive keys:
 
-- **stdio servers**: env vars in the `env` field referencing values from `.env` (the agent's `env_file`). Some addons (e.g. `lingtai-imap`) require literal credentials in a separate config file pointed at by an env var — see the addon's README.
+- **stdio servers**: env vars in the `env` field referencing values from `.env` (the agent's `env_file`). Some servers, including curated integrations such as `imap`, require literal credentials in a separate config file pointed at by an env var — see the relevant setup docs before writing secrets.
 - **http servers**: keys go in the `headers` field (typically `Authorization: Bearer ...`).
 - Never commit `mcp/servers.json` or addon config files to version control if they contain secrets.

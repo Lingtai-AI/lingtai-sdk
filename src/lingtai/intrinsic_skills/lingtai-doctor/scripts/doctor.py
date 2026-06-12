@@ -36,10 +36,11 @@ SECRET_MARKERS = (
 )
 PATH_MARKERS = ("path", "file", "dir", "home", "venv", "python", "command", "config")
 ADDON_MODULES = {
-    "telegram": "lingtai_telegram",
-    "feishu": "lingtai_feishu",
-    "wechat": "lingtai_wechat",
-    "imap": "lingtai_imap",
+    "telegram": "lingtai.mcp_servers.telegram",
+    "feishu": "lingtai.mcp_servers.feishu",
+    "wechat": "lingtai.mcp_servers.wechat",
+    "whatsapp": "lingtai.mcp_servers.whatsapp",
+    "imap": "lingtai.mcp_servers.imap",
 }
 
 
