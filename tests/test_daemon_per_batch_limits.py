@@ -58,8 +58,18 @@ def test_emanate_default_uses_ceiling(tmp_path):
 
     assert out["status"] == "dispatched"
     # max_turns is the 9th positional arg (index 8) to _run_emanation
-    assert captured["run_emanation_args"][9] == mgr._max_turns
+    assert mgr._max_turns == 1000
+    assert captured["run_emanation_args"][9] == 1000
 
+
+
+def test_daemon_schema_advertises_1000_turn_ceiling():
+    from lingtai.core.daemon import get_schema
+
+    max_turns_schema = get_schema("en")["properties"]["max_turns"]
+    assert max_turns_schema["minimum"] == 1
+    assert max_turns_schema["maximum"] == 1000
+    assert "1000" in max_turns_schema["description"]
 
 def test_emanate_respects_per_batch_max_turns(tmp_path):
     agent = _make_agent(tmp_path, ["file", "daemon"])
@@ -81,7 +91,7 @@ def test_emanate_caps_max_turns_at_ceiling(tmp_path):
     mgr = agent.get_capability("daemon")
     captured, fake_submit = _stub_emanate_internals(mgr)
 
-    # ceiling is 200; ask for 9999
+    # ceiling is 1000; ask for 9999
     with patch("lingtai.core.daemon.ThreadPoolExecutor") as MockPool:
         pool = MockPool.return_value
         pool.submit.side_effect = fake_submit
@@ -89,7 +99,23 @@ def test_emanate_caps_max_turns_at_ceiling(tmp_path):
                           "tasks": [{"task": "x", "tools": ["file"]}]})
 
     assert out["status"] == "dispatched"
-    assert captured["run_emanation_args"][9] == mgr._max_turns
+    assert mgr._max_turns == 1000
+    assert captured["run_emanation_args"][9] == 1000
+
+
+def test_emanate_allows_new_1000_turn_ceiling(tmp_path):
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    mgr = agent.get_capability("daemon")
+    captured, fake_submit = _stub_emanate_internals(mgr)
+
+    with patch("lingtai.core.daemon.ThreadPoolExecutor") as MockPool:
+        pool = MockPool.return_value
+        pool.submit.side_effect = fake_submit
+        out = mgr.handle({"action": "emanate", "max_turns": 1000,
+                          "tasks": [{"task": "x", "tools": ["file"]}]})
+
+    assert out["status"] == "dispatched"
+    assert captured["run_emanation_args"][9] == 1000
 
 
 def test_emanate_rejects_zero_max_turns(tmp_path):

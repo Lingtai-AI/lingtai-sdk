@@ -33,6 +33,11 @@ from .run_dir import DaemonRunDir
 
 PROVIDERS = {"providers": [], "default": "builtin"}
 
+# Default and author ceiling for per-emanation LLM tool-loop turns.
+# Agents may request a smaller per-batch value via daemon(max_turns=...), but
+# larger values are capped here.
+DEFAULT_MAX_TURNS = 1000
+
 
 def _kill_process_group(proc: subprocess.Popen) -> None:
     """Terminate the entire process group for *proc*, then force-kill if needed.
@@ -312,6 +317,7 @@ def get_schema(lang: str = "en") -> dict:
             "max_turns": {
                 "type": "integer",
                 "minimum": 1,
+                "maximum": DEFAULT_MAX_TURNS,
                 "description": t(lang, "daemon.max_turns"),
             },
             "timeout": {
@@ -343,7 +349,7 @@ class DaemonManager:
     _NOTIFY_MIN_LEN = 20
 
     def __init__(self, agent: "Agent", max_emanations: int = 100,
-                 max_turns: int = 200, timeout: float = 3600.0,
+                 max_turns: int = DEFAULT_MAX_TURNS, timeout: float = 3600.0,
                  notify_threshold: int = 20):
         self._agent = agent
         self._max_emanations = max_emanations
@@ -3403,7 +3409,7 @@ class DaemonManager:
 
 
 def setup(agent: "Agent", max_emanations: int = 100,
-          max_turns: int = 200, timeout: float = 3600.0,
+          max_turns: int = DEFAULT_MAX_TURNS, timeout: float = 3600.0,
           notify_threshold: int = 20) -> DaemonManager:
     """Set up the daemon capability on an agent."""
     lang = agent._config.language

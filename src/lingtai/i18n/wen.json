@@ -44,7 +44,7 @@
   "daemon.action": "所执之操作：'emanate'（分，遣出分神），'list'（观，显诸状），'ask'（问，跟进），'check'（察，览某分神近事），'reclaim'（收，尽数终止）",
   "daemon.last": "'check' 之操作：自 events.jsonl 返还几条近事。默二十。每轮约生事二（tool_call 与 tool_result），故 last=20 约涵十次工具之遣。",
   "daemon.truncate": "'check' 之操作：返事所含字符串字段之至长，过此则以省略缀之。默五百。设为零则不截。",
-  "daemon.max_turns": "'emanate' 之操作：每分神工具之环最多几转。默承父灵之极（二百）。事简者可设少以约之。",
+  "daemon.max_turns": "'emanate' 之操作：每分神工具之环最多几转。默承父灵之极（一千）。事简者可设少以约之。",
   "daemon.timeout": "'emanate' 之操作：整批最长几秒。默承父灵之极（三千六百秒）。时至而仍未毕者，看门狗斩之。",
   "daemon.tasks": "'emanate' 之任务列表。每项：{task: str（必填——含保存位置之指令），tools: list[str]（必填——能之名列表，如 ['file', 'bash']），preset: str（可省——预设文件路径，用 system(action='presets') 所返之 name 字段）。省 preset 则承父灵之工具面。MCP 之具恒承自父灵。预设继承与诸能解析详见 daemon-manual。",
   "daemon.tasks.preset": "可省之预设文件路径。必以 .json/.jsonc 结尾，用 system(action='presets') 所返之 name 字段。勿以简写名——当用 presets 列表中之完整 name。示例：'~/.lingtai-tui/presets/saved/cheap.json'。省则承父灵之工具面。",
