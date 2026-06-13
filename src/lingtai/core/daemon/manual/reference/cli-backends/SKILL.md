@@ -35,12 +35,14 @@ available:
 | `claude-code` | same as `claude-p` | same as `claude-p` | Backward-compatible alias retained for existing callers and stored daemon entries. |
 | `codex` | `codex exec --json --dangerously-bypass-approvals-and-sandbox <task>` | `codex exec resume <codex_session_id>` via `ask` (async — returns immediately, reply arrives via notification / `check`) | Mirrors the print-mode Claude backend. `thread.started` event carries the session id (codex internally calls it `thread_id`), captured immediately. `ask` resumes the same conversation context. |
 | `opencode` | `opencode run --format json <prompt>` | `opencode run --session <opencode_session_id> ...` via `ask` (async) | Uses opencode's session id/event vocabulary. |
+| `mimocode` / `mimo` | `mimo run --format json <prompt>` | `mimo run --session <mimocode_session_id> --format json ...` via `ask` (async) | MiMo Code CLI backend (npm package `@mimo-ai/cli`, binary `mimo`). `mimo` canonicalizes to `mimocode`. |
+| `qwen-code` / `qwen` | `qwen --yolo -p <prompt>` | Not supported yet; `ask` returns an explicit unsupported-backend error | Qwen Code CLI backend (npm package `@qwen-code/qwen-code`, binary `qwen`). `qwen` canonicalizes to `qwen-code`. |
 | `cursor` | `agent -p <prompt>` | `agent -p --resume <cursor_session_id> ...` via `ask` (async) | Cursor Agent CLI backend. |
 
 **When to use CLI backends:** Use them when the task benefits from a different
 agent runtime's tool surface (for example Claude Code's built-in file editing or
 Codex's sandboxed execution) rather than the LingTai emanation's curated tool
-set.
+set. `mimocode`/`mimo` and `qwen-code`/`qwen` are accepted as canonical backend names plus short aliases; persisted daemon entries use the canonical name.
 
 **Claude backend naming:** `claude` is the interactive PTY/TUI backend. It
 runs Claude Code in a LingTai-created managed workspace instead of the parent
@@ -78,9 +80,11 @@ search/web access, effort levels, sandbox/policy switches, etc.) without the
 daemon needing to hard-code every flag.
 
 This is intentionally a passthrough, not a fixed table. Claude Code, Codex,
-OpenCode, and Cursor rev their flag lists between releases. Before adding new
-options, run the installed CLI's `--help` in `bash` to discover what it supports
-today. Anything here is illustrative, not authoritative.
+OpenCode, MiMo Code, Qwen Code, and Cursor rev their flag lists between releases.
+Before adding new options, run the installed CLI's `--help` in `bash` to discover
+what it supports today (`claude --help`, `codex exec --help`, `opencode run
+--help`, `mimo run --help`, `qwen --help`, or `agent --help`). Anything here is
+illustrative, not authoritative.
 
 ```jsonc
 // Interactive Claude backend

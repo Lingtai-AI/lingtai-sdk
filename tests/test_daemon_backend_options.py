@@ -3,8 +3,9 @@
 Covers:
 - The pure argv conversion helper (`_backend_options_to_argv`).
 - Per-task backend_options validation in `_handle_emanate_cli`.
-- CLI runners (`_run_claude_code_emanation`, `_run_codex_emanation`)
-  appending backend_argv between required flags and the task prompt.
+- CLI runners (`_run_claude_code_emanation`, `_run_codex_emanation`,
+  `_run_mimocode_emanation`, `_run_qwen_code_emanation`) appending
+  backend_argv between required flags and the task prompt.
 - Persistence: resolved options land in daemon.json.
 - The lingtai backend ignoring the field (no schema breakage).
 """
@@ -437,3 +438,179 @@ def test_schema_includes_backend_options():
     # The free-form description should mention discovery via --help so
     # agents know not to expect a fixed list here.
     assert "--help" in task_props["backend_options"]["description"]
+
+
+def test_schema_includes_mimocode_and_qwen_code_backends():
+    from lingtai.core.daemon import get_schema
+
+    backend = get_schema("en")["properties"]["backend"]
+    for name in ("mimocode", "mimo", "qwen-code", "qwen"):
+        assert name in backend["enum"]
+    assert "MiMo Code" in backend["description"]
+    assert "Qwen Code" in backend["description"]
+
+
+def test_mimocode_alias_dispatches_to_canonical_backend(tmp_path):
+    agent = _make_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    captured: dict = {}
+
+    def fake_run(em_id, run_dir, task, cancel_event, timeout_event, backend_argv=None):
+        captured["backend"] = run_dir._state["backend"]
+        captured["model"] = run_dir._state["model"]
+        captured["backend_argv"] = list(backend_argv or [])
+        run_dir.mark_done("[fake done]")
+        return "[fake done]"
+
+    with patch.object(mgr, "_run_mimocode_emanation", side_effect=fake_run):
+        result = mgr.handle({
+            "action": "emanate",
+            "backend": "mimo",
+            "tasks": [{"task": "Use MiMo Code.", "tools": [],
+                       "backend_options": {"model": "mimo-auto"}}],
+        })
+        assert result["status"] == "dispatched"
+        em_id = result["ids"][0]
+        mgr._emanations[em_id]["future"].result(timeout=5)
+
+    assert captured["backend"] == "mimocode"
+    assert captured["model"] == "mimocode"
+    assert captured["backend_argv"] == ["--model", "mimo-auto"]
+
+
+def test_mimocode_cmd_appends_backend_argv_before_prompt(tmp_path):
+    agent = _make_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    captured_cmd: list[list[str]] = []
+
+    class FakeProc:
+        def __init__(self):
+            self.stdout = iter([
+                '{"type":"session.created","sessionID":"sess-mimo"}\n',
+                '{"type":"message.completed","text":"done"}\n',
+            ])
+            self.stderr = iter([])
+            self.returncode = 0
+            self.pid = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    from lingtai.core.daemon.run_dir import DaemonRunDir
+    run_dir = DaemonRunDir(
+        parent_working_dir=agent._working_dir,
+        handle="em-mimo",
+        task="dummy",
+        tools=[],
+        model="mimocode",
+        max_turns=10,
+        timeout_s=60,
+        parent_addr=agent._working_dir.name,
+        parent_pid=1,
+        system_prompt="[stub]",
+        backend="mimocode",
+    )
+
+    import threading as _t
+    with patch("lingtai.core.daemon.subprocess.Popen",
+               side_effect=lambda cmd, *a, **kw: (captured_cmd.append(list(cmd))
+                                                  or FakeProc())):
+        mgr._run_mimocode_emanation(
+            "em-mimo", run_dir, "Refactor with MiMo.",
+            _t.Event(), _t.Event(),
+            backend_argv=["--model", "mimo-auto", "--agent", "build"],
+        )
+
+    cmd = captured_cmd[0]
+    assert cmd[:4] == ["mimo", "run", "--format", "json"]
+    assert cmd[4:8] == ["--model", "mimo-auto", "--agent", "build"]
+    assert "Refactor with MiMo." in cmd[-1]
+    assert run_dir._state["mimocode_session_id"] == "sess-mimo"
+
+
+def test_qwen_code_cmd_appends_backend_argv_before_prompt(tmp_path):
+    agent = _make_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    captured_cmd: list[list[str]] = []
+
+    class FakeProc:
+        def __init__(self):
+            self.stdout = iter(["qwen done\n"])
+            self.stderr = iter([])
+            self.returncode = 0
+            self.pid = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    from lingtai.core.daemon.run_dir import DaemonRunDir
+    run_dir = DaemonRunDir(
+        parent_working_dir=agent._working_dir,
+        handle="em-qwen",
+        task="dummy",
+        tools=[],
+        model="qwen-code",
+        max_turns=10,
+        timeout_s=60,
+        parent_addr=agent._working_dir.name,
+        parent_pid=1,
+        system_prompt="[stub]",
+        backend="qwen-code",
+    )
+
+    import threading as _t
+    with patch("lingtai.core.daemon.subprocess.Popen",
+               side_effect=lambda cmd, *a, **kw: (captured_cmd.append(list(cmd))
+                                                  or FakeProc())):
+        mgr._run_qwen_code_emanation(
+            "em-qwen", run_dir, "Refactor with Qwen.",
+            _t.Event(), _t.Event(),
+            backend_argv=["--model", "qwen3-coder-plus"],
+        )
+
+    cmd = captured_cmd[0]
+    assert cmd[:2] == ["qwen", "--yolo"]
+    assert cmd[2:4] == ["--model", "qwen3-coder-plus"]
+    assert cmd[-2] == "-p"
+    assert "Refactor with Qwen." in cmd[-1]
+    assert run_dir._state["last_output"] == "qwen done"
+
+
+def test_qwen_code_rejects_harness_owned_backend_options(tmp_path):
+    agent = _make_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+
+    result = mgr.handle({
+        "action": "emanate",
+        "backend": "qwen-code",
+        "tasks": [{"task": "bad", "tools": [],
+                   "backend_options": {"prompt": "override"}}],
+    })
+
+    assert result["status"] == "error"
+    assert "--prompt is reserved by the qwen-code daemon backend" in result["message"]
+    assert mgr._emanations == {}
+
+
+def test_qwen_code_ask_is_explicitly_unsupported(tmp_path):
+    agent = _make_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+
+    def fake_run(em_id, run_dir, task, cancel_event, timeout_event, backend_argv=None):
+        run_dir.mark_done("[fake done]")
+        return "[fake done]"
+
+    with patch.object(mgr, "_run_qwen_code_emanation", side_effect=fake_run):
+        result = mgr.handle({
+            "action": "emanate",
+            "backend": "qwen-code",
+            "tasks": [{"task": "Qwen once.", "tools": []}],
+        })
+        assert result["status"] == "dispatched"
+        em_id = result["ids"][0]
+        mgr._emanations[em_id]["future"].result(timeout=5)
+
+    ask = mgr.handle({"action": "ask", "id": em_id, "message": "follow up"})
+
+    assert ask["status"] == "error"
+    assert "does not support" in ask["message"]
