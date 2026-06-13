@@ -25,6 +25,7 @@ _POST_MOLT_CHANNEL = "post-molt"
 _POST_CHILD_DELEGATION_CHANNEL = "post-child-delegation"
 
 _MAX_AVATAR_LEDGER_LINES = 1000
+_AVATAR_LEDGER_READ_CHUNK_BYTES = 64 * 1024
 _MAX_AVATAR_ENTRIES = 20
 _MAX_DAEMON_DIRS = 200
 _MAX_DAEMON_ENTRIES = 20
@@ -109,6 +110,41 @@ def _daemon_heartbeat_age(run_dir: Path, now: float) -> float | None:
         return None
 
 
+def _read_avatar_ledger_tail(ledger_path: Path) -> tuple[list[str], bool]:
+    """Read newest avatar ledger lines without scanning the whole append log."""
+    chunks: list[bytes] = []
+    newline_count = 0
+    try:
+        with ledger_path.open("rb") as f:
+            f.seek(0, os.SEEK_END)
+            pos = f.tell()
+            while pos > 0 and newline_count <= _MAX_AVATAR_LEDGER_LINES:
+                size = min(_AVATAR_LEDGER_READ_CHUNK_BYTES, pos)
+                pos -= size
+                f.seek(pos)
+                chunk = f.read(size)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                newline_count += chunk.count(b"\n")
+    except OSError:
+        return [], False
+
+    truncated = pos > 0
+    raw_lines = b"".join(reversed(chunks)).splitlines()
+    if len(raw_lines) > _MAX_AVATAR_LEDGER_LINES:
+        truncated = True
+        raw_lines = raw_lines[-_MAX_AVATAR_LEDGER_LINES:]
+
+    lines: list[str] = []
+    for raw in raw_lines:
+        try:
+            lines.append(raw.decode("utf-8"))
+        except UnicodeDecodeError:
+            continue
+    return lines, truncated
+
+
 def _read_avatar_records(agent) -> tuple[list[dict], bool]:
     ledger_path = agent._working_dir / "delegates" / "ledger.jsonl"
     if not ledger_path.is_file():
@@ -117,32 +153,28 @@ def _read_avatar_records(agent) -> tuple[list[dict], bool]:
     from ...handshake import resolve_address
 
     records_by_child: dict[str, dict] = {}
-    truncated = False
-    try:
-        with open(ledger_path, "r", encoding="utf-8") as f:
-            for idx, line in enumerate(f):
-                if idx >= _MAX_AVATAR_LEDGER_LINES:
-                    truncated = True
-                    break
-                if not line.strip():
-                    continue
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(record, dict) or record.get("event") != "avatar":
-                    continue
-                working_dir = record.get("working_dir") or record.get("address")
-                if not working_dir:
-                    continue
+    lines, truncated = _read_avatar_ledger_tail(ledger_path)
+    for line in reversed(lines):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict) or record.get("event") != "avatar":
+            continue
+        working_dir = record.get("working_dir") or record.get("address")
+        if not working_dir:
+            continue
 
-                child_dir = resolve_address(working_dir, agent._working_dir.parent)
-                records_by_child[str(child_dir)] = {
-                    "record": record,
-                    "child_dir": child_dir,
-                }
-    except (OSError, UnicodeDecodeError):
-        return [], False
+        child_dir = resolve_address(working_dir, agent._working_dir.parent)
+        child_key = str(child_dir)
+        if child_key in records_by_child:
+            continue
+        records_by_child[child_key] = {
+            "record": record,
+            "child_dir": child_dir,
+        }
 
     return list(records_by_child.values()), truncated
 

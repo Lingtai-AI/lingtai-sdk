@@ -313,3 +313,38 @@ def test_payload_is_bounded_and_truncated(tmp_path):
         assert data["limits"]["avatars_truncated"] is True
     finally:
         agent.stop()
+
+
+def test_avatar_ledger_scan_uses_recent_tail_window(tmp_path):
+    agent = _make_agent_with_psyche(tmp_path)
+    agent.start()
+    try:
+        old_records = [
+            {
+                "name": f"old-helper-{i}",
+                "working_dir": f"old-helper-{i}",
+                "boot_status": "ok",
+                "mission": "older historical delegation record",
+            }
+            for i in range(1000)
+        ]
+        _append_avatar_ledger(agent, *old_records)
+        _make_child(agent, "recent-helper", heartbeat_age_s=0.0)
+        _append_avatar_ledger(
+            agent,
+            name="recent-helper",
+            working_dir="recent-helper",
+            boot_status="ok",
+            mission="newer delegation after a long append-only ledger",
+        )
+
+        result = _run_agent_molt(agent)
+
+        assert result.get("status") == "ok"
+        data = _read_notification(agent, "post-child-delegation")["data"]
+        names = {entry["name"] for entry in data["avatars"]}
+        assert "recent-helper" in names
+        assert data["counts"]["avatars"]["alive"] == 1
+        assert data["limits"]["avatars_truncated"] is True
+    finally:
+        agent.stop()
