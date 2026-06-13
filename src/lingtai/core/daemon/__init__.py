@@ -154,7 +154,7 @@ EMANATION_BLACKLIST = {
 # (GH Lingtai-AI/lingtai#189). Strip these for Claude Code subprocesses
 # only: print-mode Claude (claude-p/claude-code) and interactive Claude
 # (claude/claude-interactive). Other backends (codex, lingtai, opencode,
-# cursor) are unaffected.
+# mimocode, qwen-code, cursor) are unaffected.
 _CLAUDE_CODE_STRIP_ENV = (
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
@@ -245,21 +245,62 @@ _CLAUDE_INTERACTIVE_RESERVED_BACKEND_FLAGS = {
     "--append-system-prompt-file",
 }
 
+# OpenCode-family (opencode, mimocode) own the run output format so daemon
+# event parsing keeps working; callers must not override it via backend_options.
+_OPENCODE_FAMILY_RESERVED_BACKEND_FLAGS = {
+    "--format",
+}
+
+# Qwen Code owns the prompt/headless/approval flags that drive LingTai's
+# non-interactive harness; overriding them via backend_options would break
+# headless capture or re-enable interactive prompting.
+_QWEN_RESERVED_BACKEND_FLAGS = {
+    "--prompt",
+    "-p",
+    "--yolo",
+    "-y",
+    "--approval-mode",
+}
+
+# Backend name aliases → canonical backend id. Kept tiny on purpose: only the
+# obvious short forms callers reach for.
+_BACKEND_ALIASES = {
+    "mimo": "mimocode",
+    "qwen": "qwen-code",
+}
+
+
+def _normalize_backend(backend: str | None) -> str:
+    """Map a caller-supplied backend (incl. aliases) to its canonical id."""
+    if not backend:
+        return "lingtai"
+    return _BACKEND_ALIASES.get(backend, backend)
+
 
 def _validate_claude_backend_argv(backend: str, argv: list[str]) -> None:
-    """Refuse user flags that would override LingTai's Claude harness.
+    """Refuse user flags that would override a daemon backend's own harness.
 
-    ``backend_options`` is a pass-through for CLI-specific flags, but Claude
-    daemon backends own their execution mode: print-mode owns ``--print`` /
-    ``--output-format stream-json`` and interactive mode owns ``--settings``
-    hooks plus its managed-workspace system prompt. Allowing callers to
-    override those would silently break daemon progress/result extraction.
+    ``backend_options`` is a pass-through for CLI-specific flags, but several
+    daemon backends own their execution mode and must not let callers override
+    it (doing so would silently break daemon progress/result extraction):
+
+      * Claude print-mode owns ``--print`` / ``--output-format stream-json``;
+        interactive mode also owns ``--settings`` hooks + managed system prompt.
+      * OpenCode-family (``opencode``, ``mimocode``) own ``--format`` (JSON).
+      * Qwen Code owns ``--prompt`` / ``--yolo`` / ``--approval-mode``.
+
+    Despite the historical name, this validator now covers all CLI backends.
     """
-    if backend not in ("claude", "claude-interactive", "claude-p", "claude-code"):
+    if backend in ("claude", "claude-interactive", "claude-p", "claude-code"):
+        reserved = set(_CLAUDE_COMMON_RESERVED_BACKEND_FLAGS)
+        if backend in ("claude", "claude-interactive"):
+            reserved.update(_CLAUDE_INTERACTIVE_RESERVED_BACKEND_FLAGS)
+    elif backend in ("opencode", "mimocode"):
+        reserved = set(_OPENCODE_FAMILY_RESERVED_BACKEND_FLAGS)
+    elif backend == "qwen-code":
+        reserved = set(_QWEN_RESERVED_BACKEND_FLAGS)
+    else:
         return
-    reserved = set(_CLAUDE_COMMON_RESERVED_BACKEND_FLAGS)
-    if backend in ("claude", "claude-interactive"):
-        reserved.update(_CLAUDE_INTERACTIVE_RESERVED_BACKEND_FLAGS)
     for token in argv:
         if token in reserved:
             raise ValueError(f"{token} is reserved by the {backend} daemon backend")
@@ -369,6 +410,10 @@ def get_schema(lang: str = "en") -> dict:
                     "claude-code",
                     "codex",
                     "opencode",
+                    "mimocode",
+                    "mimo",
+                    "qwen-code",
+                    "qwen",
                     "cursor",
                 ],
                 "description": (
@@ -376,7 +421,10 @@ def get_schema(lang: str = "en") -> dict:
                     "'claude' / 'claude-interactive' (experimental interactive Claude Code PTY backend), "
                     "'claude-p' (Claude Code print-mode backend; 'claude-code' is a compatibility alias), "
                     "'codex' (coding tasks via OpenAI Codex CLI), "
-                    "'opencode' (multi-provider open-source agent via the opencode-ai CLI), 'cursor' (coding tasks via Cursor Agent CLI). "
+                    "'opencode' (multi-provider open-source agent via the opencode-ai CLI), "
+                    "'mimocode' / 'mimo' (MiMo Code CLI), "
+                    "'qwen-code' / 'qwen' (Qwen Code CLI), "
+                    "'cursor' (coding tasks via Cursor Agent CLI). "
                     "CLI backends use external tools with no LLM overhead from the parent."
                 ),
             },
@@ -484,7 +532,7 @@ class DaemonManager:
 
     def handle(self, args: dict) -> dict:
         action = args.get("action")
-        backend = args.get("backend", "lingtai")
+        backend = _normalize_backend(args.get("backend", "lingtai"))
         if action == "emanate":
             return self._handle_emanate(
                 args.get("tasks", []),
@@ -1514,6 +1562,7 @@ class DaemonManager:
                         max_turns: int | None = None,
                         timeout: float | None = None,
                         backend: str = "lingtai") -> dict:
+        backend = _normalize_backend(backend)
         if not tasks:
             return {"status": "error", "message": "No tasks provided"}
 
@@ -1564,7 +1613,7 @@ class DaemonManager:
         # --- External CLI backends: skip preset resolution entirely ---
         if backend in (
             "claude", "claude-interactive", "claude-p", "claude-code",
-            "codex", "opencode", "cursor",
+            "codex", "opencode", "mimocode", "qwen-code", "cursor",
         ):
             return self._handle_emanate_cli(
                 tasks, backend=backend,
@@ -1806,6 +1855,10 @@ class DaemonManager:
                 run_fn = self._run_codex_emanation
             elif backend == "opencode":
                 run_fn = self._run_opencode_emanation
+            elif backend == "mimocode":
+                run_fn = self._run_mimocode_emanation
+            elif backend == "qwen-code":
+                run_fn = self._run_qwen_code_emanation
             elif backend == "cursor":
                 run_fn = self._run_cursor_emanation
             elif backend in ("claude", "claude-interactive"):
@@ -1902,7 +1955,9 @@ class DaemonManager:
         #   - claude-p / claude-code:      `claude --resume ... --print`
         #   - codex:                       `codex exec resume <codex_session_id>`
         #   - opencode:                    `opencode run --session <opencode_session_id> ...`
+        #   - mimocode:                    `mimo run --session <mimocode_session_id> ...`
         #   - cursor:                      `agent -p --resume <cursor_session_id> ...`
+        # Qwen Code headless mode does not expose a stable resume contract here.
         # All stream progress into the daemon run directory so
         # `daemon(check)` shows live progress.
         backend = entry.get("backend")
@@ -1914,6 +1969,11 @@ class DaemonManager:
             return self._handle_ask_codex(em_id, entry, message)
         if backend == "opencode":
             return self._handle_ask_opencode(em_id, entry, message)
+        if backend == "mimocode":
+            return self._handle_ask_mimocode(em_id, entry, message)
+        if backend == "qwen-code":
+            return {"status": "error", "id": em_id,
+                    "message": "qwen-code daemon backend does not support daemon(action='ask') yet; start a new qwen-code emanation instead."}
         if backend == "cursor":
             return self._handle_ask_cursor(em_id, entry, message)
 
@@ -2578,16 +2638,20 @@ class DaemonManager:
         cancel_event: threading.Event,
         timeout_event: threading.Event | None = None,
         backend_argv: list[str] | None = None,
+        *,
+        executable: str = "opencode",
+        backend_name: str = "opencode",
+        session_state_key: str = "opencode_session_id",
     ) -> str:
         """Run an OpenCode CLI session as the emanation backend.
 
-        Spawns ``opencode run --format json <prompt>`` and parses one
+        Spawns ``<executable> run --format json <prompt>`` and parses one
         JSON event per stdout line. Non-JSON lines are recorded as
         ``cli_output`` so nothing is silently dropped. The first event
         that carries a session-id-shaped field is stored in daemon.json
-        under ``opencode_session_id`` — used later by
-        ``daemon(action='ask')`` to resume the session via
-        ``opencode run --session <id> ...``.
+        under ``session_state_key`` (``opencode_session_id`` by default)
+        — used later by ``daemon(action='ask')`` to resume the session via
+        ``<executable> run --session <id> ...``.
 
         OpenCode's event field naming is less standardized than
         claude-code or codex, so the parser is intentionally permissive.
@@ -2610,14 +2674,14 @@ class DaemonManager:
         # backend_options sit between them and the prompt positional so the
         # prompt stays the trailing argument opencode expects.
         cmd = [
-            "opencode",
+            executable,
             "run",
             "--format", "json",
         ]
         if backend_argv:
             cmd.extend(backend_argv)
         cmd.append(prompt)
-        self._log("daemon_opencode_start", em_id=em_id, cmd_head=" ".join(cmd[:4]))
+        self._log(f"daemon_{backend_name}_start", em_id=em_id, cmd_head=" ".join(cmd[:4]))
 
         try:
             proc = subprocess.Popen(
@@ -2629,11 +2693,11 @@ class DaemonManager:
                 start_new_session=True,  # own process group for reliable cleanup
             )
         except FileNotFoundError:
-            exc = RuntimeError("'opencode' CLI not found on PATH")
+            exc = RuntimeError(f"'{executable}' CLI not found on PATH")
             run_dir.mark_failed(exc)
             raise exc
         except OSError as e:
-            exc = RuntimeError(f"Failed to start opencode CLI: {e}")
+            exc = RuntimeError(f"Failed to start {backend_name} CLI: {e}")
             run_dir.mark_failed(exc)
             raise exc
         with self._cli_lock:
@@ -2655,7 +2719,7 @@ class DaemonManager:
 
         stderr_thread = threading.Thread(
             target=_drain_stderr, daemon=True,
-            name=f"daemon-opencode-stderr-{em_id}",
+            name=f"daemon-{backend_name}-stderr-{em_id}",
         )
         stderr_thread.start()
 
@@ -2670,9 +2734,9 @@ class DaemonManager:
             if not sid or session_id_captured == sid:
                 return
             session_id_captured = sid
-            run_dir._state["opencode_session_id"] = sid
+            run_dir._state[session_state_key] = sid
             run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
-            self._log("daemon_opencode_session", em_id=em_id, session_id=sid)
+            self._log(f"daemon_{backend_name}_session", em_id=em_id, session_id=sid)
 
         try:
             assert proc.stdout is not None
@@ -2738,7 +2802,7 @@ class DaemonManager:
         if proc.returncode != 0:
             detail = stderr_tail or "\n".join(text_chunks[-3:])
             exc = RuntimeError(
-                f"opencode CLI exited with code {proc.returncode}: "
+                f"{backend_name} CLI exited with code {proc.returncode}: "
                 f"{detail[-500:]}"
             )
             run_dir.mark_failed(exc)
@@ -2762,8 +2826,160 @@ class DaemonManager:
         run_dir.mark_done(text)
         return text
 
-    def _handle_ask_opencode(self, em_id: str, entry: dict, message: str) -> dict:
-        """Dispatch an OpenCode session-resume follow-up off the caller's turn.
+    def _run_mimocode_emanation(
+        self,
+        em_id: str,
+        run_dir: DaemonRunDir,
+        task: str,
+        cancel_event: threading.Event,
+        timeout_event: threading.Event | None = None,
+        backend_argv: list[str] | None = None,
+    ) -> str:
+        """Run a MiMo Code CLI session as the emanation backend.
+
+        MiMo Code's npm package ``@mimo-ai/cli`` exposes the ``mimo``
+        executable and an OpenCode-derived ``run --format json`` command, so
+        the existing defensive OpenCode JSONL parser is reused with a distinct
+        session-id field in daemon.json.
+        """
+        return self._run_opencode_emanation(
+            em_id, run_dir, task, cancel_event, timeout_event, backend_argv,
+            executable="mimo",
+            backend_name="mimocode",
+            session_state_key="mimocode_session_id",
+        )
+
+    def _build_qwen_code_prompt(self, task: str) -> str:
+        """Compose the prompt sent to Qwen Code headless mode."""
+        return self._build_opencode_prompt(task)
+
+    def _run_qwen_code_emanation(
+        self,
+        em_id: str,
+        run_dir: DaemonRunDir,
+        task: str,
+        cancel_event: threading.Event,
+        timeout_event: threading.Event | None = None,
+        backend_argv: list[str] | None = None,
+    ) -> str:
+        """Run a Qwen Code CLI session as the emanation backend.
+
+        Qwen Code documents headless mode as ``qwen -p <prompt>``. LingTai
+        additionally owns ``--yolo`` so the daemon can proceed without
+        interactive approval prompts. Qwen Code does not expose a stable
+        machine-readable streaming/resume contract here, so stdout/stderr are
+        recorded verbatim and ``daemon(action='ask')`` is intentionally
+        unsupported for this backend.
+        """
+        def _exit_cancelled() -> str:
+            if timeout_event is not None and timeout_event.is_set():
+                run_dir.mark_timeout()
+            else:
+                run_dir.mark_cancelled()
+            return "[cancelled]"
+
+        if cancel_event.is_set():
+            return _exit_cancelled()
+
+        prompt = self._build_qwen_code_prompt(task)
+        cmd = ["qwen", "--yolo"]
+        if backend_argv:
+            cmd.extend(backend_argv)
+        cmd.extend(["-p", prompt])
+        self._log("daemon_qwen_code_start", em_id=em_id, cmd_head=" ".join(cmd[:5]))
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=str(self._agent._working_dir),
+                start_new_session=True,
+            )
+        except FileNotFoundError:
+            exc = RuntimeError("'qwen' CLI not found on PATH")
+            run_dir.mark_failed(exc)
+            raise exc
+        except OSError as e:
+            exc = RuntimeError(f"Failed to start qwen-code CLI: {e}")
+            run_dir.mark_failed(exc)
+            raise exc
+        with self._cli_lock:
+            self._cli_procs.append(proc)
+
+        stdout_lines: list[str] = []
+        stderr_lines: list[str] = []
+
+        def _drain_stderr() -> None:
+            assert proc.stderr is not None
+            for line in proc.stderr:
+                stripped = line.rstrip("\n")
+                if not stripped:
+                    continue
+                stderr_lines.append(stripped)
+                try:
+                    run_dir.record_cli_output(stripped, stream="stderr")
+                except Exception:
+                    pass
+
+        stderr_thread = threading.Thread(
+            target=_drain_stderr, daemon=True,
+            name=f"daemon-qwen-code-stderr-{em_id}",
+        )
+        stderr_thread.start()
+
+        try:
+            assert proc.stdout is not None
+            for raw_line in proc.stdout:
+                if cancel_event.is_set():
+                    _kill_process_group(proc)
+                    return _exit_cancelled()
+                line = raw_line.rstrip("\n")
+                if not line:
+                    continue
+                stdout_lines.append(line)
+                try:
+                    run_dir.record_cli_output(line, stream="stdout")
+                except Exception:
+                    pass
+            proc.wait()
+        except Exception as e:
+            _kill_process_group(proc)
+            run_dir.mark_failed(e)
+            raise
+        finally:
+            stderr_thread.join(timeout=2.0)
+            with self._cli_lock:
+                try:
+                    self._cli_procs.remove(proc)
+                except ValueError:
+                    pass
+
+        stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
+        output = "\n".join(stdout_lines).strip()
+
+        if proc.returncode != 0:
+            detail = stderr_tail or output
+            exc = RuntimeError(
+                f"qwen-code CLI exited with code {proc.returncode}: "
+                f"{detail[-500:]}"
+            )
+            run_dir.mark_failed(exc)
+            raise exc
+
+        text = output or (f"[no stdout; stderr tail follows]\n{stderr_tail[-500:]}" if stderr_tail else "[no output]")
+        run_dir.mark_done(text)
+        return text
+
+    def _handle_ask_opencode(
+        self, em_id: str, entry: dict, message: str,
+        *,
+        executable: str = "opencode",
+        backend_name: str = "opencode",
+        session_state_key: str = "opencode_session_id",
+    ) -> dict:
+        """Dispatch an OpenCode-family session-resume follow-up off the caller's turn.
 
         Mirrors ``_handle_ask_cli`` / ``_handle_ask_codex``: spawn the
         ``opencode run --session <id>`` subprocess, hand the JSON-stream
@@ -2775,10 +2991,10 @@ class DaemonManager:
         if run_dir is None:
             return {"status": "error", "message": f"emanation {em_id} has no run_dir"}
 
-        session_id = run_dir._state.get("opencode_session_id")
+        session_id = run_dir._state.get(session_state_key)
         if not session_id:
             return {"status": "error",
-                    "message": f"No opencode session ID found for {em_id}. "
+                    "message": f"No {backend_name} session ID found for {em_id}. "
                                "The emanation may still be initializing — "
                                "wait a moment and retry."}
 
@@ -2791,13 +3007,13 @@ class DaemonManager:
             entry["ask_in_flight"] = True
 
         cmd = [
-            "opencode",
+            executable,
             "run",
             "--session", session_id,
             "--format", "json",
             message,
         ]
-        self._log("daemon_opencode_ask", em_id=em_id,
+        self._log(f"daemon_{backend_name}_ask", em_id=em_id,
                   session_id=session_id, message_length=len(message))
 
         try:
@@ -2813,12 +3029,12 @@ class DaemonManager:
             with entry["followup_lock"]:
                 entry["ask_in_flight"] = False
             return {"status": "error",
-                    "message": "'opencode' CLI not found on PATH"}
+                    "message": f"'{executable}' CLI not found on PATH"}
         except OSError as e:
             with entry["followup_lock"]:
                 entry["ask_in_flight"] = False
             return {"status": "error",
-                    "message": f"Failed to start opencode CLI: {e}"}
+                    "message": f"Failed to start {backend_name} CLI: {e}"}
         with self._cli_lock:
             self._cli_procs.append(proc)
 
@@ -2830,7 +3046,7 @@ class DaemonManager:
             pass
 
         ask_future = self._ask_pool.submit(
-            self._run_ask_opencode_stream, em_id, entry, proc, run_dir,
+            self._run_ask_opencode_stream, em_id, entry, proc, run_dir, backend_name,
         )
         ask_future.add_done_callback(
             lambda f, eid=em_id: self._on_ask_done(eid, f)
@@ -2841,12 +3057,22 @@ class DaemonManager:
                 "message": "ask dispatched; check daemon(action='check', "
                            f"id='{em_id}') for progress and final reply"}
 
+    def _handle_ask_mimocode(self, em_id: str, entry: dict, message: str) -> dict:
+        """Dispatch a MiMo Code ``mimo run --session`` follow-up."""
+        return self._handle_ask_opencode(
+            em_id, entry, message,
+            executable="mimo",
+            backend_name="mimocode",
+            session_state_key="mimocode_session_id",
+        )
+
     def _run_ask_opencode_stream(
         self,
         em_id: str,
         entry: dict,
         proc: subprocess.Popen,
         run_dir: DaemonRunDir,
+        backend_name: str = "opencode",
     ) -> dict:
         """Background worker: stream an ``opencode run --session`` subprocess.
 
@@ -2872,7 +3098,7 @@ class DaemonManager:
 
         stderr_thread = threading.Thread(
             target=_drain_stderr, daemon=True,
-            name=f"daemon-opencode-ask-stderr-{em_id}",
+            name=f"daemon-{backend_name}-ask-stderr-{em_id}",
         )
         stderr_thread.start()
 
@@ -2889,7 +3115,7 @@ class DaemonManager:
             # _iter_stdout_with_deadline — fixes the silent-CLI hang.
             for raw_line in _iter_stdout_with_deadline(
                 proc, deadline,
-                thread_name=f"daemon-opencode-ask-stdout-{em_id}",
+                thread_name=f"daemon-{backend_name}-ask-stdout-{em_id}",
             ):
                 line = raw_line.rstrip("\n")
                 if not line:
@@ -2938,7 +3164,7 @@ class DaemonManager:
         stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
 
         if timed_out:
-            err = f"opencode run timed out after {self._timeout}s"
+            err = f"{backend_name} run timed out after {self._timeout}s"
             self._publish_followup_if_live(
                 em_id, status="follow-up failed", text=err, run_dir=run_dir,
             )
@@ -2946,7 +3172,7 @@ class DaemonManager:
 
         if proc.returncode != 0:
             detail = stderr_tail or "\n".join(text_chunks[-3:])
-            err = f"opencode CLI exited {proc.returncode}: {detail[-500:]}"
+            err = f"{backend_name} CLI exited {proc.returncode}: {detail[-500:]}"
             self._publish_followup_if_live(
                 em_id, status="follow-up failed", text=err, run_dir=run_dir,
             )
