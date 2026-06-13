@@ -21,7 +21,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from ...i18n import t
 
@@ -154,7 +154,7 @@ EMANATION_BLACKLIST = {
 # (GH Lingtai-AI/lingtai#189). Strip these for Claude Code subprocesses
 # only: print-mode Claude (claude-p/claude-code) and interactive Claude
 # (claude/claude-interactive). Other backends (codex, lingtai, opencode,
-# mimocode, qwen-code, cursor) are unaffected.
+# mimocode, qwen-code, oh-my-pi, cursor) are unaffected.
 _CLAUDE_CODE_STRIP_ENV = (
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
@@ -262,11 +262,31 @@ _QWEN_RESERVED_BACKEND_FLAGS = {
     "--approval-mode",
 }
 
+# Oh-My-Pi owns the mode/headless/approval/session flags that drive LingTai's
+# non-interactive JSON harness; overriding them via backend_options would break
+# JSON event capture, re-enable interactive prompting, or hijack the session.
+# ``--print`` is reserved because it is Oh-My-Pi's alternate print-mode switch
+# (short form ``-p`` cannot be emitted by backend_options, which only creates
+# long ``--flag`` tokens).
+_OH_MY_PI_RESERVED_BACKEND_FLAGS = {
+    "--mode",
+    "--print",
+    "--auto-approve",
+    "--yolo",
+    "--approval-mode",
+    "--session",
+    "--resume",
+    "--continue",
+    "--no-session",
+    "--session-dir",
+}
+
 # Backend name aliases → canonical backend id. Kept tiny on purpose: only the
 # obvious short forms callers reach for.
 _BACKEND_ALIASES = {
     "mimo": "mimocode",
     "qwen": "qwen-code",
+    "omp": "oh-my-pi",
 }
 
 
@@ -288,6 +308,7 @@ def _validate_claude_backend_argv(backend: str, argv: list[str]) -> None:
         interactive mode also owns ``--settings`` hooks + managed system prompt.
       * OpenCode-family (``opencode``, ``mimocode``) own ``--format`` (JSON).
       * Qwen Code owns ``--prompt`` / ``--yolo`` / ``--approval-mode``.
+      * Oh-My-Pi owns ``--mode`` / approval-yolo / session flags.
 
     Despite the historical name, this validator now covers all CLI backends.
     """
@@ -299,6 +320,8 @@ def _validate_claude_backend_argv(backend: str, argv: list[str]) -> None:
         reserved = set(_OPENCODE_FAMILY_RESERVED_BACKEND_FLAGS)
     elif backend == "qwen-code":
         reserved = set(_QWEN_RESERVED_BACKEND_FLAGS)
+    elif backend == "oh-my-pi":
+        reserved = set(_OH_MY_PI_RESERVED_BACKEND_FLAGS)
     else:
         return
     for token in argv:
@@ -414,6 +437,8 @@ def get_schema(lang: str = "en") -> dict:
                     "mimo",
                     "qwen-code",
                     "qwen",
+                    "oh-my-pi",
+                    "omp",
                     "cursor",
                 ],
                 "description": (
@@ -424,6 +449,7 @@ def get_schema(lang: str = "en") -> dict:
                     "'opencode' (multi-provider open-source agent via the opencode-ai CLI), "
                     "'mimocode' / 'mimo' (MiMo Code CLI), "
                     "'qwen-code' / 'qwen' (Qwen Code CLI), "
+                    "'oh-my-pi' / 'omp' (Oh-My-Pi pi-coding-agent CLI), "
                     "'cursor' (coding tasks via Cursor Agent CLI). "
                     "CLI backends use external tools with no LLM overhead from the parent."
                 ),
@@ -1613,7 +1639,7 @@ class DaemonManager:
         # --- External CLI backends: skip preset resolution entirely ---
         if backend in (
             "claude", "claude-interactive", "claude-p", "claude-code",
-            "codex", "opencode", "mimocode", "qwen-code", "cursor",
+            "codex", "opencode", "mimocode", "qwen-code", "oh-my-pi", "cursor",
         ):
             return self._handle_emanate_cli(
                 tasks, backend=backend,
@@ -1859,6 +1885,8 @@ class DaemonManager:
                 run_fn = self._run_mimocode_emanation
             elif backend == "qwen-code":
                 run_fn = self._run_qwen_code_emanation
+            elif backend == "oh-my-pi":
+                run_fn = self._run_oh_my_pi_emanation
             elif backend == "cursor":
                 run_fn = self._run_cursor_emanation
             elif backend in ("claude", "claude-interactive"):
@@ -1956,6 +1984,7 @@ class DaemonManager:
         #   - codex:                       `codex exec resume <codex_session_id>`
         #   - opencode:                    `opencode run --session <opencode_session_id> ...`
         #   - mimocode:                    `mimo run --session <mimocode_session_id> ...`
+        #   - oh-my-pi:                    `omp --mode json --session <oh_my_pi_session_id> ...`
         #   - cursor:                      `agent -p --resume <cursor_session_id> ...`
         # Qwen Code headless mode does not expose a stable resume contract here.
         # All stream progress into the daemon run directory so
@@ -1971,6 +2000,8 @@ class DaemonManager:
             return self._handle_ask_opencode(em_id, entry, message)
         if backend == "mimocode":
             return self._handle_ask_mimocode(em_id, entry, message)
+        if backend == "oh-my-pi":
+            return self._handle_ask_oh_my_pi(em_id, entry, message)
         if backend == "qwen-code":
             return {"status": "error", "id": em_id,
                     "message": "qwen-code daemon backend does not support daemon(action='ask') yet; start a new qwen-code emanation instead."}
@@ -2642,18 +2673,20 @@ class DaemonManager:
         executable: str = "opencode",
         backend_name: str = "opencode",
         session_state_key: str = "opencode_session_id",
+        cmd_prefix: list[str] | None = None,
     ) -> str:
-        """Run an OpenCode CLI session as the emanation backend.
+        """Run an OpenCode-family CLI session as the emanation backend.
 
-        Spawns ``<executable> run --format json <prompt>`` and parses one
-        JSON event per stdout line. Non-JSON lines are recorded as
-        ``cli_output`` so nothing is silently dropped. The first event
-        that carries a session-id-shaped field is stored in daemon.json
-        under ``session_state_key`` (``opencode_session_id`` by default)
-        — used later by ``daemon(action='ask')`` to resume the session via
-        ``<executable> run --session <id> ...``.
+        Spawns ``<executable> <cmd_prefix...> <backend_argv...> <prompt>`` and
+        parses one JSON event per stdout line (``cmd_prefix`` defaults to
+        ``["run", "--format", "json"]`` for OpenCode/MiMo; Oh-My-Pi passes
+        ``["--mode", "json", "--approval-mode", "yolo"]``). Non-JSON lines are recorded
+        as ``cli_output`` so nothing is silently dropped. The first event that
+        carries a session-id-shaped field is stored in daemon.json under
+        ``session_state_key`` (``opencode_session_id`` by default) — used later
+        by ``daemon(action='ask')`` to resume the session.
 
-        OpenCode's event field naming is less standardized than
+        OpenCode-family event field naming is less standardized than
         claude-code or codex, so the parser is intentionally permissive.
         See ``_opencode_extract_text`` / ``_opencode_extract_session_id``
         for the shapes accepted.
@@ -2672,16 +2705,14 @@ class DaemonManager:
 
         # Required infrastructure flags come first; free-form
         # backend_options sit between them and the prompt positional so the
-        # prompt stays the trailing argument opencode expects.
-        cmd = [
-            executable,
-            "run",
-            "--format", "json",
-        ]
+        # prompt stays the trailing argument the CLI expects.
+        prefix = cmd_prefix if cmd_prefix is not None else ["run", "--format", "json"]
+        cmd = [executable, *prefix]
         if backend_argv:
             cmd.extend(backend_argv)
         cmd.append(prompt)
-        self._log(f"daemon_{backend_name}_start", em_id=em_id, cmd_head=" ".join(cmd[:4]))
+        self._log(f"daemon_{backend_name}_start", em_id=em_id,
+                  cmd_head=" ".join(cmd[:1 + len(prefix)]))
 
         try:
             proc = subprocess.Popen(
@@ -2731,7 +2762,12 @@ class DaemonManager:
 
         def _store_session_id(sid: str) -> None:
             nonlocal session_id_captured
-            if not sid or session_id_captured == sid:
+            if not sid:
+                return
+            # The session id is established by the first session-shaped header.
+            # Later OpenCode-family/Oh-My-Pi events may carry their own event ids;
+            # do not let those overwrite a working resume id.
+            if session_id_captured:
                 return
             session_id_captured = sid
             run_dir._state[session_state_key] = sid
@@ -2847,6 +2883,35 @@ class DaemonManager:
             executable="mimo",
             backend_name="mimocode",
             session_state_key="mimocode_session_id",
+        )
+
+    def _run_oh_my_pi_emanation(
+        self,
+        em_id: str,
+        run_dir: DaemonRunDir,
+        task: str,
+        cancel_event: threading.Event,
+        timeout_event: threading.Event | None = None,
+        backend_argv: list[str] | None = None,
+    ) -> str:
+        """Run an Oh-My-Pi (``omp``) CLI session as the emanation backend.
+
+        Oh-My-Pi's npm package ``@oh-my-pi/pi-coding-agent`` exposes the
+        ``omp`` executable. ``--mode json`` makes it a non-interactive JSON
+        event-stream printer (it first emits a ``type:session`` header whose
+        ``id`` is the resumable session id, then one agent event per JSONL
+        line); ``--approval-mode yolo`` lets the daemon proceed without interactive
+        approval prompts. The OpenCode-family JSON parser is reused — its
+        ``_opencode_extract_session_id`` already recognizes a ``type:session``
+        header with a bare top-level ``id`` — with a distinct session-id field
+        in daemon.json so ``daemon(action='ask')`` can resume via ``--session``.
+        """
+        return self._run_opencode_emanation(
+            em_id, run_dir, task, cancel_event, timeout_event, backend_argv,
+            executable="omp",
+            backend_name="oh-my-pi",
+            session_state_key="oh_my_pi_session_id",
+            cmd_prefix=["--mode", "json", "--approval-mode", "yolo"],
         )
 
     def _build_qwen_code_prompt(self, task: str) -> str:
@@ -2978,14 +3043,19 @@ class DaemonManager:
         executable: str = "opencode",
         backend_name: str = "opencode",
         session_state_key: str = "opencode_session_id",
+        build_resume_cmd: Callable[[str, str, str], list[str]] | None = None,
     ) -> dict:
         """Dispatch an OpenCode-family session-resume follow-up off the caller's turn.
 
-        Mirrors ``_handle_ask_cli`` / ``_handle_ask_codex``: spawn the
-        ``opencode run --session <id>`` subprocess, hand the JSON-stream
-        parse to ``self._ask_pool``, return immediately. The concurrent-ask
-        guard refuses overlapping asks per-emanation because opencode
+        Mirrors ``_handle_ask_cli`` / ``_handle_ask_codex``: spawn the resume
+        subprocess (``opencode run --session <id> ...`` by default), hand the
+        JSON-stream parse to ``self._ask_pool``, return immediately. The
+        concurrent-ask guard refuses overlapping asks per-emanation because
         resume is single-writer per session.
+
+        ``build_resume_cmd(executable, session_id, message)`` overrides the
+        argv for backends whose resume shape differs (e.g. Oh-My-Pi's
+        ``omp --mode json --approval-mode yolo --session <id> <message>``).
         """
         run_dir = entry.get("run_dir")
         if run_dir is None:
@@ -3006,13 +3076,16 @@ class DaemonManager:
                                    f"daemon(action='check', id='{em_id}')"}
             entry["ask_in_flight"] = True
 
-        cmd = [
-            executable,
-            "run",
-            "--session", session_id,
-            "--format", "json",
-            message,
-        ]
+        if build_resume_cmd is not None:
+            cmd = build_resume_cmd(executable, session_id, message)
+        else:
+            cmd = [
+                executable,
+                "run",
+                "--session", session_id,
+                "--format", "json",
+                message,
+            ]
         self._log(f"daemon_{backend_name}_ask", em_id=em_id,
                   session_id=session_id, message_length=len(message))
 
@@ -3064,6 +3137,28 @@ class DaemonManager:
             executable="mimo",
             backend_name="mimocode",
             session_state_key="mimocode_session_id",
+        )
+
+    @staticmethod
+    def _oh_my_pi_resume_cmd(executable: str, session_id: str, message: str) -> list[str]:
+        """Build the Oh-My-Pi resume argv: ``omp --mode json --approval-mode yolo
+        --session <id> <message>``."""
+        return [
+            executable,
+            "--mode", "json",
+            "--approval-mode", "yolo",
+            "--session", session_id,
+            message,
+        ]
+
+    def _handle_ask_oh_my_pi(self, em_id: str, entry: dict, message: str) -> dict:
+        """Dispatch an Oh-My-Pi ``omp --mode json --session`` follow-up."""
+        return self._handle_ask_opencode(
+            em_id, entry, message,
+            executable="omp",
+            backend_name="oh-my-pi",
+            session_state_key="oh_my_pi_session_id",
+            build_resume_cmd=self._oh_my_pi_resume_cmd,
         )
 
     def _run_ask_opencode_stream(

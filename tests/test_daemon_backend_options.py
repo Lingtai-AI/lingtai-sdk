@@ -614,3 +614,245 @@ def test_qwen_code_ask_is_explicitly_unsupported(tmp_path):
 
     assert ask["status"] == "error"
     assert "does not support" in ask["message"]
+
+
+# ---------------------------------------------------------------------------
+# Oh-My-Pi backend
+# ---------------------------------------------------------------------------
+
+
+def test_schema_includes_oh_my_pi_backend():
+    from lingtai.core.daemon import get_schema
+
+    backend = get_schema("en")["properties"]["backend"]
+    for name in ("oh-my-pi", "omp"):
+        assert name in backend["enum"]
+    assert "Oh-My-Pi" in backend["description"]
+
+
+@pytest.mark.parametrize("backend", ["omp", "oh-my-pi"])
+def test_oh_my_pi_alias_and_canonical_dispatch_to_backend(tmp_path, backend):
+    agent = _make_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    captured: dict = {}
+
+    def fake_run(em_id, run_dir, task, cancel_event, timeout_event, backend_argv=None):
+        captured["backend"] = run_dir._state["backend"]
+        captured["model"] = run_dir._state["model"]
+        captured["backend_argv"] = list(backend_argv or [])
+        run_dir.mark_done("[fake done]")
+        return "[fake done]"
+
+    with patch.object(mgr, "_run_oh_my_pi_emanation", side_effect=fake_run):
+        result = mgr.handle({
+            "action": "emanate",
+            "backend": backend,
+            "tasks": [{"task": "Use Oh-My-Pi.", "tools": [],
+                       "backend_options": {"provider": "anthropic"}}],
+        })
+        assert result["status"] == "dispatched"
+        em_id = result["ids"][0]
+        mgr._emanations[em_id]["future"].result(timeout=5)
+
+    assert captured["backend"] == "oh-my-pi"
+    assert captured["model"] == "oh-my-pi"
+    assert captured["backend_argv"] == ["--provider", "anthropic"]
+
+
+def test_oh_my_pi_cmd_includes_mode_json_and_session_id_from_header(tmp_path):
+    agent = _make_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    captured_cmd: list[list[str]] = []
+
+    class FakeProc:
+        def __init__(self):
+            # Oh-My-Pi JSON mode: a `type:session` header (bare top-level id)
+            # followed by agent events.
+            self.stdout = iter([
+                '{"type":"session","id":"omp-sess-1","cwd":"/tmp"}\n',
+                # Event ids that arrive after the session header must not
+                # overwrite the resumable session id.
+                '{"type":"session.updated","id":"not-the-session-id"}\n',
+                '{"type":"message.completed","text":"all done"}\n',
+            ])
+            self.stderr = iter([])
+            self.returncode = 0
+            self.pid = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    from lingtai.core.daemon.run_dir import DaemonRunDir
+    run_dir = DaemonRunDir(
+        parent_working_dir=agent._working_dir,
+        handle="em-omp",
+        task="dummy",
+        tools=[],
+        model="oh-my-pi",
+        max_turns=10,
+        timeout_s=60,
+        parent_addr=agent._working_dir.name,
+        parent_pid=1,
+        system_prompt="[stub]",
+        backend="oh-my-pi",
+    )
+
+    import threading as _t
+    with patch("lingtai.core.daemon.subprocess.Popen",
+               side_effect=lambda cmd, *a, **kw: (captured_cmd.append(list(cmd))
+                                                  or FakeProc())):
+        mgr._run_oh_my_pi_emanation(
+            "em-omp", run_dir, "Refactor with Oh-My-Pi.",
+            _t.Event(), _t.Event(),
+            backend_argv=["--provider", "anthropic", "--model", "claude-x"],
+        )
+
+    cmd = captured_cmd[0]
+    # `omp --mode json --approval-mode yolo` prefix, then backend_argv, then prompt.
+    assert cmd[:5] == ["omp", "--mode", "json", "--approval-mode", "yolo"]
+    assert cmd[5:9] == ["--provider", "anthropic", "--model", "claude-x"]
+    assert "Refactor with Oh-My-Pi." in cmd[-1]
+    # Session id captured from the `type:session` header, stored under the
+    # Oh-My-Pi-specific key.
+    assert run_dir._state["oh_my_pi_session_id"] == "omp-sess-1"
+
+
+def test_oh_my_pi_ask_resume_uses_session_flag(tmp_path):
+    agent = _make_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    captured_cmd: list[list[str]] = []
+
+    class FakeProc:
+        def __init__(self):
+            self.stdout = iter(['{"type":"message.completed","text":"resumed"}\n'])
+            self.stderr = iter([])
+            self.returncode = 0
+            self.pid = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    from lingtai.core.daemon.run_dir import DaemonRunDir
+    run_dir = DaemonRunDir(
+        parent_working_dir=agent._working_dir,
+        handle="em-omp-ask",
+        task="dummy",
+        tools=[],
+        model="oh-my-pi",
+        max_turns=10,
+        timeout_s=60,
+        parent_addr=agent._working_dir.name,
+        parent_pid=1,
+        system_prompt="[stub]",
+        backend="oh-my-pi",
+    )
+    run_dir._state["oh_my_pi_session_id"] = "omp-sess-9"
+    run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
+
+    import threading as _t
+    from concurrent.futures import Future
+    done = Future()
+    done.set_result("[fake done]")
+    entry = {
+        "run_dir": run_dir,
+        "task": "x",
+        "start_time": 0,
+        "cancel_event": _t.Event(),
+        "timeout_event": _t.Event(),
+        "followup_buffer": "",
+        "backend": "oh-my-pi",
+        "future": done,
+        "followup_lock": _t.Lock(),
+        "ask_in_flight": False,
+        "ask_future": None,
+    }
+    em_id = "em-omp-ask"
+    mgr._emanations[em_id] = entry
+
+    with patch("lingtai.core.daemon.subprocess.Popen",
+               side_effect=lambda cmd, *a, **kw: (captured_cmd.append(list(cmd))
+                                                  or FakeProc())):
+        resp = mgr.handle({"action": "ask", "id": em_id, "message": "keep going"})
+        # ask is async; wait for the ask worker to finish before asserting.
+        fut = entry.get("ask_future")
+        if fut is not None:
+            fut.result(timeout=5)
+
+    assert resp["status"] == "sent"
+    cmd = captured_cmd[0]
+    assert cmd == [
+        "omp", "--mode", "json", "--approval-mode", "yolo",
+        "--session", "omp-sess-9", "keep going",
+    ]
+
+
+def test_oh_my_pi_ask_before_session_id_returns_initializing_error(tmp_path):
+    agent = _make_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+
+    from concurrent.futures import Future
+    import threading as _t
+    from lingtai.core.daemon.run_dir import DaemonRunDir
+
+    run_dir = DaemonRunDir(
+        parent_working_dir=agent._working_dir,
+        handle="em-omp-no-session",
+        task="dummy",
+        tools=[],
+        model="oh-my-pi",
+        max_turns=10,
+        timeout_s=60,
+        parent_addr=agent._working_dir.name,
+        parent_pid=1,
+        system_prompt="[stub]",
+        backend="oh-my-pi",
+    )
+    done = Future()
+    done.set_result("[fake done]")
+    em_id = "em-omp-no-session"
+    mgr._emanations[em_id] = {
+        "run_dir": run_dir,
+        "task": "x",
+        "start_time": 0,
+        "cancel_event": _t.Event(),
+        "timeout_event": _t.Event(),
+        "followup_buffer": "",
+        "backend": "oh-my-pi",
+        "future": done,
+        "followup_lock": _t.Lock(),
+        "ask_in_flight": False,
+        "ask_future": None,
+    }
+
+    resp = mgr.handle({"action": "ask", "id": em_id, "message": "continue"})
+
+    assert resp["status"] == "error"
+    assert "No oh-my-pi session ID found" in resp["message"]
+    assert "may still be initializing" in resp["message"]
+
+
+def test_oh_my_pi_rejects_harness_owned_backend_options(tmp_path):
+    agent = _make_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+
+    for flag, key, value in (
+        ("--mode", "mode", "text"),
+        ("--print", "print", True),
+        ("--approval-mode", "approval_mode", "yolo"),
+        ("--auto-approve", "auto_approve", True),
+        ("--yolo", "yolo", True),
+        ("--session", "session", "omp-sess-1"),
+        ("--resume", "resume", "omp-sess-1"),
+        ("--continue", "continue", True),
+        ("--no-session", "no_session", True),
+        ("--session-dir", "session_dir", "/tmp/omp-session"),
+    ):
+        result = mgr.handle({
+            "action": "emanate",
+            "backend": "oh-my-pi",
+            "tasks": [{"task": "bad", "tools": [],
+                       "backend_options": {key: value}}],
+        })
+        assert result["status"] == "error", flag
+        assert f"{flag} is reserved by the oh-my-pi daemon backend" in result["message"], flag
+        assert mgr._emanations == {}, flag

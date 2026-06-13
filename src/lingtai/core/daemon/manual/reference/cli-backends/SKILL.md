@@ -37,12 +37,13 @@ available:
 | `opencode` | `opencode run --format json <prompt>` | `opencode run --session <opencode_session_id> ...` via `ask` (async) | Uses opencode's session id/event vocabulary. |
 | `mimocode` / `mimo` | `mimo run --format json <prompt>` | `mimo run --session <mimocode_session_id> --format json ...` via `ask` (async) | MiMo Code CLI backend (npm package `@mimo-ai/cli`, binary `mimo`). `mimo` canonicalizes to `mimocode`. |
 | `qwen-code` / `qwen` | `qwen --yolo -p <prompt>` | Not supported yet; `ask` returns an explicit unsupported-backend error | Qwen Code CLI backend (npm package `@qwen-code/qwen-code`, binary `qwen`). `qwen` canonicalizes to `qwen-code`. |
+| `oh-my-pi` / `omp` | `omp --mode json --approval-mode yolo <prompt>` | `omp --mode json --approval-mode yolo --session <oh_my_pi_session_id> ...` via `ask` (async) | Oh-My-Pi pi-coding-agent CLI backend (npm package `@oh-my-pi/pi-coding-agent`, binary `omp`). `--mode json` is non-interactive JSON event-stream print mode; the first `type:session` header line carries the resumable session id. `omp` canonicalizes to `oh-my-pi`. |
 | `cursor` | `agent -p <prompt>` | `agent -p --resume <cursor_session_id> ...` via `ask` (async) | Cursor Agent CLI backend. |
 
 **When to use CLI backends:** Use them when the task benefits from a different
 agent runtime's tool surface (for example Claude Code's built-in file editing or
 Codex's sandboxed execution) rather than the LingTai emanation's curated tool
-set. `mimocode`/`mimo` and `qwen-code`/`qwen` are accepted as canonical backend names plus short aliases; persisted daemon entries use the canonical name.
+set. `mimocode`/`mimo`, `qwen-code`/`qwen`, and `oh-my-pi`/`omp` are accepted as canonical backend names plus short aliases; persisted daemon entries use the canonical name.
 
 **Claude backend naming:** `claude` is the interactive PTY/TUI backend. It
 runs Claude Code in a LingTai-created managed workspace instead of the parent
@@ -80,11 +81,14 @@ search/web access, effort levels, sandbox/policy switches, etc.) without the
 daemon needing to hard-code every flag.
 
 This is intentionally a passthrough, not a fixed table. Claude Code, Codex,
-OpenCode, MiMo Code, Qwen Code, and Cursor rev their flag lists between releases.
-Before adding new options, run the installed CLI's `--help` in `bash` to discover
-what it supports today (`claude --help`, `codex exec --help`, `opencode run
---help`, `mimo run --help`, `qwen --help`, or `agent --help`). Anything here is
-illustrative, not authoritative.
+OpenCode, MiMo Code, Qwen Code, Oh-My-Pi, and Cursor rev their flag lists between
+releases. Before adding new options, run the installed CLI's `--help` in `bash`
+to discover what it supports today (`claude --help`, `codex exec --help`,
+`opencode run --help`, `mimo run --help`, `qwen --help`, `omp --help`, or
+`agent --help`). Anything here is illustrative, not authoritative. Note that
+each backend reserves its own harness-owned flags (e.g. Oh-My-Pi reserves
+`--mode`, `--approval-mode yolo`, and the session/`--resume` flags) — passing a
+reserved flag in `backend_options` refuses the whole batch with a clear error.
 
 ```jsonc
 // Interactive Claude backend
