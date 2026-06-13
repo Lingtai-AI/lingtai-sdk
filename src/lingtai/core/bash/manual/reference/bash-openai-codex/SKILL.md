@@ -8,6 +8,7 @@ description: >
   wants to compare it with Claude Code, or needs help with installation and
   configuration.
 version: 1.0.1
+tags: [cli, code, delegation, openai, codex]
 ---
 
 # OpenAI Codex CLI
@@ -299,7 +300,7 @@ Codex CLI can be used alongside Claude Code for different tasks:
 | Browser Extension | ✅ Chrome | ❌ No |
 | Remote Control | ✅ Yes | ❌ No |
 | Plugin Marketplace | ✅ Rich | ❌ Limited |
-| LingTai Integration | ❌ No | ✅ Native |
+| LingTai Integration | ✅ Daemon backend + bash subskill | ✅ Daemon backend + bash subskill |
 | Cost | API usage | Claude Max subscription |
 
 ## Troubleshooting

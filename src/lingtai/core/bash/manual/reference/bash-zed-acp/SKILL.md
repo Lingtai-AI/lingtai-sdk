@@ -38,8 +38,8 @@ minutes. Do not run long coding CLIs synchronously from the parent turn.
 
 ## Validation checklist
 
-1. `command -v ACP` or documented installation path exists.
-2. `--help` confirms the non-interactive command and approval flags.
+1. Identify the specific ACP-compatible client or server command you intend to wrap; ACP is a protocol, not a standalone `ACP` binary.
+2. Run that command's `--help` (or documented equivalent) to confirm non-interactive mode and approval flags.
 3. A dry-run in a disposable worktree exits non-interactively.
 4. If promoted to daemon backend, tests mock subprocess launch, output parsing,
    session capture, resume/ask, and reserved `backend_options` handling.
