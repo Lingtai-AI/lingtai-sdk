@@ -9,24 +9,25 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 | File | LOC | Role |
 |------|-----|------|
 | `__init__.py` | 3 | Re-exports `OpenAIAdapter`, `OpenAIChatSession` |
-| `adapter.py` | 1688 | 5 classes + helpers: `OpenAIChatSession`, `OpenAIResponsesSession`, `OpenAIAdapter`, `CodexResponsesSession`, `CodexOpenAIAdapter` |
+| `adapter.py` | 1778 | 5 classes + helpers: `OpenAIChatSession`, `OpenAIResponsesSession`, `OpenAIAdapter`, `CodexResponsesSession`, `CodexOpenAIAdapter` |
 | `defaults.py` | 7 | `DEFAULTS` dict: `api_compat="openai"`, `use_responses_api=True` |
 
 ### adapter.py class map
 
 | Class | Lines | Role |
 |-------|-------|------|
-| `OpenAIChatSession` | 469–961 | Chat Completions session with context overflow auto-recovery |
-| `OpenAIResponsesSession` | 969–1169 | Responses API session with server-side `previous_response_id` chaining and optional `context_management` compaction |
-| `OpenAIAdapter` | 1170–1439 | `LLMAdapter` implementation; dispatches to Completions or Responses path; receives injected `compact_threshold` for Responses sessions |
-| `CodexResponsesSession` | 1440–1627 | Stateless Responses variant for ChatGPT-OAuth `/backend-api/codex` |
-| `CodexOpenAIAdapter` | 1628–1688 | Adapter variant that builds `CodexResponsesSession` |
+| `OpenAIChatSession` | 492–1003 | Chat Completions session with context overflow auto-recovery; sends optional `prompt_cache_key` |
+| `OpenAIResponsesSession` | 1006–1204 | Responses API session with server-side `previous_response_id` chaining, optional `context_management` compaction, and optional `prompt_cache_key` |
+| `OpenAIAdapter` | 1207–1520 | `LLMAdapter` implementation; dispatches to Completions or Responses path; receives injected `compact_threshold`; derives the default `prompt_cache_key` via `_default_prompt_cache_key` / `_resolve_prompt_cache_key` |
+| `CodexResponsesSession` | 1523–1709 | Stateless Responses variant for ChatGPT-OAuth `/backend-api/codex` |
+| `CodexOpenAIAdapter` | 1711–1778 | Adapter variant that builds `CodexResponsesSession`; overrides `_default_prompt_cache_key` → `lingtai-codex:{model}:v1` |
 
 ### adapter.py helpers
 
 | Function | Lines | Role |
 |----------|-------|------|
-| `_validate_compact_threshold()` | 46–60 | Validates/normalizes OpenAI Responses auto-compaction threshold; positive `int` or explicit `None` (disable) only |
+| `_base_url_namespace()` | 53–66 | Stable namespace token for an OpenAI-compatible `base_url` (URL host, or short hash fallback) used in the default `prompt_cache_key` |
+| `_validate_compact_threshold()` | 69–83 | Validates/normalizes OpenAI Responses auto-compaction threshold; positive `int` or explicit `None` (disable) only |
 | `_codex_responses_trace_path()` / `_codex_responses_trace_record()` | 63–157 | Opt-in Codex Responses stream diagnostic trace helpers; safe metadata only, default off |
 | `_build_http_timeout()` | 159–173 | `httpx.Timeout` per-phase caps (connect≤30s, read≤60s, pool=10s) |
 | `_build_tools()` | 165–179 | `FunctionSchema` → OpenAI CC tool format (`{type, function: {name, description, parameters}}`) |
@@ -43,15 +44,15 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 - **Interface converters** — imports `to_openai` and `to_responses_input` from `lingtai.llm.interface_converters` (line 31).
 - **Streaming** — imports `StreamingAccumulator` from `lingtai_kernel.llm.streaming` (line 32).
 - **HTTP client** — imports `httpx` for timeout construction (line 16); `openai` SDK for all API calls (line 17).
-- **Subclass hooks** — `_session_class` (line 987) for Completions path; `_adapter_extra_body()` (line 1173) for provider-specific `extra_body`.
+- **Subclass hooks** — `_session_class` (line 1215) for Completions path; `_adapter_extra_body()` (line 1446) for provider-specific `extra_body`; `_default_prompt_cache_key()` (line 1265) for the provider-namespaced cache key.
 
 ## Composition
 
 ### Two session paths
 
-The adapter forks at `create_chat()` (line 1015):
-1. **Responses API** (`_create_responses_session`, line 1055) — when `use_responses=True` AND (`base_url` is None OR `force_responses=True`). Builds `OpenAIResponsesSession`.
-2. **Chat Completions** (`_create_completions_session`, line 1115) — fallback for compatible providers. Builds `self._session_class` (subclass-overridable).
+The adapter forks at `create_chat()` (line 1295):
+1. **Responses API** (`_create_responses_session`, line 1335) — when `use_responses=True` AND (`base_url` is None OR `force_responses=True`). Builds `OpenAIResponsesSession`.
+2. **Chat Completions** (`_create_completions_session`, line 1387) — fallback for compatible providers. Builds `self._session_class` (subclass-overridable).
 
 Both paths return sessions wrapped via `_wrap_with_gate()` for rate limiting.
 
@@ -78,7 +79,13 @@ Both paths return sessions wrapped via `_wrap_with_gate()` for rate limiting.
 
 ### Prompt cache key (`prompt_cache_key`)
 
-`OpenAIResponsesSession.__init__` accepts an optional `prompt_cache_key`; when set it is added to the Responses `create()` kwargs on all three send paths (`OpenAIResponsesSession.send` / `send_stream`, `CodexResponsesSession.send_stream`). Default is `None` (off) for the standard OpenAI Responses path. `CodexOpenAIAdapter._create_responses_session` defaults it to the stable `lingtai-codex:{model}:v1` so successive Codex turns hit the backend prompt cache. `prompt_cache_retention` is deliberately never sent — Codex rejects it (`Unsupported parameter`) — and no Anthropic-style `cache_control` is emitted (Codex rejects `Unknown parameter`).
+**Default-on for every OpenAI-compatible path.** Both `OpenAIChatSession` and `OpenAIResponsesSession` accept an optional `prompt_cache_key` and, when set, add it to the request kwargs on all send paths (Chat Completions `send` / `send_stream`; Responses `send` / `send_stream`; Codex `send_stream`). A bare directly-constructed session leaves it `None` (opt-in) — the *adapter* supplies the namespaced default:
+
+- `OpenAIAdapter._default_prompt_cache_key(model)` derives the namespace from identity: official OpenAI (no `base_url`) → `lingtai-openai:{model}:v1`; any custom/compatible `base_url` → `lingtai-openai-compat:{host}:{model}:v1` (host from `_base_url_namespace`, hash fallback). Distinct endpoints/models never share a cache slot.
+- Provider subclasses with a fixed identity override it: DeepSeek → `lingtai-deepseek:{model}:v1`, Zhipu/GLM → `lingtai-zhipu:{model}:v1`, MiMo → `lingtai-mimo:{model}:v1`, Codex → `lingtai-codex:{model}:v1`. The compat probe (`reports/prompt-cache-key-openai-compat-probe-*.json`) confirmed DeepSeek/Zhipu/MiMo Chat Completions accept the field.
+- `_resolve_prompt_cache_key(model)` applies the adapter's policy from the constructor kwarg `prompt_cache_key`: `None` (default) → auto-derive; an explicit string → override for every session; `False` → disable (never sent). Both `_create_completions_session` and `_create_responses_session` (and the Codex variant) pass `_resolve_prompt_cache_key(model)` into the session.
+
+`prompt_cache_retention` is deliberately never sent — Codex rejects it (`Unsupported parameter`) and the whole OpenAI-compatible surface is kept uniform — and no Anthropic-style `cache_control` is emitted (Codex rejects `Unknown parameter`). MiniMax is Anthropic-compatible in this repo and is unaffected.
 
 ## State
 
@@ -139,8 +146,9 @@ The Codex / Responses path has the same invariant: `to_responses_input` ends wit
 
 ### Subclass hooks
 
-- `_session_class` (line 987) — override to inject provider-specific session behavior on the CC path.
-- `_adapter_extra_body()` (line 1173) — override to add `extra_body` JSON fields (e.g. OpenRouter `reasoning: {include: true}`).
+- `_session_class` (line 1215) — override to inject provider-specific session behavior on the CC path.
+- `_adapter_extra_body()` (line 1446) — override to add `extra_body` JSON fields (e.g. OpenRouter `reasoning: {include: true}`).
+- `_default_prompt_cache_key(model)` (line 1265) — override to give a provider a clean cache namespace (DeepSeek/Zhipu/MiMo/Codex do).
 
 ### `send(None)` contract — continue from wire
 

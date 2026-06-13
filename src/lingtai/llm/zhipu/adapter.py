@@ -113,3 +113,10 @@ class ZhipuAdapter(OpenAIAdapter):
     """OpenAI-compat adapter for Zhipu GLM with same-role message merging."""
 
     _session_class = ZhipuChatSession
+
+    def _default_prompt_cache_key(self, model: str) -> str:
+        # Fixed provider identity — use a clean ``lingtai-zhipu`` namespace
+        # rather than the base_url host. Zhipu/GLM Chat Completions accepts
+        # ``prompt_cache_key`` (compat probe); a stable key lets successive
+        # turns hit the cross-request prompt cache.
+        return f"lingtai-zhipu:{model}:v1"

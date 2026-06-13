@@ -9,11 +9,11 @@ DeepSeek adapter — thin OpenAI-compat wrapper that satisfies DeepSeek V4 think
 | File | LOC | Role |
 |------|-----|------|
 | `__init__.py` | 0 | Empty |
-| `adapter.py` | ~115 | `DeepSeekAdapter`, `DeepSeekChatSession`, `_fallback_reasoning_for` |
+| `adapter.py` | ~130 | `DeepSeekAdapter`, `DeepSeekChatSession`, `_fallback_reasoning_for` |
 
 ### Classes
 
-- **`DeepSeekAdapter(OpenAIAdapter)`** — pinned to DeepSeek endpoint, sets `_session_class`.
+- **`DeepSeekAdapter(OpenAIAdapter)`** — pinned to DeepSeek endpoint, sets `_session_class`; overrides `_default_prompt_cache_key` → `lingtai-deepseek:{model}:v1` (clean provider namespace for the default-on OpenAI-compatible prompt cache key; see `../openai/ANATOMY.md`).
 - **`DeepSeekChatSession(OpenAIChatSession)`** — overrides only `_build_messages`. Real reasoning round-trip is handled upstream by `interface_converters.to_openai`; this subclass only fills in a fallback when an assistant turn has no captured ThinkingBlock.
 
 ### Module-level
@@ -27,7 +27,7 @@ DeepSeek adapter — thin OpenAI-compat wrapper that satisfies DeepSeek V4 think
 
 - **Inherits**: `OpenAIAdapter` / `OpenAIChatSession` from `../openai/adapter.py`.
 - **No additional imports**: Only `openai` SDK (inherited), no new external deps.
-- **Hook points used**: `_build_messages` (overridden on session), `_session_class` (overridden on adapter).
+- **Hook points used**: `_build_messages` (overridden on session), `_session_class` and `_default_prompt_cache_key` (overridden on adapter).
 
 ## Composition
 
@@ -79,7 +79,7 @@ Replacing the placeholder with anything per-turn-byte-unique drives the empty ra
 
 ## Notes
 
-- **Minimal footprint**: ~115 LOC, ~20 lines of unique logic.
+- **Minimal footprint**: ~130 LOC, ~25 lines of unique logic.
 - **No `defaults.py`**: DeepSeek adapter is not registered via the `DEFAULTS` config pattern — likely invoked directly by `LLMService`.
 - **Pre-fix history compatibility**: rehydrated chat_history.jsonl entries that lack ThinkingBlocks (written before this fix shipped) get the per-turn-unique fallback automatically; no migration needed.
 - Git history: 4 commits on the original placeholder approach (afc7ddc → a9382dc → 23599ca → 86c2a3d), then issue-#9 rewrite to preserve real reasoning end-to-end.

@@ -77,3 +77,10 @@ class MimoAdapter(OpenAIAdapter):
     """OpenAI-compat adapter pinned to MiMo with reasoning_content round-trip."""
 
     _session_class = MimoChatSession
+
+    def _default_prompt_cache_key(self, model: str) -> str:
+        # Fixed provider identity — use a clean ``lingtai-mimo`` namespace
+        # rather than the base_url host. MiMo Chat Completions accepts
+        # ``prompt_cache_key`` (compat probe); a stable key lets successive
+        # turns hit the cross-request prompt cache.
+        return f"lingtai-mimo:{model}:v1"

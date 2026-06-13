@@ -108,6 +108,13 @@ class DeepSeekAdapter(OpenAIAdapter):
 
     _session_class = DeepSeekChatSession
 
+    def _default_prompt_cache_key(self, model: str) -> str:
+        # Fixed provider identity — use a clean ``lingtai-deepseek`` namespace
+        # rather than the base_url host. DeepSeek Chat Completions accepts
+        # ``prompt_cache_key`` (compat probe); a stable key lets successive
+        # turns hit the cross-request prompt cache.
+        return f"lingtai-deepseek:{model}:v1"
+
     def __init__(
         self,
         api_key: str,

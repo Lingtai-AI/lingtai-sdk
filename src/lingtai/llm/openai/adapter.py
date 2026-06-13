@@ -16,6 +16,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 import openai
@@ -41,6 +42,28 @@ logger = get_logger()
 _CODEX_RESPONSES_TRACE_ENV = "LINGTAI_CODEX_RESPONSES_TRACE"
 _CODEX_RESPONSES_TRACE_PATH_ENV = "LINGTAI_CODEX_RESPONSES_TRACE_PATH"
 _CODEX_RESPONSES_TRACE_FILE = "codex_responses_trace.jsonl"
+
+
+# Sentinel for "auto-derive a default prompt_cache_key". The adapter accepts
+# ``prompt_cache_key=None`` to mean "compute the stable default", an explicit
+# string to override it, and ``False`` to disable cache-key emission entirely.
+_AUTO_PROMPT_CACHE_KEY = object()
+
+
+def _base_url_namespace(base_url: str | None) -> str:
+    """Return a stable namespace token for an OpenAI-compatible ``base_url``.
+
+    Prefers the URL host (e.g. ``api.vendor.example``) so distinct endpoints
+    never share a prompt-cache namespace. Falls back to a short hash of the
+    full URL when no host can be parsed, so the result is always deterministic
+    and non-empty.
+    """
+    if not base_url:
+        return ""
+    host = urlsplit(base_url).hostname or ""
+    if host:
+        return host
+    return "h" + hashlib.sha256(base_url.encode("utf-8")).hexdigest()[:12]
 
 
 def _validate_compact_threshold(value: int | None) -> int | None:
@@ -482,6 +505,7 @@ class OpenAIChatSession(ChatSession):
         extra_kwargs: dict,
         client_kwargs: dict | None = None,
         context_window: int = 0,
+        prompt_cache_key: str | None = None,
     ):
         self._client = client
         self._model = model
@@ -491,6 +515,13 @@ class OpenAIChatSession(ChatSession):
         self._extra_kwargs = extra_kwargs
         self._client_kwargs = client_kwargs or {}
         self._context_window = context_window
+        # Stable ``prompt_cache_key`` for OpenAI-compatible Chat Completions
+        # cross-request prompt caching. Sent only when set; ``None`` leaves it
+        # off (so a directly-constructed session is opt-in). The adapter
+        # supplies the namespaced default — see ``_default_prompt_cache_key``.
+        # ``prompt_cache_retention`` is deliberately never sent (Codex rejects
+        # it; we keep the whole OpenAI-compatible surface uniform).
+        self._prompt_cache_key = prompt_cache_key
         # Per-request HTTP timeout (seconds). Set by send_with_timeout before
         # dispatching the worker so the HTTP client aborts at the same moment
         # the main-thread watchdog gives up. Prevents a race where the worker
@@ -669,6 +700,8 @@ class OpenAIChatSession(ChatSession):
                 kw["parallel_tool_calls"] = True
                 if self._tool_choice:
                     kw["tool_choice"] = self._tool_choice
+            if self._prompt_cache_key:
+                kw["prompt_cache_key"] = self._prompt_cache_key
             if self._request_timeout is not None:
                 kw["timeout"] = _build_http_timeout(self._request_timeout)
             return kw
@@ -728,6 +761,8 @@ class OpenAIChatSession(ChatSession):
                 tool_choice=self._tool_choice,
                 extra_kwargs=self._extra_kwargs,
                 client_kwargs=self._client_kwargs,
+                context_window=self._context_window,
+                prompt_cache_key=self._prompt_cache_key,
             )
             self.__dict__.update(new_session.__dict__)
 
@@ -840,6 +875,8 @@ class OpenAIChatSession(ChatSession):
                 kw["parallel_tool_calls"] = True
                 if self._tool_choice:
                     kw["tool_choice"] = self._tool_choice
+            if self._prompt_cache_key:
+                kw["prompt_cache_key"] = self._prompt_cache_key
             if self._request_timeout is not None:
                 kw["timeout"] = _build_http_timeout(self._request_timeout)
             return kw
@@ -1188,10 +1225,24 @@ class OpenAIAdapter(LLMAdapter):
         max_rpm: int = 0,
         default_headers: dict | None = None,
         compact_threshold: int | None = 100_000,
+        prompt_cache_key: str | bool | None = None,
     ):
         self.base_url = base_url
         self._use_responses = use_responses
         self._force_responses = force_responses
+        # Prompt-cache-key policy for this adapter's OpenAI-compatible sessions:
+        #   None  -> auto-derive a stable, namespaced default per model
+        #   str   -> use this exact key for every session (override)
+        #   False -> disable; never send prompt_cache_key
+        # Default-on is intentional: every OpenAI-compatible endpoint LingTai
+        # talks to accepted the field in the compat probe, and a stable key is
+        # what lets successive agent turns hit the cross-request prompt cache.
+        if prompt_cache_key is False:
+            self._prompt_cache_key_policy: object = False
+        elif prompt_cache_key is None:
+            self._prompt_cache_key_policy = _AUTO_PROMPT_CACHE_KEY
+        else:
+            self._prompt_cache_key_policy = prompt_cache_key
         # Responses-API auto-compaction threshold (input tokens). The host
         # injects its resolved config value via the adapter factory
         # (lingtai/llm/_register.py:_openai reads provider defaults); when
@@ -1208,6 +1259,36 @@ class OpenAIAdapter(LLMAdapter):
         self._client_kwargs = dict(kwargs)  # store for session reset
         self._client = openai.OpenAI(**kwargs)
         self._setup_gate(max_rpm)
+
+    # -- Prompt cache key ------------------------------------------------------
+
+    def _default_prompt_cache_key(self, model: str) -> str:
+        """Return the auto-derived, namespaced default prompt_cache_key.
+
+        Namespacing keeps incompatible endpoints from sharing a cache slot:
+          * official OpenAI (no base_url) -> ``lingtai-openai:{model}:v1``
+          * custom/compatible base_url    -> ``lingtai-openai-compat:{host}:{model}:v1``
+
+        Subclasses with a fixed provider identity (DeepSeek, Zhipu, MiMo,
+        Codex) override this to use a clean provider namespace instead of the
+        base_url host.
+        """
+        if not self.base_url:
+            return f"lingtai-openai:{model}:v1"
+        return f"lingtai-openai-compat:{_base_url_namespace(self.base_url)}:{model}:v1"
+
+    def _resolve_prompt_cache_key(self, model: str) -> str | None:
+        """Resolve the effective prompt_cache_key for a session on ``model``.
+
+        Honors the adapter's policy: ``False`` disables (returns ``None``), an
+        explicit string overrides, and the auto sentinel derives the default.
+        """
+        policy = self._prompt_cache_key_policy
+        if policy is False:
+            return None
+        if policy is _AUTO_PROMPT_CACHE_KEY:
+            return self._default_prompt_cache_key(model)
+        return policy  # explicit override string
 
     # -- LLMAdapter interface --------------------------------------------------
 
@@ -1300,6 +1381,7 @@ class OpenAIAdapter(LLMAdapter):
             previous_response_id=None,
             compact_threshold=self._compact_threshold,
             interface=interface,
+            prompt_cache_key=self._resolve_prompt_cache_key(model),
         )
 
     def _create_completions_session(
@@ -1358,6 +1440,7 @@ class OpenAIAdapter(LLMAdapter):
             extra_kwargs=extra_kwargs,
             client_kwargs=self._client_kwargs,
             context_window=context_window,
+            prompt_cache_key=self._resolve_prompt_cache_key(model),
         )
 
     def _adapter_extra_body(self) -> dict:
@@ -1633,6 +1716,15 @@ class CodexOpenAIAdapter(OpenAIAdapter):
     force_responses=True, base_url='https://chatgpt.com/backend-api/codex'`.
     """
 
+    def _default_prompt_cache_key(self, model: str) -> str:
+        # Stable, conservative default so successive Codex turns hit the
+        # backend prompt cache. Keyed by model so distinct models don't share
+        # a cache namespace; `:v1` lets us bump it if the stable prefix ever
+        # changes shape. Never paired with `prompt_cache_retention` (Codex
+        # rejects that parameter). This intentionally ignores the codex
+        # base_url host — the namespace is the fixed ``lingtai-codex`` prefix.
+        return f"lingtai-codex:{model}:v1"
+
     def _create_responses_session(
         self,
         model: str,
@@ -1679,10 +1771,8 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             previous_response_id=None,
             compact_threshold=None,
             interface=interface,
-            # Stable, conservative default so successive Codex turns hit the
-            # backend prompt cache. Keyed by model so distinct models don't
-            # share a cache namespace; `:v1` lets us bump it if the stable
-            # prefix ever changes shape. Never paired with
-            # `prompt_cache_retention` (Codex rejects that parameter).
-            prompt_cache_key=f"lingtai-codex:{model}:v1",
+            # Resolves to ``lingtai-codex:{model}:v1`` by default (see
+            # ``_default_prompt_cache_key``), but honors an explicit override
+            # or a ``prompt_cache_key=False`` disable passed to the adapter.
+            prompt_cache_key=self._resolve_prompt_cache_key(model),
         )
