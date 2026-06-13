@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PR #273 — Tool error payload carries recovery metadata</title>
+  <style>
+    :root { color-scheme: light; --ink:#172033; --muted:#667085; --line:#d7dde8; --bg:#f7f9fc; --card:#fff; --accent:#2563eb; --good:#047857; --warn:#b45309; --bad:#b42318; }
+    body { margin:0; font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:var(--ink); background:linear-gradient(180deg,#eef4ff,var(--bg)); }
+    main { max-width:1080px; margin:0 auto; padding:40px 24px 64px; }
+    .hero { background:var(--card); border:1px solid var(--line); border-radius:22px; padding:28px; box-shadow:0 18px 50px rgba(16,24,40,.08); }
+    h1 { margin:0 0 10px; font-size:32px; line-height:1.2; }
+    h2 { margin:28px 0 12px; font-size:21px; }
+    h3 { margin:18px 0 8px; font-size:16px; }
+    p,ul,ol { margin:8px 0; }
+    code { background:#eef2ff; color:#1e3a8a; padding:1px 5px; border-radius:5px; }
+    pre { background:#101828; color:#e4e7ec; padding:16px; border-radius:14px; overflow:auto; font-size:13px; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:14px; margin-top:16px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:16px; }
+    .pill { display:inline-block; border-radius:999px; padding:4px 10px; font-size:12px; font-weight:700; margin-right:6px; }
+    .good { background:#ecfdf3; color:var(--good); } .warn { background:#fffaeb; color:var(--warn); } .bad { background:#fef3f2; color:var(--bad); }
+    table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line); border-radius:14px; overflow:hidden; }
+    th,td { text-align:left; vertical-align:top; padding:10px 12px; border-bottom:1px solid var(--line); }
+    th { background:#f2f6ff; }
+    .muted { color:var(--muted); }
+  </style>
+</head>
+<body>
+<main>
+  <section class="hero">
+    <p><span class="pill good">redesigned</span><span class="pill warn">PR #273</span></p>
+    <h1>Tool error 还是 tool result：给 payload 加恢复元信息，而不是造 hard-stop</h1>
+    <p class="muted">本报告取代旧版 “repeated tool-error hard-stop continuation” 说明。Jason 指出旧设计 overengineer；新版把修复收敛到既有 tool-result 数据路径。</p>
+  </section>
+
+  <h2>结论</h2>
+  <div class="grid">
+    <div class="card"><h3>删掉特殊控制流</h3><p>移除 <code>_REPEATED_IDENTICAL_ERROR_HARD_STOP_COUNT</code>、<code>_build_repeated_tool_error_summary</code>、<code>repeated_tool_error_hard_stop</code> / <code>continuation</code> 分支。重复错误不再触发 <code>session.send(str)</code>。</p></div>
+    <div class="card"><h3>保留普通 tool flow</h3><p>工具执行结果仍经 <code>session.send(tool_results)</code> 回到 LLM。真正无限循环仍由通用 tool-loop / emergency limits 兜底。</p></div>
+    <div class="card"><h3>增强错误 payload</h3><p>在既有 PR #246 的 flat error fields 上，新增嵌套 <code>tool_error</code> block，集中给 summary、reason、retryability、arg_keys 与恢复建议。</p></div>
+  </div>
+
+  <h2>为什么这样改</h2>
+  <p>原问题不是“第三次同样错误必须被 kernel 打断”，而是错误结果对模型不够解释性：模型看到空泛 error 时容易原样重试。正确修复是在 tool error payload 本身说明失败原因与下一步，而不是在 turn 层新增 hard-stop / notification / text continuation。</p>
+
+  <h2>模型可见 payload 形状</h2>
+  <pre>{
+  "status": "error",
+  "message": "chat_id must be integer",
+  "error_type": "telegram",
+  "error_phase": "tool_returned_error",
+  "tool_name": "telegram",
+  "tool_call_id": "tg-err",
+  "tool_trace_id": "tg-err",
+  "tool_args": {"action":"send","chat_id":"","text":""},
+  "arg_keys": ["action","chat_id","text"],
+  "retryable": "unknown",
+  "_tool_error_payload_version": 1,
+  "tool_error": {
+    "version": 1,
+    "summary": "chat_id must be integer",
+    "reason": "telegram failed during tool_returned_error: chat_id must be integer",
+    "retryable": "unknown",
+    "guidance": [
+      "Do not blindly retry the same tool call unchanged.",
+      "Use the error message, phase, and argument keys to correct parameters or switch strategy.",
+      "If the failure depends on mutable external state, read the current state before retrying.",
+      "If the cause cannot be corrected, report the failure and ask for direction instead of looping."
+    ]
+  }
+}</pre>
+
+  <h2>改动清单</h2>
+  <table>
+    <tr><th>文件</th><th>改动</th></tr>
+    <tr><td><code>src/lingtai_kernel/tool_executor.py</code></td><td>新增 <code>_tool_error_meta()</code> / <code>_attach_tool_error_meta()</code>；<code>_error_payload()</code> 与 <code>_enrich_error_payload()</code> 均附加 nested <code>tool_error</code>。</td></tr>
+    <tr><td><code>src/lingtai_kernel/base_agent/turn.py</code></td><td>删除 repeated-identical-error hard-stop 分支；第三次、第四次同样错误仍作为普通 tool result 回传。</td></tr>
+    <tr><td><code>tests/test_tool_executor.py</code></td><td>断言 dispatch exception 与 tool-returned error 均带 <code>tool_error</code> block 与恢复建议。</td></tr>
+    <tr><td><code>tests/test_repeated_tool_error_continue.py</code></td><td>改为 pin “重复错误仍走普通 tool_results，无 string continuation / 无特殊通知 / 无特殊日志”。</td></tr>
+    <tr><td><code>tests/test_tool_result_restore_after_continuation_failure.py</code></td><td>把旧 hard-stop 测试改为第三次重复错误仍正常继续。</td></tr>
+    <tr><td><code>ANATOMY.md</code></td><td>同步 turn/tool_executor 结构说明。</td></tr>
+  </table>
+
+  <h2>与之前 PR 的关系</h2>
+  <p>Jason 提到“之前是不是有一个 PR 修这个”：是的，<a href="https://github.com/Lingtai-AI/lingtai-kernel/pull/246">PR #246 — feat: enrich tool error payloads</a> 已在 2026-06-09 合并，加入了 flat fields：<code>error_type</code>、<code>error_phase</code>、<code>tool_name</code>、<code>tool_call_id</code>、<code>retryable</code> 等。本次不是另造机制，而是在 #246 的基础上让 recovery 信息更集中、显眼、可执行。</p>
+
+  <h2>验证</h2>
+  <ul>
+    <li><code>pytest -q tests/test_tool_executor.py tests/test_repeated_tool_error_continue.py tests/test_tool_result_restore_after_continuation_failure.py</code> → <strong>49 passed</strong></li>
+    <li><code>pytest -q</code> → <strong>2138 passed, 3 skipped</strong>（0:03:54）</li>
+    <li>最终重跑 <code>pytest -q</code>：<strong>2137 passed, 3 skipped, 1 unrelated filesystem-mail timing flake</strong>；失败项 <code>tests/test_filesystem_mail.py::TestListen::test_listen_detects_multiple_messages</code> 随后连续重跑 5 次均通过。</li>
+  </ul>
+</main>
+</body>
+</html>

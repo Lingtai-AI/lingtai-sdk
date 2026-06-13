@@ -143,6 +143,52 @@ class ToolExecutor:
         return args
 
 
+    def _tool_error_meta(self, result: dict) -> dict:
+        """Return the nested, model-visible recovery block for an error result.
+
+        Keep the legacy flat fields for compatibility, but also group the
+        failure cause and recovery advice in one obvious block so the next LLM
+        turn does not receive a bare/ambiguous ``status=error`` payload.
+        """
+        message = str(result.get("message") or "unknown error")
+        error_phase = str(result.get("error_phase") or "unknown")
+        error_type = str(result.get("error_type") or "ToolError")
+        tool_name = str(result.get("tool_name") or "unknown")
+        retryable = result.get("retryable", "unknown")
+        guidance = [
+            "Do not blindly retry the same tool call unchanged.",
+            "Use the error message, phase, and argument keys to correct parameters or switch strategy.",
+            "If the failure depends on mutable external state, read the current state before retrying.",
+            "If the cause cannot be corrected, report the failure and ask for direction instead of looping.",
+        ]
+        if retryable is True:
+            guidance.insert(
+                1,
+                "This error is marked retryable, but retry only after addressing the likely cause or waiting for the transient condition to clear.",
+            )
+        elif retryable is False:
+            guidance.insert(
+                1,
+                "This error is marked non-retryable; change the request or strategy before any retry.",
+            )
+        return {
+            "version": 1,
+            "summary": message,
+            "reason": f"{tool_name} failed during {error_phase}: {message}",
+            "error_type": error_type,
+            "error_phase": error_phase,
+            "retryable": retryable,
+            "tool_name": result.get("tool_name"),
+            "tool_call_id": result.get("tool_call_id"),
+            "tool_trace_id": result.get("tool_trace_id"),
+            "arg_keys": result.get("arg_keys", []),
+            "guidance": guidance,
+        }
+
+    def _attach_tool_error_meta(self, result: dict) -> dict:
+        result.setdefault("tool_error", self._tool_error_meta(result))
+        return result
+
     def _error_payload(
         self,
         *,
@@ -183,7 +229,7 @@ class ToolExecutor:
         if traceback_tail:
             payload["traceback_tail"] = traceback_tail
         payload.update(extra)
-        return payload
+        return self._attach_tool_error_meta(payload)
 
     def _enrich_error_payload(
         self,
@@ -208,7 +254,7 @@ class ToolExecutor:
         result.setdefault("elapsed_ms", elapsed_ms)
         result.setdefault("retryable", "unknown")
         result.setdefault("_tool_error_payload_version", 1)
-        return result
+        return self._attach_tool_error_meta(result)
 
     def _traceback_tail(self, exc: Exception, *, max_chars: int = 4000) -> str:
         formatted = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))

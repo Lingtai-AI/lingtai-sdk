@@ -45,7 +45,6 @@ class EmptyLLMResponseError(RuntimeError):
 
 
 _TRANSIENT_AED_RETRY_LIMIT = 3
-_REPEATED_IDENTICAL_ERROR_HARD_STOP_COUNT = 3
 _TRANSIENT_EXC_NAMES = {
     "APIConnectionError",
     "APITimeoutError",
@@ -130,18 +129,6 @@ def _tool_call_summary(tool_calls) -> dict:
     }
 
 
-def _trailing_identical_count(items: list[str]) -> int:
-    if not items:
-        return 0
-    last = items[-1]
-    count = 0
-    for item in reversed(items):
-        if item != last:
-            break
-        count += 1
-    return count
-
-
 def _pending_tool_call_summary(iface) -> dict:
     entries = getattr(iface, "entries", None) or []
     tail = entries[-1] if entries else None
@@ -221,6 +208,7 @@ def _publish_tool_loop_guard_notification(
         detail=detail,
         closed_tool_result_count=closed_count,
     )
+
 
 
 # Design note: this helper deliberately only closes the provider wire
@@ -1446,27 +1434,6 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
                 "failed": False,
                 "errors": [],
             }
-
-        # Break on repeated identical errors, but only after committing the
-        # current tool results so the assistant tool_calls are not left pending.
-        repeated_error_count = _trailing_identical_count(collected_errors)
-        if repeated_error_count >= _REPEATED_IDENTICAL_ERROR_HARD_STOP_COUNT:
-            logger.warning(
-                "[%s] Same error repeated, breaking early: %s",
-                agent.agent_name,
-                collected_errors[-1],
-            )
-            agent._log(
-                "repeated_tool_error_hard_stop",
-                ledger_source=ledger_source,
-                repeated_error_count=repeated_error_count,
-                threshold=_REPEATED_IDENTICAL_ERROR_HARD_STOP_COUNT,
-                error=collected_errors[-1],
-            )
-            if tool_results and agent._chat:
-                agent._chat.commit_tool_results(tool_results)
-                agent._save_chat_history(ledger_source=ledger_source)
-            break
 
         in_tool_loop = True
         try:

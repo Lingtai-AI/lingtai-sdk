@@ -612,6 +612,16 @@ def test_lifecycle_trace_events_for_dispatch_exception():
     assert error_result["tool_args"] == {}
     assert "RuntimeError: boom" in error_result["traceback_tail"]
     assert error_result["_tool_error_payload_version"] == 1
+    meta = error_result["tool_error"]
+    assert meta["summary"] == "boom"
+    assert meta["reason"] == "explode failed during dispatch: boom"
+    assert meta["error_type"] == "RuntimeError"
+    assert meta["error_phase"] == "dispatch"
+    assert meta["tool_name"] == "explode"
+    assert meta["tool_call_id"] == "err-trace"
+    assert meta["retryable"] == "unknown"
+    assert any("Do not blindly retry" in item for item in meta["guidance"])
+    assert any("current state" in item for item in meta["guidance"])
     assert any("boom" in error for error in errors)
     events = _trace_events(logs, "err-trace")
     assert "tool_call_dispatch_failed" in events
@@ -765,6 +775,13 @@ def test_tool_returned_error_is_enriched_for_agent_repair():
     assert payload["arg_keys"] == ["action", "chat_id", "text"]
     assert payload["retryable"] == "unknown"
     assert payload["_tool_error_payload_version"] == 1
+    meta = payload["tool_error"]
+    assert meta["summary"] == "chat_id must be integer"
+    assert meta["reason"] == "telegram failed during tool_returned_error: chat_id must be integer"
+    assert meta["arg_keys"] == ["action", "chat_id", "text"]
+    assert meta["retryable"] == "unknown"
+    assert any("Do not blindly retry" in item for item in meta["guidance"])
+    assert any("correct parameters" in item for item in meta["guidance"])
     assert any("chat_id must be integer" in error for error in errors)
 
 

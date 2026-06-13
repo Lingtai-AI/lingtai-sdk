@@ -235,7 +235,12 @@ class _ContinuingSession:
 
     def send(self, content):
         self.sent.append(content)
-        self.chat.commit_tool_results(content)
+        if isinstance(content, str):
+            # Hard-stop summary continuation: the production interface appends
+            # the user text before send; mirror that here.
+            self.chat.interface.add_user_message(content)
+        else:
+            self.chat.commit_tool_results(content)
         response = self.responses.pop(0)
         blocks = []
         if response.text:
@@ -296,15 +301,18 @@ def test_process_response_restores_real_results_when_continuation_send_fails():
     )
 
 
-def test_process_response_hard_stop_commits_third_identical_tool_error():
-    """After the third identical tool error, stop without leaving pending calls."""
-    agent = _FakeAgent()
+def test_process_response_third_identical_tool_error_still_continues(tmp_path):
+    """The third identical tool error remains a normal tool-result continuation.
+
+    There is no repeated-identical-error hard-stop path. The LLM receives the
+    third error result in band, then decides whether to stop/report or continue.
+    """
+    agent = _FakeAgent(working_dir=tmp_path)
     agent._executor = _RepeatedErrorExecutor(error="same tool error")
     agent._cancel_event = threading.Event()
     agent._on_tool_result_hook = None
     agent._intermediate_text_streamed = True
     agent._sent_tracker = _NoopSentTracker()
-    agent._working_dir = Path("/nonexistent/lingtai-test-repeated-errors")
 
     responses = [
         LLMResponse(
@@ -314,6 +322,12 @@ def test_process_response_hard_stop_commits_third_identical_tool_error():
         LLMResponse(
             text="",
             tool_calls=[ToolCall(id="call_3", name="bash", args={"command": "fail"})],
+        ),
+        # Continuation from the third ordinary tool result: the agent explains
+        # and stops based on what the model-visible payload said.
+        LLMResponse(
+            text="The bash call failed identically 3 times; reporting and stopping.",
+            tool_calls=[],
         ),
     ]
     agent._session = _ContinuingSession(agent._chat, responses)
@@ -325,34 +339,20 @@ def test_process_response_hard_stop_commits_third_identical_tool_error():
 
     result = _process_response(agent, response, ledger_source="test")
 
-    assert result == {
-        "text": "",
-        "failed": True,
-        "errors": ["same tool error", "same tool error", "same tool error"],
-    }
-    assert len(agent._session.sent) == 2
+    assert result["failed"] is False
+    assert result["errors"] == ["same tool error", "same tool error", "same tool error"]
+    assert "reporting and stopping" in result["text"]
+
+    assert len(agent._session.sent) == 3
+    assert all(isinstance(payload, list) for payload in agent._session.sent)
     assert [batch[0].id for batch in agent._chat.committed] == [
         "call_1",
         "call_2",
         "call_3",
     ]
     assert not agent._chat.interface.has_pending_tool_calls()
-    assert agent._chat.interface.entries[-1].content[0].id == "call_3"
-    assert agent.saved == 3
-    assert agent.save_sources == ["test", "test", "test"]
-    hard_stop_logs = [
-        fields for event, fields in agent.logs
-        if event == "repeated_tool_error_hard_stop"
-    ]
-    assert hard_stop_logs == [
-        {
-            "ledger_source": "test",
-            "repeated_error_count": 3,
-            "threshold": 3,
-            "error": "same tool error",
-        }
-    ]
-
+    assert not any(event.startswith("repeated_tool_error") for event, _ in agent.logs)
+    assert not (tmp_path / ".notification" / "repeated_tool_error.json").exists()
 
 def test_process_response_second_identical_tool_error_still_continues():
     """The second identical tool error should still be sent to the model."""
@@ -389,9 +389,7 @@ def test_process_response_second_identical_tool_error_still_continues():
     assert len(agent._session.sent) == 2
     assert [batch[0].id for batch in agent._chat.committed] == ["call_1", "call_2"]
     assert not agent._chat.interface.has_pending_tool_calls()
-    assert not any(
-        event == "repeated_tool_error_hard_stop" for event, _ in agent.logs
-    )
+    assert not any(event.startswith("repeated_tool_error") for event, _ in agent.logs)
 
 
 def test_process_response_logs_cancel_before_tool_dispatch():
