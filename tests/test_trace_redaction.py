@@ -7,7 +7,7 @@ from lingtai_kernel.trace_redaction import redact_for_trajectory, redact_text
 def test_redact_text_common_secret_shapes():
     telegram_like = "123456789" + ":" + "A" * 35
     openai_like = "sk" + "-proj-" + "B" * 60
-    bearer_like = "C" * 36
+    bearer_like = "C" * 12 + "." + "D" * 12 + "_" + "E" * 12
     text = (
         f"token={telegram_like} "
         f"api_key='{openai_like}' "
@@ -50,3 +50,18 @@ def test_composite_logging_redacts_before_jsonl_write_and_sqlite_index(tmp_path)
     assert "123456789" + ":" not in line
     record = json.loads(line)
     assert record["tool_args"]["password"] == "<REDACTED:secret>"
+
+
+def test_bearer_redaction_avoids_plain_prose_false_positive():
+    prose = "Bearer responsibility-for-this-is-yours and continue."
+    assert redact_text(prose) == prose
+    token = "Bearer abc.def_ghi~jkl/mno+pqrstu"
+    assert redact_text(token) == "Bearer <REDACTED:bearer_token>"
+
+
+def test_redact_text_json_style_quoted_secret_assignment():
+    raw = '{"password":"supersecret12345","safe":"ordinary"}'
+    redacted = redact_text(raw)
+    assert "supersecret12345" not in redacted
+    assert '"password":"<REDACTED:secret>"' in redacted
+    assert '"safe":"ordinary"' in redacted

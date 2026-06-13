@@ -1119,7 +1119,7 @@ def _get_guard_limits(agent) -> tuple[int, int, int]:
     intentionally not read from ``manifest.max_turns`` / ``AgentConfig.max_turns``
     so stale init.json files cannot make the runtime harsher or looser.
     """
-    return (ACTIVE_TURN_TOOL_CALL_EMERGENCY_LIMIT, 2, 8)
+    return (ACTIVE_TURN_TOOL_CALL_EMERGENCY_LIMIT, 3, 8)
 
 
 def _check_external_send(agent, tool_calls, tool_results=None) -> None:
@@ -1149,7 +1149,7 @@ def _check_external_send(agent, tool_calls, tool_results=None) -> None:
                     if tool_results:
                         warning = (
                             "Recently sent similar message to this recipient."
-                            " Skipping duplicate."
+                            " This send already executed; avoid sending it again."
                         )
                         for tr in tool_results:
                             if tr.id == tc.id:
@@ -1161,9 +1161,9 @@ def _check_external_send(agent, tool_calls, tool_results=None) -> None:
                                     tr.content["_advisory"] = {
                                         "type": "duplicate_send",
                                         "severity": "warning",
-                                        "allowed": False,
-                                        "blocked": True,
-                                        "advisory_only": False,
+                                        "allowed": True,
+                                        "blocked": False,
+                                        "advisory_only": True,
                                         "message": warning,
                                         "skill_refs": ["system-manual"],
                                     }

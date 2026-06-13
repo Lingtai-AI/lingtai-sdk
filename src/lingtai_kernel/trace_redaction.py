@@ -31,7 +31,7 @@ _TOKEN_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "<REDACTED:aws_access_key_id>"),
     (re.compile(r"\bAIza[0-9A-Za-z_-]{30,}\b"), "<REDACTED:google_api_key>"),
     (re.compile(r"\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b"), "<REDACTED:jwt>"),
-    (re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/-]{20,}={0,2}\b"), "Bearer <REDACTED:bearer_token>"),
+    (re.compile(r"(?i)\bBearer\s+(?=[A-Za-z0-9._~+/-]*[._~+/])[A-Za-z0-9._~+/-]{20,}={0,2}\b"), "Bearer <REDACTED:bearer_token>"),
 )
 
 # Keyed assignments in JSON/YAML/env/shell-ish text. Group 1 preserves the
@@ -42,11 +42,14 @@ _KEY_NAME = (
     r"bot[_-]?token|email[_-]?password|app[_-]?secret|client[_-]?secret|"
     r"access[_-]?token|refresh[_-]?token|auth[_-]?token"
 )
+_JSON_QUOTED_ASSIGNMENT_RE = re.compile(
+    rf"(?i)(([\"'])\b(?:{_KEY_NAME})\b\2\s*:\s*)([\"'])([^\"']{{8,}})(\3)"
+)
 _QUOTED_ASSIGNMENT_RE = re.compile(
     rf"(?i)(\b(?:{_KEY_NAME})\b\s*[=:]\s*)([\"'])([^\"']{{8,}})(\2)"
 )
 _UNQUOTED_ASSIGNMENT_RE = re.compile(
-    rf"(?i)(\b(?:{_KEY_NAME})\b\s*[=:]\s*)([^\s,;}}]{{8,}})"
+    rf"(?i)((?:[\"\']?\b(?:{_KEY_NAME})\b[\"\']?)\s*[=:]\s*)([^\s,;}}\"\']{{8,}})"
 )
 
 # Mapping keys whose scalar values should always be redacted, even if the value
@@ -59,6 +62,7 @@ def redact_text(text: str) -> str:
     redacted = text
     for pattern, replacement in _TOKEN_PATTERNS:
         redacted = pattern.sub(replacement, redacted)
+    redacted = _JSON_QUOTED_ASSIGNMENT_RE.sub(rf"\1\3{_SECRET_PLACEHOLDER}\5", redacted)
     redacted = _QUOTED_ASSIGNMENT_RE.sub(rf"\1\2{_SECRET_PLACEHOLDER}\4", redacted)
     redacted = _UNQUOTED_ASSIGNMENT_RE.sub(rf"\1{_SECRET_PLACEHOLDER}", redacted)
     return redacted

@@ -89,6 +89,9 @@ class LoopGuard:
         self.notice_interval = notice_interval
         self._progress_notice: str | None = None
         self._dup_free_passes = dup_free_passes
+        # Compatibility no-op: duplicate-call handling is advisory-only.
+        # Keep accepting/storing the old parameter so downstream callers do not
+        # fail, but never use it to block execution.
         self._dup_hard_block = dup_hard_block
         self._dup_counts: dict[tuple[str, str], int] = {}
         # Track invalid/hallucinated tool names

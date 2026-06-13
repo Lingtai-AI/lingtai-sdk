@@ -410,35 +410,6 @@ class ToolExecutor:
         args = self._prepare_args(tc, trace_id)
 
         verdict = self._guard.record_tool_call(tc.name, args)
-        if verdict.blocked:
-            self._log_lifecycle(
-                "tool_call_validation_failed",
-                tool_name=tc.name,
-                tool_call_id=tc_id,
-                tool_trace_id=trace_id,
-                reason="duplicate_call",
-                duplicate_count=verdict.count,
-            )
-            result = {
-                "status": "blocked",
-                "_advisory": self._guard.advisory_metadata(verdict),
-                "message": f"Execution skipped — duplicate call #{verdict.count}",
-            }
-            self._log_tool_result(
-                tool_name=tc.name,
-                tool_call_id=tc_id,
-                tool_trace_id=trace_id,
-                tool_args=args,
-                status="blocked",
-                elapsed_ms=0,
-                result=result,
-                duplicate_count=verdict.count,
-            )
-            msg = self._build_result_message(
-                tc.name, result, tool_call_id=tc_id, tool_trace_id=trace_id,
-                status="blocked",
-            )
-            return msg, False, ""
 
         timer = ToolTimer()
         try:
@@ -649,35 +620,7 @@ class ToolExecutor:
             args = self._prepare_args(tc, trace_id)
 
             verdict = self._guard.record_tool_call(tc.name, args)
-            if verdict.blocked:
-                self._log_lifecycle(
-                    "tool_call_validation_failed",
-                    tool_name=tc.name,
-                    tool_call_id=tc_id,
-                    tool_trace_id=trace_id,
-                    reason="duplicate_call",
-                    duplicate_count=verdict.count,
-                )
-                result = {
-                    "status": "blocked",
-                    "_advisory": self._guard.advisory_metadata(verdict),
-                    "message": f"Execution skipped — duplicate call #{verdict.count}",
-                }
-                self._log_tool_result(
-                    tool_name=tc.name,
-                    tool_call_id=tc_id,
-                    tool_trace_id=trace_id,
-                    tool_args=args,
-                    status="blocked",
-                    elapsed_ms=0,
-                    result=result,
-                    duplicate_count=verdict.count,
-                )
-                tool_results.append((i, self._build_result_message(
-                    tc.name, result, tool_call_id=tc_id, tool_trace_id=trace_id,
-                    status="blocked",
-                )))
-            elif self._known_tools and tc.name not in self._known_tools:
+            if self._known_tools and tc.name not in self._known_tools:
                 self._guard.record_invalid_tool(tc.name)
                 self._log_lifecycle(
                     "tool_call_validation_failed",

@@ -119,7 +119,7 @@ External producers (MCP servers over SSH, separate processes) bypass the helper 
 ### Sync mechanism — `BaseAgent._sync_notifications`
 
 Four pieces of state on `BaseAgent` (`base_agent/__init__.py:415-439`):
-- `_notification_fp: tuple` — last-observed `(name, mtime_ns, size)` triple-tuple from `notification_fingerprint`. Updated only on successful sync.
+- `_notification_fp: tuple` — last-observed `(name, size, sha256)` triple-tuple from `notification_fingerprint`. Updated only on successful sync.
 - `_notification_block_id: str | None` — informational `call_id` of the latest injected synthesized pair; retained for molt/reset telemetry, no longer used to delete pairs.
 - `_notification_inject_seq: int` — monotonic injection counter so repeated notification payloads still produce unique synthetic pairs.
 - `_notification_live_holder: dict | None` — the single current dict that carries live notification payload, skeletonized/stripped whenever payload moves.

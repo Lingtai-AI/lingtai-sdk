@@ -274,7 +274,10 @@ class TestCheckExternalSend:
         advisory = tr.content.get("_advisory", {})
         assert advisory.get("type") == "duplicate_send"
         assert advisory.get("message", "").startswith("Recently sent similar message")
-        assert advisory.get("blocked") is True
+        assert "already executed" in advisory.get("message", "")
+        assert advisory.get("allowed") is True
+        assert advisory.get("blocked") is False
+        assert advisory.get("advisory_only") is True
         # Original fields preserved
         assert tr.content["status"] == "sent"
         assert tr.content["message_id"] == "tg:1:42"
