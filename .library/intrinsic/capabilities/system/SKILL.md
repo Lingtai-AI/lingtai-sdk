@@ -29,6 +29,21 @@ version: 0.1.0
 
 The `system` tool's schema description lists each action in one line. This manual is the deeper reference: what each action actually does, when to reach for it, and the gotchas that don't fit in a schema string.
 
+## Nested reference catalog
+
+`system-manual` owns these nested references. They are parent-owned drill-down
+files, not standalone top-level skills.
+
+```yaml
+- name: system-preset-workflow
+  location: reference/preset-workflow/SKILL.md
+  description: |
+    Saved preset authorization and switching workflow: create/edit a saved
+    preset, add it to an agent's `manifest.preset.allowed[]`, refresh or swap,
+    verify with `system(action='presets')`, revert safely, and avoid changing
+    another agent's active preset when a daemon/avatar with the preset is enough.
+```
+
 ## refresh — rebuild from init.json
 
 `system(action='refresh')` is the **only way to reload your runtime**. There is no lighter alternative.
@@ -74,6 +89,12 @@ Pass `revert_preset=true` to swap back to your default preset (reads `manifest.p
 - **connectivity** field: `ok` (responsive, includes latency_ms), `no_credentials` (api_key_env is unset), or `unreachable` (network probe failed)
 
 Use this to decide what to swap into via `refresh(preset='<name>')`.
+
+### Saved preset authorization workflow
+
+For the full workflow, read `reference/preset-workflow/SKILL.md`. Keep the top
+level rule in mind: a saved preset file is not usable by an agent until that
+agent authorizes the preset path in `manifest.preset.allowed[]`, then refreshes.
 
 **Tier ladder** (from the `tier:*` tag):
 | Tier | Use for |
