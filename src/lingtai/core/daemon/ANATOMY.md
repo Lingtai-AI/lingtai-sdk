@@ -3,8 +3,8 @@
 Daemon capability (分神) — dispatch ephemeral subagents (分神) that operate
 in parallel on the agent's working directory. Each LingTai-backend emanation
 is a disposable `ChatSession` with a curated tool surface, not an agent; the
-parent may add a per-task oneshot `system_prompt` and may explicitly opt the
-daemon into the `email` intrinsic, but daemon tool calls still pass through the
+parent may add a per-task oneshot `system_prompt`; the daemon-eligible `email`
+intrinsic is available by default, but daemon tool calls still pass through the
 kernel `ToolExecutor`/`ToolCallGuard` path before any handler runs. Each `daemon.emanate` batch gets a stable `group_id` shared by every run in
 that batch, while each daemon still keeps its own `run_id`. Results are
 persisted in per-run daemon folders; terminal completion/failure is surfaced as
@@ -13,7 +13,7 @@ text.
 
 ## Components
 
-- `daemon/__init__.py` — public capability surface. `get_description`, `get_schema`, and `setup`; the core class is `DaemonManager`, which manages the full emanation lifecycle and parent-stop cleanup. Key internals: `_ToolCollector` (`daemon/__init__.py:336-363`) intercepts `add_tool` calls during preset-driven capability setup to build a sandboxed tool surface without mutating the parent's registry. `EMANATION_BLACKLIST` (`daemon/__init__.py:141`) prevents recursion by blocking `daemon`, `avatar`, `psyche`, `skills`, and `knowledge`; `_daemon_intrinsic_surface()` (`daemon/__init__.py:595`) is the narrow opt-in intrinsic bridge for `email` only.
+- `daemon/__init__.py` — public capability surface. `get_description`, `get_schema`, and `setup`; the core class is `DaemonManager`, which manages the full emanation lifecycle and parent-stop cleanup. Key internals: `_ToolCollector` (`daemon/__init__.py:336-363`) intercepts `add_tool` calls during preset-driven capability setup to build a sandboxed tool surface without mutating the parent's registry. `EMANATION_BLACKLIST` (`daemon/__init__.py:141`) prevents recursion by blocking `daemon`, `avatar`, `psyche`, `skills`, and `knowledge`; `_daemon_intrinsic_surface()` (`daemon/__init__.py:595`) is the narrow daemon intrinsic bridge for `email` only; it is auto-included for daemons rather than listed as a normal capability.
 - `daemon/claude_interactive.py` — interactive Claude Code daemon backend. `ClaudeInteractiveBridge` (`daemon/claude_interactive.py:103`) runs normal interactive `claude` under a PTY from a LingTai-managed workspace, writes the managed system prompt (`daemon/claude_interactive.py:80-96`), prepares empty or explicit-source detached worktrees (`daemon/claude_interactive.py:250-309`), answers terminal probes, injects `SessionStart`/`Stop` hooks via inline `--settings`, relays hook payloads through a FIFO, auto-selects workspace trust only inside the verified managed root (`daemon/claude_interactive.py:535-559`), and parses Claude transcript JSONL into daemon progress/result state.
 - `daemon/run_dir.py` — per-emanation filesystem run directory. `DaemonRunDir` owns every filesystem effect for one run: folder layout, `daemon.json` atomic writes, batch `group_id` metadata (`DaemonRunDir.new_group_id()`), JSONL appends, CLI progress events, heartbeat touches, `result.txt`, and terminal state markers. The `DaemonManager` calls into a `DaemonRunDir` at every lifecycle hook without itself touching the filesystem.
 
@@ -35,7 +35,7 @@ The `daemon` tool exposes five actions:
 daemon/__init__.py
   ├── DaemonManager.__init__        — stores agent ref, config ceilings, emanation registry
   ├── handle()                      — top-level dispatcher (emanate/list/ask/check/reclaim)
-  ├── _daemon_intrinsic_surface()   — exposes daemon-eligible intrinsics (currently explicit `email` only)
+  ├── _daemon_intrinsic_surface()   — exposes daemon-eligible intrinsics (currently auto-included `email`)
   ├── _build_tool_surface()         — filters requested tools against blacklist, expands groups, merges preset/MCP/email surfaces
   ├── _instantiate_preset_capabilities() — sets up preset tool surface in a sandbox
   ├── _build_emanation_prompt()     — composes the base prompt plus optional per-task oneshot system_prompt

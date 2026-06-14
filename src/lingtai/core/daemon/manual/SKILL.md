@@ -79,17 +79,28 @@ files, not standalone top-level skills.
 - Keep daemon lightweight. If the task needs long-lived persona, molt/pad,
   durable knowledge, or ongoing ownership, spawn an avatar/agent instead of
   stretching daemon.
-- Per-task `system_prompt` is a one-run parent instruction overlay. It may narrow
-  how the daemon works, but it does not override lifecycle limits, available tool
-  schema, or tool execution/approval guards.
-- `email` is available to LingTai daemons only when explicitly requested in
-  `tools:["email"]`; parent prompts still own who the daemon may contact.
+- Think of each task item as **what to do** plus optional execution shape:
+  - `task`: the objective and deliverable. Put the concrete work here.
+  - `system_prompt`: optional one-run daemon persona/constraints. Omit it or
+    leave it blank for the default daemon persona. Use it to narrow style,
+    role, or safety posture; it cannot override lifecycle limits, available
+    tool schema, or tool execution/approval guards.
+  - `tools`: capability groups/tools the daemon should have for the task.
+    `email` is daemon-eligible communication and is available by default;
+    tools still matter for file/bash/web/etc. access.
+  - `preset`: optional body/model/tool-shape override for this daemon.
+  - `backend_options`: raw CLI flags for CLI backends only.
 - LingTai-backend daemon tool calls go through the kernel `ToolExecutor` /
   `ToolCallGuard` path before dispatch, so guarded side effects are not allowed
   to bypass normal proposal/execution policy just because they run in a daemon.
+- `email` is available by default because a daemon is still part of the local
+  agent network: it may need to report to peers, ask a sibling for context, or
+  hand off a result. The parent task/prompt still defines who it should contact
+  and why; daemon email is not a license to broadcast.
 - Every `daemon.emanate` call returns a batch `group_id` shared by all daemon
-  runs launched in that same call. Use `group_id` for logical batch grouping; use
-  each daemon's `run_id` for per-run filesystem/audit identity.
+  runs launched in that same call. Use `group_id` for logical batch context and
+  audit. It is not a hard security boundary; use each daemon's `run_id` for
+  per-run filesystem/audit identity.
 - Each emanation is disposable memory but durable evidence: its folder persists
   after completion or reclaim until cleanup.
 - `daemon(action="list")` is a status overview, not a full transcript.

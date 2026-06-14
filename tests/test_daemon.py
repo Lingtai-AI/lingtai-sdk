@@ -229,21 +229,21 @@ def test_build_tool_surface_inherits_mcp_tools(tmp_path):
 
 
 def test_daemon_schema_accepts_task_system_prompt():
-    """Task items expose oneshot system_prompt fields."""
+    """Task items expose only the current oneshot system_prompt field."""
     from lingtai.core.daemon import get_schema
 
     task_props = get_schema("en")["properties"]["tasks"]["items"]["properties"]
     assert "system_prompt" in task_props
     assert task_props["system_prompt"]["type"] == "string"
-    assert "custom_system_prompt" in task_props
+    assert "custom_system_prompt" not in task_props
 
 
-def test_build_tool_surface_can_opt_into_email_intrinsic(tmp_path):
-    """Email is the one daemon-eligible intrinsic and remains opt-in."""
+def test_build_tool_surface_includes_email_intrinsic_by_default(tmp_path):
+    """Email is the narrow daemon-eligible intrinsic and is available by default."""
     agent = _make_agent(tmp_path, ["daemon"])
     mgr = agent.get_capability("daemon")
 
-    schemas, dispatch = mgr._build_tool_surface(["email"])
+    schemas, dispatch = mgr._build_tool_surface([])
 
     names = {s.name for s in schemas}
     assert "email" in names
@@ -265,6 +265,17 @@ def test_build_emanation_prompt_includes_oneshot_system_prompt(tmp_path):
     assert "Parent-provided daemon system prompt" in prompt
     assert "Only inspect Python files" in prompt
     assert prompt.index("Only inspect Python files") < prompt.index("Your task:")
+
+
+
+
+def test_task_system_prompt_allows_blank_string(tmp_path):
+    """Blank system_prompt is accepted and treated as no extra prompt."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+
+    assert mgr._task_system_prompt({"task": "x", "tools": [], "system_prompt": ""}) is None
+    assert mgr._task_system_prompt({"task": "x", "tools": [], "system_prompt": "   "}) is None
 
 
 def test_build_emanation_prompt_includes_task(tmp_path):

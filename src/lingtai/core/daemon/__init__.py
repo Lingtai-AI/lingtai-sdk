@@ -395,10 +395,6 @@ def get_schema(lang: str = "en") -> dict:
                             "type": "string",
                             "description": t(lang, "daemon.tasks.system_prompt"),
                         },
-                        "custom_system_prompt": {
-                            "type": "string",
-                            "description": t(lang, "daemon.tasks.custom_system_prompt"),
-                        },
                     },
                     "required": ["task", "tools"],
                 },
@@ -623,16 +619,18 @@ class DaemonManager:
 
     @staticmethod
     def _task_system_prompt(spec: dict) -> str | None:
-        """Return the task-level oneshot daemon prompt, accepting old alias."""
-        value = spec.get("system_prompt")
-        if value is None:
-            value = spec.get("custom_system_prompt")
-        if value is None:
+        """Return the task-level oneshot daemon prompt.
+
+        ``system_prompt`` is an optional override. If present, it must be a
+        string, but it may be blank; a blank prompt means "no extra oneshot
+        prompt" rather than a validation error.
+        """
+        if "system_prompt" not in spec:
             return None
+        value = spec.get("system_prompt")
         if not isinstance(value, str):
             raise ValueError("system_prompt must be a string")
-        value = value.strip()
-        return value or None
+        return value.strip() or None
 
     @staticmethod
     def _compose_cli_task(task: str, system_prompt: str | None) -> str:
@@ -674,18 +672,21 @@ class DaemonManager:
                 tool_names.add(name)
 
         intrinsic_schemas, intrinsic_handlers = self._daemon_intrinsic_surface()
+        tool_names |= set(intrinsic_schemas)
 
         if preset_surface is not None:
             preset_schemas, preset_handlers = preset_surface
             # Available surface = preset capabilities ∪ parent's MCP tools ∪
-            # explicitly requested daemon-eligible intrinsics (currently email).
+            # daemon-eligible intrinsics (currently email).
             capability_names = {cap_name for cap_name, _ in self._agent._capabilities}
             all_registered = {s.name for s in self._agent._tool_schemas}
             mcp_names = all_registered - capability_names - EMANATION_BLACKLIST
             available = set(preset_schemas.keys()) | mcp_names | set(intrinsic_schemas)
-            # MCP tools auto-included (parent-bound, LLM-agnostic). Intrinsics
-            # stay opt-in: the parent must request tools:["email"].
-            tool_names |= mcp_names
+            # MCP tools are auto-included (parent-bound, LLM-agnostic). The
+            # narrow daemon intrinsic surface is auto-included too: daemon
+            # follow-up/collaboration workflows commonly need email, and the
+            # bridge is still bounded to explicitly daemon-eligible intrinsics.
+            tool_names |= mcp_names | set(intrinsic_schemas)
 
             missing = tool_names - available
             if missing:
