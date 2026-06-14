@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LingTai PR explainer — principle activeness levels</title>
+  <style>
+    :root { color-scheme: light dark; --bg:#0f172a; --card:#111827; --ink:#e5e7eb; --muted:#9ca3af; --accent:#60a5fa; --good:#34d399; --warn:#fbbf24; --line:#334155; }
+    @media (prefers-color-scheme: light) { :root { --bg:#f8fafc; --card:#ffffff; --ink:#0f172a; --muted:#475569; --accent:#2563eb; --good:#059669; --warn:#b45309; --line:#cbd5e1; } }
+    body { margin:0; font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--ink); }
+    main { max-width:1000px; margin:0 auto; padding:32px 20px 56px; }
+    h1 { font-size:32px; line-height:1.15; margin:0 0 8px; }
+    h2 { margin-top:28px; border-top:1px solid var(--line); padding-top:22px; }
+    .lede { color:var(--muted); margin:0 0 24px; }
+    .grid { display:grid; gap:14px; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; box-shadow:0 10px 24px rgba(0,0,0,.12); }
+    .badge { display:inline-block; border:1px solid var(--line); border-radius:999px; padding:2px 9px; color:var(--muted); font-size:13px; }
+    code { background:rgba(148,163,184,.18); padding:.12em .35em; border-radius:5px; }
+    pre { overflow:auto; background:rgba(15,23,42,.72); color:#e5e7eb; border-radius:12px; padding:14px; border:1px solid var(--line); }
+    ul { padding-left:1.25rem; } li { margin:.35rem 0; }
+    .ok { color:var(--good); font-weight:700; } .warn { color:var(--warn); font-weight:700; }
+    table { width:100%; border-collapse:collapse; margin:12px 0; }
+    th,td { text-align:left; border-bottom:1px solid var(--line); padding:8px; vertical-align:top; }
+    th { color:var(--muted); }
+  </style>
+</head>
+<body><main>
+  <span class="badge">pre-PR explainer · 2026-06-13</span>
+  <h1>Principle-level agent activeness / responsiveness knob</h1>
+  <p class="lede">Adds a small manifest-level knob so LingTai can tune not only an agent's language, but also how proactively it communicates: from terse action-first behavior to explicit “句句有回应，事事有交代” closure.</p>
+
+  <section class="grid">
+    <div class="card"><strong>What changed</strong><br>New <code>manifest.activeness</code> setting (default <code>balanced</code>), threaded into the kernel-injected runtime principle prefix.</div>
+    <div class="card"><strong>Compatibility</strong><br><span class="ok">Default is balanced.</span> If <code>activeness</code> is unset/empty, the balanced principle is injected by default.</div>
+    <div class="card"><strong>Tests</strong><br><span class="ok">98 related tests passed</span>, including prompt byte-identity and meta/AED/compaction suites.</div>
+  </section>
+
+  <h2>Three supported levels</h2>
+  <table>
+    <thead><tr><th>Level</th><th>Intended posture</th><th>Chinese/Wen framing</th></tr></thead>
+    <tbody>
+      <tr><td><code>quiet</code></td><td>Act first, speak sparingly; report only decisions, blockers, errors, deliverables, or facts needed to proceed.</td><td>“君子敏于行而讷于言” / “先行其事，慎其辞令”。</td></tr>
+      <tr><td><code>balanced</code></td><td>Promptly acknowledge human instructions, act without delay, and provide progress for long work or blockers.</td><td>“能做则先做；长任务或遇阻要交代进展”。</td></tr>
+      <tr><td><code>responsive</code></td><td>Make each human-facing exchange feel answered; state next step, surface uncertainty, and close the loop with facts/paths/outcomes.</td><td>“句句有回应，事事有交代”。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Configuration</h2>
+  <p>Default is <code>balanced</code>. Operators can set the knob beside <code>manifest.language</code> in <code>init.json</code>:</p>
+  <pre>{
+  "manifest": {
+    "language": "zh",
+    "activeness": "responsive"
+  }
+}</pre>
+  <p>Aliases are accepted for ergonomics: <code>low</code>/<code>restrained</code>/<code>concise</code> → <code>quiet</code>; <code>medium</code>/<code>normal</code>/<code>default</code> → <code>balanced</code>; <code>high</code>/<code>active</code>/<code>verbose</code> → <code>responsive</code>. Unknown values render an explicit warning principle rather than silently choosing a level.</p>
+
+  <h2>Implementation notes</h2>
+  <ul>
+    <li><code>src/lingtai_kernel/prompt.py</code>: adds localized activeness principles and an <code>activeness</code> parameter to <code>build_system_prompt()</code> / <code>build_system_prompt_batches()</code>.</li>
+    <li><code>src/lingtai_kernel/config.py</code>: adds <code>AgentConfig.activeness</code>.</li>
+    <li><code>src/lingtai/agent.py</code> and <code>src/lingtai_kernel/base_agent/prompt.py</code>: thread <code>manifest.activeness</code> into prompt construction.</li>
+    <li><code>tests/test_prompt.py</code>: covers all three levels, localization, aliases, unknown values, unchanged unset default, and string/batch byte identity.</li>
+    <li><code>src/lingtai_kernel/ANATOMY.md</code>: documents the new prompt/config behavior.</li>
+  </ul>
+
+  <h2>Verification run</h2>
+  <pre>pytest -q tests/test_prompt.py
+# 16 passed
+
+pytest -q tests/test_prompt.py tests/test_meta_block.py tests/test_aed_recovery.py tests/test_retroactive_history_compaction.py
+# 98 passed</pre>
+
+  <h2>Review focus</h2>
+  <ul>
+    <li>Are the three level names acceptable as public manifest vocabulary?</li>
+    <li>Should any TUI/recipe surfaces expose this as a first-class setup knob, now that the kernel default is <code>balanced</code>?</li>
+    <li>Are the Chinese and Wen phrasings strong enough without encouraging spammy status updates?</li>
+  </ul>
+</main></body></html>

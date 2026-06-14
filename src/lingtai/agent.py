@@ -362,6 +362,7 @@ class Agent(BaseAgent):
         return build_system_prompt(
             prompt_manager=self._prompt_manager,
             language=self._config.language,
+            activeness=self._config.activeness,
         )
 
     def _build_system_prompt_batches(self) -> list[str]:
@@ -371,6 +372,7 @@ class Agent(BaseAgent):
         return build_system_prompt_batches(
             prompt_manager=self._prompt_manager,
             language=self._config.language,
+            activeness=self._config.activeness,
         )
 
     def _load_mcp_from_workdir(self) -> None:
@@ -1112,6 +1114,7 @@ class Agent(BaseAgent):
             # Keep AgentConfig.max_turns at its default for API compatibility,
             # but deliberately ignore stale init.json values here.
             language=m.get("language", "en"),
+            activeness=m.get("activeness", "balanced"),
             context_limit=m.get("context_limit"),
             molt_pressure=m.get("molt_pressure", 0.8),
             molt_prompt=m.get("molt_prompt", ""),

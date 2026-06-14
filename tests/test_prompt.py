@@ -113,6 +113,58 @@ def test_language_principle_unknown_falls_back_to_english_with_code():
     assert "explicit instruction" in prompt
 
 
+def test_activeness_principle_en_renders_between_language_and_base_prompt():
+    mgr = SystemPromptManager()
+    mgr.write_section("covenant", "Be good.", protected=True)
+    prompt = build_system_prompt(
+        mgr,
+        base_prompt="Framework guidance.",
+        language="en",
+        activeness="quiet",
+    )
+    assert prompt.startswith("Agent language: English.")
+    assert "Agent activeness: quiet." in prompt
+    assert "Be swift in action and sparing in words" in prompt
+    assert prompt.index("Agent language: English.") < prompt.index("Agent activeness: quiet.")
+    assert prompt.index("Agent activeness: quiet.") < prompt.index("Framework guidance.")
+    assert prompt.index("Framework guidance.") < prompt.index("Be good.")
+
+
+def test_activeness_principle_localized_levels():
+    cases = [
+        ("zh", "balanced", "智能体主动程度：均衡。"),
+        ("wen", "responsive", "器灵主动之度：勤应。"),
+        ("fr", "responsive", "Agent activeness: responsive."),
+    ]
+    for language, activeness, expected in cases:
+        mgr = SystemPromptManager()
+        prompt = build_system_prompt(mgr, language=language, activeness=activeness)
+        assert expected in prompt
+
+
+def test_activeness_principle_aliases_and_unknowns():
+    mgr = SystemPromptManager()
+    prompt = build_system_prompt(mgr, language="en", activeness="high")
+    assert "Agent activeness: responsive." in prompt
+
+    prompt = build_system_prompt(mgr, language="en", activeness="chatty")
+    assert "Agent activeness: chatty. Unknown activeness level" in prompt
+    assert "quiet, balanced, and responsive" in prompt
+
+
+def test_activeness_principle_defaults_to_balanced():
+    mgr = SystemPromptManager()
+    prompt = build_system_prompt(mgr, language="en")
+    assert "Agent activeness: balanced." in prompt
+    assert "acknowledge human instructions promptly" in prompt
+
+
+def test_empty_activeness_uses_balanced_default():
+    mgr = SystemPromptManager()
+    prompt = build_system_prompt(mgr, language="zh", activeness="")
+    assert "智能体主动程度：均衡。" in prompt
+
+
 def test_batches_byte_identical_to_string():
     """Joining build_system_prompt_batches() with '\\n\\n' (empty batches
     filtered) must reproduce build_system_prompt() byte-for-byte."""
@@ -122,11 +174,20 @@ def test_batches_byte_identical_to_string():
     mgr.write_section("rules", "No deleting files.", protected=True)
     mgr.write_section("pad", "Working notes.")
     for language in ("en", "zh", "wen", "fr"):
-        full = build_system_prompt(mgr, base_prompt="Framework guidance.", language=language)
-        batches = build_system_prompt_batches(
-            mgr, base_prompt="Framework guidance.", language=language
-        )
-        assert "\n\n".join(seg for seg in batches if seg) == full
+        for activeness in (None, "", "quiet", "balanced", "responsive"):
+            full = build_system_prompt(
+                mgr,
+                base_prompt="Framework guidance.",
+                language=language,
+                activeness=activeness,
+            )
+            batches = build_system_prompt_batches(
+                mgr,
+                base_prompt="Framework guidance.",
+                language=language,
+                activeness=activeness,
+            )
+            assert "\n\n".join(seg for seg in batches if seg) == full
 
 
 def test_batches_byte_identical_when_empty():

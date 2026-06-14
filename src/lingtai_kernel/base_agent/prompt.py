@@ -12,7 +12,11 @@ def _build_system_prompt(agent) -> str:
     from ..prompt import build_system_prompt
 
     _refresh_tool_inventory_section(agent)
-    return build_system_prompt(prompt_manager=agent._prompt_manager, language=agent._config.language)
+    return build_system_prompt(
+        prompt_manager=agent._prompt_manager,
+        language=agent._config.language,
+        activeness=agent._config.activeness,
+    )
 
 
 def _build_system_prompt_batches(agent) -> list[str]:
@@ -27,7 +31,9 @@ def _build_system_prompt_batches(agent) -> list[str]:
 
     _refresh_tool_inventory_section(agent)
     return build_system_prompt_batches(
-        prompt_manager=agent._prompt_manager, language=agent._config.language
+        prompt_manager=agent._prompt_manager,
+        language=agent._config.language,
+        activeness=agent._config.activeness,
     )
 
 

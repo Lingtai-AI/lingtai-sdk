@@ -23,7 +23,8 @@ class AgentConfig:
     thinking_budget: int | None = None
     data_dir: str | None = None  # for cache files (e.g., model context windows)
     soul_delay: float = 99999.0  # seconds idle before soul whispers; large value (> stamina) = effectively off
-    language: str = "en"  # agent language ("en", "zh"); controls all kernel-injected strings
+    language: str = "en"  # agent language ("en", "zh", "wen"); controls kernel-injected prose
+    activeness: str | None = "balanced"  # responsiveness posture: quiet, balanced, or responsive
     stamina: float = 3600.0  # agent stamina in seconds; set at birth, not changeable by the agent
     time_awareness: bool = True  # experimental: False strips LLM-visible timestamps (perception nerf)
     timezone_awareness: bool = True  # when True, now_iso emits OS local time; when False, UTC
