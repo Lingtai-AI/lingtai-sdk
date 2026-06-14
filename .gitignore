@@ -33,12 +33,19 @@ src/lingtai/bin/
 .venv/
 venv/
 
-# Internal design docs / session artifacts (private — not for public repo)
+# Local agent/work-session scratch. These directories often hold private
+# transcripts, PR explainers, generated audits, or exploratory outputs. Keep PR
+# explainers local by default; only long-lived docs, release materials, or
+# reports with an explicit durable purpose should be force-added with rationale.
 docs/
-MagicMock/
 reports/
+tmp/
+MagicMock/
 
 # Specific discussion drafts kept local (others under discussions/ are
-# committed by convention; ignore individual files rather than the whole dir)
+# committed by convention; ignore individual files rather than the whole dir).
 discussions/voluntary-compression-patch.md
+
+# Local resolver lockfiles may appear during experiments; pyproject.toml is the
+# packaging source of truth for this repo.
 uv.lock

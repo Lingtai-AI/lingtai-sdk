@@ -227,3 +227,11 @@ Base prompt (minimal — identity and general guidance only) → Sections (injec
 - Migrations should be complete and clean — remove old code entirely. No backward-compatibility shims, no deprecated wrappers, no legacy aliases unless the user explicitly asks for them.
 - Kernel must never import from `lingtai` — dependency is strictly one-directional.
 - All imports in lingtai use `from lingtai_kernel.xxx import ...` for kernel types.
+- Repo housekeeping: `docs/`, `reports/`, and `tmp/` are ignored by default because
+  agent sessions often create private scratch there. PR explainers are local
+  artifacts by default and should not be uploaded; put them under ignored
+  `reports/`, `tmp/`, or another local artifact path. Only long-lived docs,
+  release materials, or reports with an explicit durable purpose may be
+  force-added with rationale. Do not delete or untrack historical `discussions/`
+  design material as part of a drive-by cleanup unless the owner explicitly
+  approves that archival decision.
