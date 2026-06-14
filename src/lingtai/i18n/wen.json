@@ -56,5 +56,7 @@
   "knowledge.preamble": "下列诸卷，汝跨凝蜕之私藏长记也。欲忆昔之所习、所断、所悟者，以 read 取其 location 所指之 KNOWLEDGE.md，循而依之。每卷之匣或附副件（script、素材、原始之日志）——KNOWLEDGE.md 自有所引。常用之卷可以 psyche({object:'pad', action:'append', files:[location]}) 固于 pad，跨轮常存。知识乃汝私藏；若无可取者，勿妄载。",
   "skills.action_info": "info：还 skills-manual 之文，并录当时之康状（技数、解径、患记）。",
   "skills.preamble": "下列诸技，各司其事。凡所遇事与技之描合者，以 read 取其 location 所指之 SKILL.md，循而行之。每技之匣，或含副件（script、template、data），SKILL.md 自有所引。常用之技，可以 psyche({object:'pad', action:'append', files:[location]}) 固于 pad，跨轮常存。若无可取者，勿妄载。",
-  "skills.description": "尔之器灵技能目录。系统之中技能典为 YAML 之列——每技一 `- name:` 块，附 `location:` 与 `description:` 之目——所列皆此时可取之技。用此器前（凡藏用、固定、出新、料理技能之事），必先读 `skills-manual` 一技——呼 `info` 即得其文与当时之康状，无所例外。"
+  "skills.description": "尔之器灵技能目录。系统之中技能典为 YAML 之列——每技一 `- name:` 块，附 `location:` 与 `description:` 之目——所列皆此时可取之技。用此器前（凡藏用、固定、出新、料理技能之事），必先读 `skills-manual` 一技——呼 `info` 即得其文与当时之康状，无所例外。",
+  "daemon.tasks.system_prompt": "可选一次性心令，仅附此 daemon 一务。可约其行事之法，不可越工具、取消/时限、执行/核准之门。",
+  "daemon.tasks.custom_system_prompt": "system_prompt 旧名；新 daemon 任务宜用 system_prompt。"
 }

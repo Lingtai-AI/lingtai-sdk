@@ -56,5 +56,7 @@
   "daemon.message": "'ask' 操作的跟进消息",
   "skills.description": "你的器灵专属技能目录。系统提示词中的技能目录为 YAML 列表——每项技能为一 `- name:` 块，附 `location:` 与 `description:` 字段——涵盖当前所有可用的技能。用此工具前（编写、固定、发布或管理技能），必先读 `skills-manual` 技能——调用 `info` 即可获取其正文与运行时健康快照，无例外。",
   "skills.action_info": "info：返回 skills-manual 技能正文，以及运行时健康快照（目录规模、解析后的路径、问题列表）。",
-  "skills.preamble": "以下技能为特定任务提供专门指导。当任务匹配某个技能的描述时，使用 read 工具读取 location 字段所示路径下的 SKILL.md 文件，然后遵循其中指示。每个技能文件夹可能包含支持文件（脚本、模板、数据）——SKILL.md 会引用它们。经常使用的技能可通过 psyche({object:'pad', action:'append', files:[location]}) 固定到 pad 中，使其跨轮次持久存在。若没有明显匹配的技能，则不加载任何技能。"
+  "skills.preamble": "以下技能为特定任务提供专门指导。当任务匹配某个技能的描述时，使用 read 工具读取 location 字段所示路径下的 SKILL.md 文件，然后遵循其中指示。每个技能文件夹可能包含支持文件（脚本、模板、数据）——SKILL.md 会引用它们。经常使用的技能可通过 psyche({object:'pad', action:'append', files:[location]}) 固定到 pad 中，使其跨轮次持久存在。若没有明显匹配的技能，则不加载任何技能。",
+  "daemon.tasks.system_prompt": "可选的一次性 system prompt，只附加到此 daemon 任务。它可以收窄 daemon 的工作方式，但不能覆盖工具可用性、取消/超时限制或工具执行/审批 gate。",
+  "daemon.tasks.custom_system_prompt": "system_prompt 的旧别名；新的 daemon 任务请使用 system_prompt。"
 }

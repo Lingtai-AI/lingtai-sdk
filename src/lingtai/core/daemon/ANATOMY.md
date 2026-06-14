@@ -1,15 +1,18 @@
 # core/daemon
 
 Daemon capability (分神) — dispatch ephemeral subagents (分神) that operate
-in parallel on the agent's working directory. Each emanation is a disposable
-`ChatSession` with a curated tool surface, not an agent. Results are
-persisted in per-run daemon folders; terminal completion/failure is surfaced
-as a compact `.notification/system.json` event instead of ordinary parent
-request text.
+in parallel on the agent's working directory. Each LingTai-backend emanation
+is a disposable `ChatSession` with a curated tool surface, not an agent; the
+parent may add a per-task oneshot `system_prompt` and may explicitly opt the
+daemon into the `email` intrinsic, but daemon tool calls still pass through the
+kernel `ToolExecutor`/`ToolCallGuard` path before any handler runs. Results are
+persisted in per-run daemon folders; terminal completion/failure is surfaced as
+a compact `.notification/system.json` event instead of ordinary parent request
+text.
 
 ## Components
 
-- `daemon/__init__.py` — public capability surface. `get_description`, `get_schema`, and `setup`; the core class is `DaemonManager`, which manages the full emanation lifecycle and parent-stop cleanup. Key internals: `_ToolCollector` (`daemon/__init__.py:257-284`) intercepts `add_tool` calls during preset-driven capability setup to build a sandboxed tool surface without mutating the parent's registry. `EMANATION_BLACKLIST` (`daemon/__init__.py:133`) prevents recursion by blocking `daemon`, `avatar`, `psyche`, `skills`, and deprecated `codex` tools in subagents.
+- `daemon/__init__.py` — public capability surface. `get_description`, `get_schema`, and `setup`; the core class is `DaemonManager`, which manages the full emanation lifecycle and parent-stop cleanup. Key internals: `_ToolCollector` (`daemon/__init__.py:336-363`) intercepts `add_tool` calls during preset-driven capability setup to build a sandboxed tool surface without mutating the parent's registry. `EMANATION_BLACKLIST` (`daemon/__init__.py:141`) prevents recursion by blocking `daemon`, `avatar`, `psyche`, `skills`, and `knowledge`; `_daemon_intrinsic_surface()` (`daemon/__init__.py:595`) is the narrow opt-in intrinsic bridge for `email` only.
 - `daemon/claude_interactive.py` — interactive Claude Code daemon backend. `ClaudeInteractiveBridge` (`daemon/claude_interactive.py:103`) runs normal interactive `claude` under a PTY from a LingTai-managed workspace, writes the managed system prompt (`daemon/claude_interactive.py:80-96`), prepares empty or explicit-source detached worktrees (`daemon/claude_interactive.py:250-309`), answers terminal probes, injects `SessionStart`/`Stop` hooks via inline `--settings`, relays hook payloads through a FIFO, auto-selects workspace trust only inside the verified managed root (`daemon/claude_interactive.py:535-559`), and parses Claude transcript JSONL into daemon progress/result state.
 - `daemon/run_dir.py` — per-emanation filesystem run directory. `DaemonRunDir` owns every filesystem effect for one run: folder layout, `daemon.json` atomic writes, JSONL appends, CLI progress events, heartbeat touches, `result.txt`, and terminal state markers. The `DaemonManager` calls into a `DaemonRunDir` at every lifecycle hook without itself touching the filesystem.
 
@@ -31,10 +34,11 @@ The `daemon` tool exposes five actions:
 daemon/__init__.py
   ├── DaemonManager.__init__        — stores agent ref, config ceilings, emanation registry
   ├── handle()                      — top-level dispatcher (emanate/list/ask/check/reclaim)
-  ├── _build_tool_surface()         — filters requested tools against blacklist, expands groups
+  ├── _daemon_intrinsic_surface()   — exposes daemon-eligible intrinsics (currently explicit `email` only)
+  ├── _build_tool_surface()         — filters requested tools against blacklist, expands groups, merges preset/MCP/email surfaces
   ├── _instantiate_preset_capabilities() — sets up preset tool surface in a sandbox
-  ├── _build_emanation_prompt()     — composes the subagent's system prompt
-  ├── _run_emanation()              — lingtai-backend worker tool loop (send → tool_calls → results)
+  ├── _build_emanation_prompt()     — composes the base prompt plus optional per-task oneshot system_prompt
+  ├── _run_emanation()              — lingtai-backend worker tool loop (send → ToolExecutor/ToolCallGuard → tool results)
   ├── _run_claude_interactive_emanation() — `claude` / `claude-interactive` backend; delegates to `run_claude_interactive()` (`daemon/claude_interactive.py:771`) to create the managed workspace, drive the interactive Claude TUI through PTY + hooks + transcript parsing, and persist managed-workspace state.
   ├── _run_claude_code_emanation()  — `claude-p` / compatibility `claude-code` backend; parses `--output-format stream-json --verbose` print-mode events in real time so `claude_session_id`, per-turn text, and tool_use/tool_result land in DaemonRunDir during the run (vs. post-hoc). Claude Code's own `usage` fields are deliberately NOT forwarded to append_tokens (external billing path; semantics don't match the kernel's adapter accounting).
   ├── _run_codex_emanation()        — codex backend; parses `codex exec --json` JSONL events (thread.started → codex_session_id, item.completed → agent_message text, turn.completed → terminal). Symmetric with the claude-code backend. Codex tokens are also NOT forwarded to append_tokens for the same reason.

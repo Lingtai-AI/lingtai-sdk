@@ -66,6 +66,20 @@ available:
 | `oh-my-pi` / `omp` | `omp --mode json --approval-mode yolo <prompt>` | `omp --mode json --approval-mode yolo --session <oh_my_pi_session_id> ...` via `ask` (async) | Oh-My-Pi pi-coding-agent CLI backend (npm package `@oh-my-pi/pi-coding-agent`, binary `omp`). `--mode json` is non-interactive JSON event-stream print mode; the first `type:session` header line carries the resumable session id. `omp` canonicalizes to `oh-my-pi`. |
 | `cursor` | `agent -p <prompt>` | `agent -p --resume <cursor_session_id> ...` via `ask` (async) | Cursor Agent CLI backend. |
 
+**Per-task system prompt.** Every task item may include `system_prompt` (with
+`custom_system_prompt` retained as a deprecated alias). For the built-in
+`lingtai` backend it is appended to the daemon's system prompt as a bounded
+oneshot parent instruction; it cannot override lifecycle limits, tool schemas, or
+the ToolExecutor/ToolCallGuard execution gate. For CLI backends, the same text is
+also embedded at the top of the task prompt and persisted in the daemon `.prompt`
+file for forensics.
+
+**LingTai backend tool surface.** The built-in `lingtai` backend uses preset
+resolution plus daemon tool curation. MCP tools still auto-inherit from the
+parent; `email` is the only intrinsic that can be explicitly opted in via
+`tools:["email"]`. Other intrinsics remain unavailable to keep daemon lightweight
+and non-recursive.
+
 **When to use CLI backends:** Use them when the task benefits from a different
 agent runtime's tool surface (for example Claude Code's built-in file editing or
 Codex's sandboxed execution) rather than the LingTai emanation's curated tool

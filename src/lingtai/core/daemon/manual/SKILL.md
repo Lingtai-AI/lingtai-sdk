@@ -76,6 +76,17 @@ files, not standalone top-level skills.
 
 ## Core rules to keep resident
 
+- Keep daemon lightweight. If the task needs long-lived persona, molt/pad,
+  durable knowledge, or ongoing ownership, spawn an avatar/agent instead of
+  stretching daemon.
+- Per-task `system_prompt` is a one-run parent instruction overlay. It may narrow
+  how the daemon works, but it does not override lifecycle limits, available tool
+  schema, or tool execution/approval guards.
+- `email` is available to LingTai daemons only when explicitly requested in
+  `tools:["email"]`; parent prompts still own who the daemon may contact.
+- LingTai-backend daemon tool calls go through the kernel `ToolExecutor` /
+  `ToolCallGuard` path before dispatch, so guarded side effects are not allowed
+  to bypass normal proposal/execution policy just because they run in a daemon.
 - Each emanation is disposable memory but durable evidence: its folder persists
   after completion or reclaim until cleanup.
 - `daemon(action="list")` is a status overview, not a full transcript.

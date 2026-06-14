@@ -428,12 +428,13 @@ def test_emanate_preset_with_intrinsics_dispatches(tmp_path, monkeypatch):
     assert result["count"] == 1
 
 
-def test_emanate_preset_request_for_skipped_intrinsic_tool_fails(tmp_path, monkeypatch):
-    """If the agent asks for a tool that only an intrinsic would have
-    provided (e.g. 'email'), the batch fails at the tool-surface check —
-    not at preset instantiation. The error names the unknown tool, not
-    the skipped capability. This guards against intrinsics silently
-    becoming available through the daemon back door."""
+def test_emanate_preset_request_for_email_intrinsic_dispatches(tmp_path, monkeypatch):
+    """Email is now the explicit daemon-eligible intrinsic exception.
+
+    Preset instantiation still skips intrinsic entries in manifest.capabilities,
+    but a parent may request tools:["email"] and the daemon receives the parent
+    email intrinsic through the normal tool-surface builder.
+    """
     import lingtai_kernel.preset_connectivity as preset_connectivity
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
 
@@ -452,8 +453,8 @@ def test_emanate_preset_request_for_skipped_intrinsic_tool_fails(tmp_path, monke
             {"task": "x", "tools": ["email"], "preset": preset_path},
         ]})
 
-    assert result["status"] == "error"
-    assert "email" in result["message"]
+    assert result["status"] == "dispatched", result
+    assert result["count"] == 1
 
 
 def test_emanate_preset_does_not_pollute_parent_tool_registry(tmp_path,

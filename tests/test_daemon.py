@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 
 from lingtai_kernel.config import AgentConfig
 from lingtai_kernel.llm.base import ToolCall
+from lingtai_kernel.tool_call_guard import GuardDecision, ToolCallGuard
 
 
 def _make_agent(tmp_path, capabilities=None):
@@ -227,6 +228,45 @@ def test_build_tool_surface_inherits_mcp_tools(tmp_path):
     assert "my_mcp_tool" in names
 
 
+def test_daemon_schema_accepts_task_system_prompt():
+    """Task items expose oneshot system_prompt fields."""
+    from lingtai.core.daemon import get_schema
+
+    task_props = get_schema("en")["properties"]["tasks"]["items"]["properties"]
+    assert "system_prompt" in task_props
+    assert task_props["system_prompt"]["type"] == "string"
+    assert "custom_system_prompt" in task_props
+
+
+def test_build_tool_surface_can_opt_into_email_intrinsic(tmp_path):
+    """Email is the one daemon-eligible intrinsic and remains opt-in."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+
+    schemas, dispatch = mgr._build_tool_surface(["email"])
+
+    names = {s.name for s in schemas}
+    assert "email" in names
+    assert "email" in dispatch
+
+
+def test_build_emanation_prompt_includes_oneshot_system_prompt(tmp_path):
+    """Parent-provided daemon prompt is appended before the task."""
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    mgr = agent.get_capability("daemon")
+    schemas, _ = mgr._build_tool_surface(["file"])
+
+    prompt = mgr._build_emanation_prompt(
+        "Find all TODOs",
+        schemas,
+        system_prompt="Only inspect Python files and write no files.",
+    )
+
+    assert "Parent-provided daemon system prompt" in prompt
+    assert "Only inspect Python files" in prompt
+    assert prompt.index("Only inspect Python files") < prompt.index("Your task:")
+
+
 def test_build_emanation_prompt_includes_task(tmp_path):
     """System prompt includes the task description."""
     agent = _make_agent(tmp_path, ["file", "daemon"])
@@ -304,6 +344,62 @@ def test_run_emanation_dispatches_tools(tmp_path):
                                 "read a file", cancel)
     assert "Read the file" in result
     assert mock_handler.called
+
+
+def test_run_emanation_uses_tool_call_guard_before_dispatch(tmp_path):
+    """Daemon tool calls go through ToolExecutor/ToolCallGuard before handler dispatch."""
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent.inbox = queue.Queue()
+
+    def deny_read(proposal):
+        if proposal.tool_name == "read":
+            return GuardDecision.deny(
+                check_name="deny_read",
+                reason="daemon read blocked by policy",
+            )
+        return None
+
+    agent._tool_call_guard = ToolCallGuard([deny_read])
+    mgr = agent.get_capability("daemon")
+
+    mock_handler = MagicMock(return_value={"content": "file text"})
+    agent._tool_handlers["read"] = mock_handler
+
+    tc = ToolCall(name="read", args={"file_path": "/tmp/x"}, id="tc-guard")
+    resp1 = MagicMock()
+    resp1.text = ""
+    resp1.tool_calls = [tc]
+    resp1.usage = MagicMock(input_tokens=0, output_tokens=0,
+                            thinking_tokens=0, cached_tokens=0)
+    resp2 = MagicMock()
+    resp2.text = "Task done. Guard denial observed."
+    resp2.tool_calls = []
+    resp2.usage = MagicMock(input_tokens=0, output_tokens=0,
+                            thinking_tokens=0, cached_tokens=0)
+
+    mock_session = MagicMock()
+    mock_session.send = MagicMock(side_effect=[resp1, resp2])
+    agent.service.create_session = MagicMock(return_value=mock_session)
+    agent.service.make_tool_result = MagicMock(return_value="mock_guard_result")
+
+    cancel = threading.Event()
+    em_id = "em-test"
+    schemas, dispatch = mgr._build_tool_surface(["file"])
+    run_dir = _make_run_dir(agent, em_id=em_id)
+    mgr._emanations[em_id] = {
+        "followup_buffer": "",
+        "followup_lock": threading.Lock(),
+        "run_dir": run_dir,
+    }
+
+    result = mgr._run_emanation(em_id, run_dir, schemas, dispatch,
+                                "read a file", cancel)
+
+    assert "Guard denial observed" in result
+    mock_handler.assert_not_called()
+    payload = agent.service.make_tool_result.call_args.args[1]
+    assert payload["error_type"] == "ToolCallGuardDenied"
+    assert payload["guard_check"] == "deny_read"
 
 
 def test_run_emanation_respects_cancel_before_first_send(tmp_path):

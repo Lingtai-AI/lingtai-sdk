@@ -29,6 +29,9 @@ if TYPE_CHECKING:
     from ...agent import Agent
 
 from lingtai_kernel.llm.base import FunctionSchema
+from lingtai_kernel.loop_guard import LoopGuard
+from lingtai_kernel.meta_block import build_meta
+from lingtai_kernel.tool_executor import ToolExecutor
 from .run_dir import DaemonRunDir
 from .claude_interactive import ClaudeInteractiveError, run_claude_interactive
 
@@ -388,6 +391,14 @@ def get_schema(lang: str = "en") -> dict:
                             "type": "object",
                             "description": t(lang, "daemon.tasks.backend_options"),
                         },
+                        "system_prompt": {
+                            "type": "string",
+                            "description": t(lang, "daemon.tasks.system_prompt"),
+                        },
+                        "custom_system_prompt": {
+                            "type": "string",
+                            "description": t(lang, "daemon.tasks.custom_system_prompt"),
+                        },
                     },
                     "required": ["task", "tools"],
                 },
@@ -581,6 +592,61 @@ class DaemonManager:
         else:
             return {"status": "error", "message": f"Unknown action: {action}"}
 
+    def _daemon_intrinsic_surface(self) -> tuple[dict[str, FunctionSchema], dict]:
+        """Return daemon-eligible intrinsic schemas/handlers.
+
+        Daemons do not inherit the whole intrinsic layer: identity/lifecycle and
+        recursive mutation tools stay unavailable.  Email is the deliberately
+        narrow exception so a parent can grant a running daemon local-network
+        communication when the task prompt calls for it.
+        """
+        from lingtai_kernel.intrinsics import ALL_INTRINSICS
+
+        allowed = {"email"}
+        schemas: dict[str, FunctionSchema] = {}
+        handlers: dict = {}
+        lang = self._agent._config.language
+        for name in sorted(allowed):
+            if name not in self._agent._intrinsics:
+                continue
+            info = ALL_INTRINSICS.get(name)
+            if not info:
+                continue
+            module = info["module"]
+            schemas[name] = FunctionSchema(
+                name=name,
+                description=module.get_description(lang),
+                parameters=module.get_schema(lang),
+            )
+            handlers[name] = self._agent._intrinsics[name]
+        return schemas, handlers
+
+    @staticmethod
+    def _task_system_prompt(spec: dict) -> str | None:
+        """Return the task-level oneshot daemon prompt, accepting old alias."""
+        value = spec.get("system_prompt")
+        if value is None:
+            value = spec.get("custom_system_prompt")
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("system_prompt must be a string")
+        value = value.strip()
+        return value or None
+
+    @staticmethod
+    def _compose_cli_task(task: str, system_prompt: str | None) -> str:
+        """Embed a daemon oneshot prompt into a CLI backend task string."""
+        if not system_prompt:
+            return task
+        return (
+            "Parent-provided daemon system prompt (oneshot; bounded to this "
+            "daemon run and unable to override tool/safety limits):\n"
+            f"{system_prompt}\n\n"
+            "Task:\n"
+            f"{task}"
+        )
+
     def _build_tool_surface(
         self,
         requested: list[str],
@@ -607,14 +673,18 @@ class DaemonManager:
             else:
                 tool_names.add(name)
 
+        intrinsic_schemas, intrinsic_handlers = self._daemon_intrinsic_surface()
+
         if preset_surface is not None:
             preset_schemas, preset_handlers = preset_surface
-            # Available surface = preset capabilities ∪ parent's MCP tools
+            # Available surface = preset capabilities ∪ parent's MCP tools ∪
+            # explicitly requested daemon-eligible intrinsics (currently email).
             capability_names = {cap_name for cap_name, _ in self._agent._capabilities}
             all_registered = {s.name for s in self._agent._tool_schemas}
             mcp_names = all_registered - capability_names - EMANATION_BLACKLIST
-            available = set(preset_schemas.keys()) | mcp_names
-            # MCP tools auto-included (parent-bound, LLM-agnostic)
+            available = set(preset_schemas.keys()) | mcp_names | set(intrinsic_schemas)
+            # MCP tools auto-included (parent-bound, LLM-agnostic). Intrinsics
+            # stay opt-in: the parent must request tools:["email"].
             tool_names |= mcp_names
 
             missing = tool_names - available
@@ -630,6 +700,10 @@ class DaemonManager:
                     schemas.append(preset_schemas[n])
                     if n in preset_handlers:
                         dispatch[n] = preset_handlers[n]
+                elif n in intrinsic_schemas:
+                    schemas.append(intrinsic_schemas[n])
+                    if n in intrinsic_handlers:
+                        dispatch[n] = intrinsic_handlers[n]
                 elif n in parent_schema_map:
                     # MCP tool from parent
                     schemas.append(parent_schema_map[n])
@@ -644,16 +718,24 @@ class DaemonManager:
         tool_names |= mcp_names
 
         # Validate requested tools exist
-        available = {s.name for s in self._agent._tool_schemas}
+        available = {s.name for s in self._agent._tool_schemas} | set(intrinsic_schemas)
         missing = tool_names - available
         if missing:
             raise ValueError(f"Unknown tools for emanation: {missing}")
 
         # Build schemas and dispatch
         schema_map = {s.name: s for s in self._agent._tool_schemas}
-        schemas = [schema_map[n] for n in sorted(tool_names) if n in schema_map]
+        schemas = []
+        for n in sorted(tool_names):
+            if n in intrinsic_schemas:
+                schemas.append(intrinsic_schemas[n])
+            elif n in schema_map:
+                schemas.append(schema_map[n])
         dispatch = {n: self._agent._tool_handlers[n]
                     for n in tool_names if n in self._agent._tool_handlers}
+        for n in tool_names:
+            if n in intrinsic_handlers:
+                dispatch[n] = intrinsic_handlers[n]
         return schemas, dispatch
 
     def _expand_requested_tools(self, requested: list[str]) -> set[str]:
@@ -751,7 +833,12 @@ class DaemonManager:
 
         return collector.schemas, collector.handlers
 
-    def _build_emanation_prompt(self, task: str, schemas: list[FunctionSchema]) -> str:
+    def _build_emanation_prompt(
+        self,
+        task: str,
+        schemas: list[FunctionSchema],
+        system_prompt: str | None = None,
+    ) -> str:
         """Build the system prompt for an emanation."""
         lines = [
             "You are a daemon emanation (分神) — a focused subagent dispatched by an agent.",
@@ -773,6 +860,17 @@ class DaemonManager:
             lines.append("")
             lines.append("## tools")
             lines.extend(tool_lines)
+
+        if system_prompt:
+            lines.append("")
+            lines.append("## Parent-provided daemon system prompt (oneshot)")
+            lines.append(
+                "These parent instructions apply only to this daemon run. "
+                "They may narrow how you complete the task, but they do not "
+                "override the daemon lifecycle, cancellation/timeout limits, "
+                "available tool schema, or tool execution/approval guard."
+            )
+            lines.append(system_prompt)
 
         lines.append("")
         lines.append("Your task:")
@@ -837,6 +935,46 @@ class DaemonManager:
 
         endpoint = getattr(service, "_base_url", None)
 
+        intrinsic_tool_names = set(self._daemon_intrinsic_surface()[1])
+
+        def _dispatch_daemon_tool(tc):
+            handler = dispatch.get(tc.name)
+            if handler is None:
+                from lingtai_kernel.types import UnknownToolError
+                raise UnknownToolError(tc.name)
+            args = dict(tc.args or {})
+            if tc.name in intrinsic_tool_names:
+                args["_tc_id"] = tc.id
+            return handler(args)
+
+        def _daemon_tool_logger(event_type: str, **fields) -> None:
+            tool_name = fields.get("tool_name") or fields.get("tool")
+            if event_type == "tool_call_normalized" and tool_name:
+                run_dir.set_current_tool(tool_name, fields.get("tool_args") or {})
+            elif event_type == "tool_result" and tool_name:
+                status = "error" if fields.get("status") == "error" else "ok"
+                run_dir.clear_current_tool(result_status=status)
+            self._log(
+                f"daemon_{event_type}",
+                em_id=em_id,
+                run_id=getattr(run_dir, "run_id", None),
+                **fields,
+            )
+
+        executor = ToolExecutor(
+            dispatch_fn=_dispatch_daemon_tool,
+            make_tool_result_fn=lambda name, result, **kw: service.make_tool_result(
+                name, result, **kw
+            ),
+            guard=LoopGuard(),
+            known_tools=set(dispatch),
+            parallel_safe_tools=set(),
+            logger_fn=_daemon_tool_logger,
+            meta_fn=lambda: build_meta(self._agent),
+            working_dir=self._agent._working_dir,
+            tool_call_guard=getattr(self._agent, "_tool_call_guard", None),
+        )
+
         def _accum(resp):
             if resp.usage is None:
                 return
@@ -865,27 +1003,23 @@ class DaemonManager:
                 # Intermediate text is already persisted in chat_history via
                 # bump_turn(); do not inject daemon progress as parent requests.
 
-                tool_results = []
-                for tc in response.tool_calls:
-                    handler = dispatch.get(tc.name)
-                    if handler is None:
-                        run_dir.set_current_tool(tc.name, tc.args or {})
-                        result = {"status": "error", "message": f"Unknown tool: {tc.name}"}
-                        run_dir.clear_current_tool(result_status="error")
-                    else:
-                        run_dir.set_current_tool(tc.name, tc.args or {})
-                        try:
-                            result = handler(tc.args or {})
-                            status = "error" if isinstance(result, dict) and result.get("status") == "error" else "ok"
-                            run_dir.clear_current_tool(result_status=status)
-                        except Exception as e:
-                            result = {"status": "error", "message": str(e)}
-                            run_dir.clear_current_tool(result_status="error")
-                    tool_results.append(
-                        service.make_tool_result(
-                            tc.name, result, tool_call_id=tc.id,
-                        )
+                executor.guard.record_calls(len(response.tool_calls))
+                tool_results, intercepted, intercept_text = executor.execute(
+                    response.tool_calls,
+                    api_call_id=getattr(response, "api_call_id", None),
+                )
+                executor.guard.clear_progress_notice()
+
+                if intercepted:
+                    # Preserve provider pairing by recording the synthesized tool
+                    # results, then terminate the daemon with the intercept text.
+                    run_dir.record_user_send(
+                        json.dumps([str(r) for r in tool_results], ensure_ascii=False),
+                        kind="tool_results",
                     )
+                    text = intercept_text or "[intercepted]"
+                    run_dir.mark_done(text)
+                    return text
 
                 # Tool results are written to chat_history before sending
                 run_dir.record_user_send(
@@ -1731,9 +1865,12 @@ class DaemonManager:
                 schemas, dispatch = self._build_tool_surface(
                     spec["tools"], preset_surface=preset_surface,
                 )
+                task_system_prompt = self._task_system_prompt(spec)
             except ValueError as e:
                 return {"status": "error", "message": str(e)}
-            system_prompt = self._build_emanation_prompt(spec["task"], schemas)
+            system_prompt = self._build_emanation_prompt(
+                spec["task"], schemas, system_prompt=task_system_prompt
+            )
 
             # Effective model for this emanation (preset overrides if present)
             effective_model = (resolved["llm"]["model"]
@@ -1816,7 +1953,13 @@ class DaemonManager:
         # run_dir or scheduling work, so a single bad spec refuses the whole
         # batch with a clear message instead of leaving half-spawned daemons.
         resolved_backend_argv: list[list[str]] = []
+        task_system_prompts: list[str | None] = []
         for i, spec in enumerate(tasks):
+            try:
+                task_system_prompts.append(self._task_system_prompt(spec))
+            except ValueError as e:
+                return {"status": "error",
+                        "message": f"tasks[{i}].system_prompt: {e}"}
             raw_opts = spec.get("backend_options")
             if raw_opts is None:
                 resolved_backend_argv.append([])
@@ -1845,7 +1988,14 @@ class DaemonManager:
             backend_argv = resolved_backend_argv[i]
             backend_options = spec.get("backend_options") or None
 
+            task_system_prompt = task_system_prompts[i]
             system_prompt = f"[{backend} backend — task delegated to external CLI]"
+            if task_system_prompt:
+                system_prompt += (
+                    "\n\nParent-provided daemon system prompt (oneshot):\n"
+                    + task_system_prompt
+                )
+            cli_task = self._compose_cli_task(spec["task"], task_system_prompt)
             try:
                 run_dir = DaemonRunDir(
                     parent_working_dir=self._agent._working_dir,
@@ -1898,7 +2048,7 @@ class DaemonManager:
                 run_fn = self._run_claude_code_emanation
             future = pool.submit(
                 run_fn,
-                em_id, run_dir, spec["task"],
+                em_id, run_dir, cli_task,
                 cancel_event, timeout_event,
                 backend_argv,
             )
