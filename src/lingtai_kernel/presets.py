@@ -71,6 +71,60 @@ def home_shortened(path: Path | str) -> str:
         return str(path)
 
 
+def _normalize_legacy_manifest_context_limit(
+    manifest: dict,
+    *,
+    preset_name: str,
+    preset_path: Path,
+) -> None:
+    """Accept legacy preset ``manifest.context_limit`` in memory.
+
+    ``context_limit`` is canonical under ``manifest.llm``.  Older saved presets
+    and hand-written files may still carry a root-level value; rejecting those
+    during refresh can leave an otherwise recoverable agent unable to boot.
+    Prefer the canonical ``manifest.llm.context_limit`` when both are present,
+    and remove the legacy root key before the normal validator runs.
+    """
+    if "context_limit" not in manifest:
+        return
+
+    root_ctx = manifest.pop("context_limit")
+    llm = manifest.setdefault("llm", {})
+    if not isinstance(llm, dict):
+        # The caller's existing manifest.llm validation will raise the precise
+        # schema error; keep this helper focused on the legacy root key.
+        return
+
+    llm_ctx = llm.get("context_limit")
+    if llm_ctx is None:
+        llm["context_limit"] = root_ctx
+        log.warning(
+            "preset %r (%s): migrated legacy manifest.context_limit to "
+            "manifest.llm.context_limit in memory",
+            preset_name,
+            preset_path,
+        )
+        return
+
+    if llm_ctx == root_ctx:
+        log.warning(
+            "preset %r (%s): dropped duplicate legacy manifest.context_limit "
+            "matching manifest.llm.context_limit",
+            preset_name,
+            preset_path,
+        )
+        return
+
+    log.warning(
+        "preset %r (%s): ignored conflicting legacy manifest.context_limit=%r; "
+        "using canonical manifest.llm.context_limit=%r",
+        preset_name,
+        preset_path,
+        root_ctx,
+        llm_ctx,
+    )
+
+
 def resolve_preset_name(name: str, working_dir: Path) -> Path:
     """Resolve a preset name (path string) to an absolute Path.
 
@@ -234,6 +288,8 @@ def load_preset(
     if not isinstance(manifest, dict):
         raise ValueError(f"preset {name!r} ({p}): missing or invalid 'manifest' object")
 
+    _normalize_legacy_manifest_context_limit(manifest, preset_name=name, preset_path=p)
+
     llm = manifest.get("llm")
     if not isinstance(llm, dict):
         raise ValueError(f"preset {name!r} ({p}): missing or invalid 'manifest.llm' object")
@@ -241,15 +297,10 @@ def load_preset(
     if not llm.get("provider") or not llm.get("model"):
         raise ValueError(f"preset {name!r} ({p}): manifest.llm requires non-empty 'provider' and 'model'")
 
-    # context_limit lives inside manifest.llm. Migration m001 relocated any
-    # legacy root-level placements; presets that still have it at the root
-    # are ambiguous (migration explicitly skips both-locations) or hand-edited
-    # regressions. Reject either case with a pointed error.
-    if "context_limit" in manifest:
-        raise ValueError(
-            f"preset {name!r} ({p}): context_limit must live inside "
-            f"manifest.llm, not at manifest root — move it under llm and retry"
-        )
+    # context_limit lives inside manifest.llm. The migration layer persists
+    # straightforward root-only legacy files; the in-memory compatibility layer
+    # above also tolerates duplicate/conflicting root keys so refresh/CPR can
+    # recover from old saved presets instead of failing before the agent boots.
     ctx_limit = llm.get("context_limit")
     if ctx_limit is not None and not isinstance(ctx_limit, int):
         raise ValueError(

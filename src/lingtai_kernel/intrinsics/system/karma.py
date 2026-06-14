@@ -133,6 +133,12 @@ def _cpr(agent, args: dict) -> dict:
     resuscitated = agent._cpr_agent(str(resolved))
     if resuscitated is None:
         return {"error": True, "message": "CPR not supported — no _cpr_agent handler"}
+    if isinstance(resuscitated, dict) and resuscitated.get("error"):
+        agent._log("karma_cpr_failed", target=address, message=resuscitated.get("message"))
+        return resuscitated
+    if resuscitated is False:
+        agent._log("karma_cpr_failed", target=address, message="_cpr_agent returned False")
+        return {"error": True, "message": "CPR failed"}
     agent._log("karma_cpr", target=address)
     return {"status": "resuscitated", "address": address}
 

@@ -650,14 +650,17 @@ class Agent(BaseAgent):
             "healthy": healthy,
         }
 
-    def _cpr_agent(self, address: str) -> "Agent | None":
+    def _cpr_agent(self, address: str) -> bool | dict | None:
         """Resuscitate a suspended agent by launching it as a detached process.
 
-        Uses the resolved venv Python to run `lingtai-agent run <dir>`.
-        The target must have init.json to boot from.
+        Uses the resolved venv Python to run `lingtai run <dir>`.  Success is
+        reported only after the target writes a fresh heartbeat; quick child
+        exits and startup timeouts are returned as explicit errors.
         """
+        import shlex
         import subprocess
-        from lingtai_kernel.handshake import is_agent, resolve_address
+        import time
+        from lingtai_kernel.handshake import is_agent, is_alive, resolve_address
         from lingtai.venv_resolve import resolve_venv, venv_python
 
         base_dir = self._working_dir.parent
@@ -686,15 +689,53 @@ class Agent(BaseAgent):
         python = venv_python(venv_dir)
         cmd = [python, "-m", "lingtai", "run", str(target)]
 
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-        self._log("cpr_launched", target=str(target), pid=proc.pid)
-        return True  # non-None signals success to the kernel
+        def _tail_log(limit: int = 4000) -> str:
+            try:
+                data = log_path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                return ""
+            return data[-limit:]
+
+        logs_dir = target / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        log_path = logs_dir / "cpr_relaunch.log"
+        timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        quoted_cmd = " ".join(shlex.quote(str(part)) for part in cmd)
+
+        with log_path.open("ab", buffering=0) as log_fh:
+            log_fh.write(f"\n--- CPR launch {timestamp}: {quoted_cmd} ---\n".encode("utf-8"))
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=log_fh,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+
+        self._log("cpr_launched", target=str(target), pid=proc.pid, log=str(log_path))
+
+        deadline = time.time() + 10.0
+        while time.time() < deadline:
+            if is_alive(target, threshold=3.0):
+                self._log("cpr_alive", target=str(target), pid=proc.pid)
+                return True
+            code = proc.poll()
+            if code is not None:
+                tail = _tail_log()
+                self._log("cpr_failed", target=str(target), pid=proc.pid, exit_code=code, log=str(log_path))
+                message = f"CPR launch exited before heartbeat (exit code {code}); see {log_path}"
+                if tail.strip():
+                    message += f"\n\nLast log output:\n{tail}"
+                return {"error": True, "message": message, "exit_code": code, "log": str(log_path)}
+            time.sleep(0.2)
+
+        self._log("cpr_timeout", target=str(target), pid=proc.pid, log=str(log_path))
+        return {
+            "error": True,
+            "message": f"CPR launch did not produce a fresh heartbeat within 10s (pid {proc.pid}); see {log_path}",
+            "pid": proc.pid,
+            "log": str(log_path),
+        }
 
     def start(self) -> None:
         super().start()

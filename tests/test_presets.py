@@ -269,14 +269,35 @@ def test_load_preset_relocates_legacy_root_context_limit(tmp_path):
     assert on_disk["manifest"]["llm"]["context_limit"] == 32768
 
 
-def test_load_preset_rejects_context_limit_at_manifest_root(tmp_path):
-    """Ambiguous preset (both locations populated) is skipped by migration
-    and rejected by the validator with a pointer to the canonical location.
-    """
+def test_load_preset_drops_duplicate_legacy_root_context_limit(tmp_path):
+    """Both locations with the same value are accepted in memory."""
     from lingtai_kernel.migrate.migrate import reset_process_cache
     reset_process_cache()
     p = {
         "name": "dup",
+        "description": _DESC,
+        "manifest": {
+            "llm": {"provider": "x", "model": "y", "context_limit": 32768},
+            "capabilities": {},
+            "context_limit": 32768,
+        },
+    }
+    f = tmp_path / "dup.json"
+    f.write_text(json.dumps(p))
+
+    loaded = load_preset(str(f))
+
+    assert preset_context_limit(loaded["manifest"]) == 32768
+    assert "context_limit" not in loaded["manifest"]
+
+
+def test_load_preset_conflicting_legacy_root_context_limit_preserves_llm(tmp_path):
+    """When both locations disagree, canonical manifest.llm wins."""
+    from lingtai_kernel.migrate.migrate import reset_process_cache
+    reset_process_cache()
+    p = {
+        "name": "dup",
+        "description": _DESC,
         "manifest": {
             "llm": {"provider": "x", "model": "y", "context_limit": 16384},
             "capabilities": {},
@@ -285,8 +306,12 @@ def test_load_preset_rejects_context_limit_at_manifest_root(tmp_path):
     }
     f = tmp_path / "dup.json"
     f.write_text(json.dumps(p))
-    with pytest.raises(ValueError, match="manifest.llm"):
-        load_preset(str(f))
+
+    loaded = load_preset(str(f))
+
+    assert preset_context_limit(loaded["manifest"]) == 16384
+    assert loaded["manifest"]["llm"]["context_limit"] == 16384
+    assert "context_limit" not in loaded["manifest"]
 
 
 def test_load_preset_rejects_non_integer_context_limit(tmp_path):

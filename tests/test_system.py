@@ -816,3 +816,37 @@ def test_presets_action_marks_unreachable_when_probe_fails(tmp_path, monkeypatch
     broken_path = str(plib / "broken.json")
     assert by_name[broken_path]["connectivity"]["status"] == "unreachable"
     assert "DNS fail" in by_name[broken_path]["connectivity"]["error"]
+
+
+# ---------------------------------------------------------------------------
+# CPR failure propagation
+# ---------------------------------------------------------------------------
+
+
+def test_cpr_propagates_launch_failure_instead_of_resuscitated(tmp_path):
+    """A failed CPR launch must not be reported as resuscitated."""
+    from lingtai_kernel.intrinsics.system.karma import _cpr
+
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / ".agent.json").write_text('{"admin": {}}')
+
+    class FakeAgent:
+        _admin = {"karma": True}
+        _working_dir = tmp_path / "self"
+
+        def __init__(self):
+            self.logs = []
+
+        def _cpr_agent(self, address):
+            return {"error": True, "message": "launch failed before heartbeat"}
+
+        def _log(self, event, **kwargs):
+            self.logs.append((event, kwargs))
+
+    agent = FakeAgent()
+    result = _cpr(agent, {"address": str(target)})
+
+    assert result["error"] is True
+    assert "launch failed" in result["message"]
+    assert any(event == "karma_cpr_failed" for event, _ in agent.logs)
