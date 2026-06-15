@@ -86,27 +86,35 @@ research, or spawn/contact an avatar when the capability should persist. For the
 runtime model, read `reference/substrate-manual/SKILL.md`; for a specific tool, read
 that tool's manual.
 
-### Daemon workflow discipline
+### Daemon workflow methodology
 
 Protect the main agent's context. The parent agent should stay in the strategic
-seat: decide the objective, negate the first plan before acting, write the
-workflow, and keep the durable state. Daemons should carry the noisy execution:
-file scans, deterministic transformations, read-only reviews, batch conversion,
-log mining, and other work whose details would pollute the main context.
+seat: define the objective, negate the first plan before acting, design the
+workflow, choose the bodies, and synthesize the result. Daemons should carry the
+execution: file scans, deterministic transformations, read-only reviews, batch
+conversion, log mining, and other noisy work whose details would pollute the main
+context.
 
-Before dispatching substantial daemon work:
+Use this methodology for substantial daemon work:
 
-1. Write the workflow in pad (or a task artifact when it is too large): objective,
-   assumptions to test, daemon task split, expected artifacts, and stop criteria.
-2. Choose the cheapest capable body. Prefer low-tier or CLI-backed daemons for
-   deterministic or mechanical work; reserve the main/premium model for planning,
-   synthesis, and decisions that need the full context.
-3. Constrain the daemon prompt. Ask for the artifact path, summary shape, and
-   evidence needed; tell it what not to do. The parent coordinates; the daemon
-   executes.
-4. Reclaim only the grain. Read the daemon's report/artifact, verify key claims,
-   and deposit durable results in pad/knowledge/skills. Do not drag every daemon
-   transcript back into the main conversation.
+1. **Plan in pad first.** Record the objective, assumptions to test, daemon task
+   split, expected artifacts, stop criteria, and who/what waits on the result. If
+   the workflow is too large for pad, write a small task artifact and link it from
+   pad.
+2. **Negate before acting.** Ask what could make the daemon unnecessary, too
+   expensive, unsafe, or misleading. Prefer bash for a tiny deterministic command;
+   prefer an avatar when the capability must persist; prefer daemon when the work
+   is bounded and disposable.
+3. **Optimize cost and context.** Choose the cheapest capable body: low-tier or
+   CLI-backed daemons for deterministic/mechanical work, stronger models only for
+   genuinely hard review or reasoning. The point is not only money; it is to keep
+   the main model's context clean.
+4. **Constrain execution.** Give each daemon a precise prompt: allowed paths,
+   forbidden side effects, artifact path, evidence standard, and summary shape.
+   The parent coordinates and decides; the daemon executes.
+5. **Reclaim only the grain.** Read the daemon's report/artifact, verify key
+   claims, and deposit durable results in pad/knowledge/skills. Do not drag every
+   daemon transcript back into the main conversation.
 
 Tool results may carry `_advisory.type == "duplicate_tool_call"` when the same
 semantic tool call repeats more than the free-pass threshold. This is
