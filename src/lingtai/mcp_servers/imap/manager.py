@@ -66,7 +66,7 @@ SCHEMA = {
                 "check: list recent envelopes from a folder (optional folder, n). "
                 "read: fetch full email by ID list (email_id=[id1, ...]). "
                 "You are encouraged to read multiple relevant or even all unread emails and think before acting. "
-                "reply: reply to an email (requires email_id, message; optional cc). "
+                "reply: reply to an email (requires email_id, message; optional cc, attachments). "
                 "search: server-side IMAP search (requires query, optional folder). "
                 "delete: delete email(s) by ID (email_id). "
                 "move: move email(s) to another folder (email_id, folder=destination). "
@@ -391,21 +391,30 @@ class IMAPMailManager:
     # Actions
     # ------------------------------------------------------------------
 
+    def _resolve_attachment_paths(self, raw_attachments: object) -> list[str]:
+        """Resolve tool-supplied attachment paths relative to the agent workdir."""
+        if not raw_attachments:
+            return []
+        if isinstance(raw_attachments, (str, Path)):
+            raw_items = [raw_attachments]
+        else:
+            raw_items = list(raw_attachments)
+
+        attachments: list[str] = []
+        for item in raw_items:
+            path = Path(item)
+            if not path.is_absolute():
+                path = self._working_dir / path
+            attachments.append(str(path))
+        return attachments
+
     def _send(self, args: dict, account: "IMAPAccount") -> dict:
         to_list = self._normalize_addresses(args.get("address"))
         subject = args.get("subject", "")
         message_text = args.get("message", "")
         cc = self._normalize_addresses(args.get("cc"))
         bcc = self._normalize_addresses(args.get("bcc"))
-        raw_attachments = args.get("attachments", [])
-
-        # Resolve attachment paths (relative -> absolute from working dir)
-        attachments: list[str] = []
-        for p in raw_attachments:
-            path = Path(p)
-            if not path.is_absolute():
-                path = self._working_dir / p
-            attachments.append(str(path))
+        attachments = self._resolve_attachment_paths(args.get("attachments", []))
 
         if not to_list:
             return {"error": "address is required"}
@@ -549,8 +558,9 @@ class IMAPMailManager:
         in_reply_to = orig_message_id
         references = (orig_references + " " + orig_message_id).strip()
 
-        # CC
+        # CC and attachments
         cc = self._normalize_addresses(args.get("cc"))
+        attachments = self._resolve_attachment_paths(args.get("attachments", []))
 
         # Reply to sender
         reply_to = original.get("from_address") or original.get("from", "")
@@ -559,6 +569,7 @@ class IMAPMailManager:
             subject=subject,
             body=message_text,
             cc=cc or None,
+            attachments=attachments or None,
             in_reply_to=in_reply_to or None,
             references=references or None,
         )
