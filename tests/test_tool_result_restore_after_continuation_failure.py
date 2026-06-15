@@ -16,8 +16,10 @@ import pytest
 from lingtai_kernel.base_agent.turn import (
     _process_response,
     _restore_tool_results_after_continuation_failure,
+    _tool_result_context,
 )
 from lingtai_kernel.llm.base import LLMResponse, ToolCall
+from lingtai_kernel.llm_utils import WorkerStillRunningError
 from lingtai_kernel.llm.interface import (
     ChatInterface,
     TextBlock,
@@ -227,6 +229,15 @@ class _FailingSession:
         raise RuntimeError("provider continuation failed")
 
 
+class _WorkerStillRunningSession:
+    def __init__(self) -> None:
+        self.sent = []
+
+    def send(self, content):
+        self.sent.append(content)
+        raise WorkerStillRunningError(elapsed=305.0, grace=5.0, agent_name="test")
+
+
 class _ContinuingSession:
     def __init__(self, chat: _FakeChat, responses: list[LLMResponse]) -> None:
         self.chat = chat
@@ -300,6 +311,80 @@ def test_process_response_restores_real_results_when_continuation_send_fails():
         {"result_count": 1},
     )
 
+
+def test_process_response_logs_predecessor_context_on_continuation_failure():
+    """When the post-tool LLM continuation fails, _process_response emits
+    post_tool_continuation_failed with predecessor tool names, count, and
+    approximate payload chars so operators can diagnose without grepping
+    raw interface entries."""
+    agent = _FakeAgent()
+    real_result = ToolResultBlock(
+        id="call_1",
+        name="bash",
+        content="exit_code=1\nstdout=timeout after 60s",
+    )
+    agent._executor = _ProcessExecutor(real_result)
+    agent._session = _FailingSession()
+    agent._cancel_event = threading.Event()
+    agent._on_tool_result_hook = None
+    agent._intermediate_text_streamed = True
+    agent._sent_tracker = _NoopSentTracker()
+    agent._working_dir = Path("/nonexistent/lingtai-test-predecessor-context")
+
+    response = LLMResponse(
+        text="",
+        tool_calls=[ToolCall(id="call_1", name="bash", args={"command": "find / -name .env"})],
+    )
+
+    with pytest.raises(RuntimeError, match="provider continuation failed"):
+        _process_response(agent, response, ledger_source="main")
+
+    failure_events = [
+        (name, fields) for name, fields in agent.logs
+        if name == "post_tool_continuation_failed"
+    ]
+    assert len(failure_events) == 1
+    _, fields = failure_events[0]
+    assert fields["ledger_source"] == "main"
+    assert fields["exception"] == "RuntimeError"
+    assert "provider continuation failed" in fields["error"]
+    assert fields["predecessor_tool_count"] == 1
+    assert fields["predecessor_tool_names"] == ["bash"]
+    assert fields["predecessor_payload_chars"] > 0
+
+
+
+def test_process_response_attaches_predecessor_context_to_worker_hang():
+    """A real WorkerStillRunningError raised by send(tool_results) carries
+    predecessor context to the outer run-loop handler."""
+    agent = _FakeAgent()
+    real_result = ToolResultBlock(
+        id="call_1",
+        name="bash",
+        content="Command timed out after 60s",
+    )
+    agent._executor = _ProcessExecutor(real_result)
+    agent._session = _WorkerStillRunningSession()
+    agent._cancel_event = threading.Event()
+    agent._on_tool_result_hook = None
+    agent._intermediate_text_streamed = True
+    agent._sent_tracker = _NoopSentTracker()
+    agent._working_dir = Path("/nonexistent/lingtai-test-worker-context")
+
+    response = LLMResponse(
+        text="",
+        tool_calls=[ToolCall(id="call_1", name="bash", args={"command": "sleep 999"})],
+    )
+
+    with pytest.raises(WorkerStillRunningError) as exc_info:
+        _process_response(agent, response, ledger_source="main")
+
+    exc = exc_info.value
+    assert exc.predecessor_tool_count == 1
+    assert exc.predecessor_tool_names == ["bash"]
+    assert exc.predecessor_payload_chars == len("Command timed out after 60s")
+    assert exc.ledger_source == "main"
+    assert any(name == "post_tool_continuation_failed" for name, _ in agent.logs)
 
 def test_process_response_third_identical_tool_error_still_continues(tmp_path):
     """The third identical tool error remains a normal tool-result continuation.
@@ -845,6 +930,28 @@ def test_tc_wake_legacy_path_restores_real_item_result_when_send_fails():
     ]
     assert len(restore_logs) == 1
     assert restore_logs[0] == {"result_count": 1}
+
+
+def test_tool_result_context_captures_str_payload():
+    """_tool_result_context returns tool name, count, and approximate payload chars."""
+    results = [
+        ToolResultBlock(id="c1", name="bash", content="exit_code=0\nstdout=hello world"),
+        ToolResultBlock(id="c2", name="system", content={"status": "ok"}),
+    ]
+    ctx = _tool_result_context(results)
+    assert ctx["predecessor_tool_count"] == 2
+    assert ctx["predecessor_tool_names"] == ["bash", "system"]
+    # str content len + json-encoded dict len > 0
+    assert ctx["predecessor_payload_chars"] > 0
+
+
+def test_tool_result_context_empty():
+    ctx = _tool_result_context([])
+    assert ctx == {
+        "predecessor_tool_count": 0,
+        "predecessor_tool_names": [],
+        "predecessor_payload_chars": 0,
+    }
 
 
 def test_codex_responses_wire_pairs_tail_orphan_with_synthetic_output():

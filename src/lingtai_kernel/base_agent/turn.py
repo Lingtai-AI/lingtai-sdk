@@ -129,6 +129,33 @@ def _tool_call_summary(tool_calls) -> dict:
     }
 
 
+def _tool_result_context(tool_results) -> dict:
+    """Extract diagnostic metadata from tool results before a continuation send.
+
+    Captures predecessor tool names, count, and approximate payload size so
+    callers can log this context if the continuation send fails.
+    """
+    results = list(tool_results or [])
+    names = [getattr(r, "name", None) for r in results]
+    payload_chars = 0
+    for r in results:
+        content = getattr(r, "content", None)
+        if isinstance(content, str):
+            payload_chars += len(content)
+        elif isinstance(content, dict):
+            try:
+                payload_chars += len(json.dumps(content))
+            except Exception:
+                payload_chars += len(str(content))
+        elif content is not None:
+            payload_chars += len(str(content))
+    return {
+        "predecessor_tool_count": len(results),
+        "predecessor_tool_names": names,
+        "predecessor_payload_chars": payload_chars,
+    }
+
+
 def _pending_tool_call_summary(iface) -> dict:
     entries = getattr(iface, "entries", None) or []
     tail = entries[-1] if entries else None
@@ -547,7 +574,26 @@ def _run_loop(agent) -> None:
                         # unsafe to mutate from this thread. Skip chat
                         # save and put the agent to sleep; a refresh will
                         # bring up a fresh interface.
-                        agent._log("llm_worker_still_running", error=err_desc[:300])
+                        worker_context = {
+                            "predecessor_tool_count": getattr(
+                                e, "predecessor_tool_count", None
+                            ),
+                            "predecessor_tool_names": getattr(
+                                e, "predecessor_tool_names", None
+                            ),
+                            "predecessor_payload_chars": getattr(
+                                e, "predecessor_payload_chars", None
+                            ),
+                            "ledger_source": getattr(e, "ledger_source", None),
+                        }
+                        worker_context = {
+                            k: v for k, v in worker_context.items() if v is not None
+                        }
+                        agent._log(
+                            "llm_worker_still_running",
+                            error=err_desc[:300],
+                            **worker_context,
+                        )
                         agent._set_state(AgentState.STUCK, reason=err_desc)
                         agent._asleep.set()
                         agent._set_state(
@@ -556,6 +602,48 @@ def _run_loop(agent) -> None:
                         )
                         sleep_state = AgentState.ASLEEP
                         skip_post_turn_save = True
+                        # Publish an operator-visible system notification so
+                        # the hung-worker condition is surfaced beyond the
+                        # log event.  Safe to write .notification/ here even
+                        # though ChatInterface is unsafe: _enqueue_system_notification
+                        # only touches the filesystem (system.json), not the
+                        # in-memory interface.
+                        try:
+                            from .messaging import _enqueue_system_notification
+
+                            tool_names = worker_context.get("predecessor_tool_names")
+                            tool_count = worker_context.get("predecessor_tool_count")
+                            payload_chars = worker_context.get("predecessor_payload_chars")
+                            predecessor_note = ""
+                            if tool_names:
+                                names = ", ".join(str(n) for n in tool_names)
+                                predecessor_note = f" Previous tools: {names}"
+                                if tool_count is not None:
+                                    predecessor_note += f" ({tool_count})."
+                                else:
+                                    predecessor_note += "."
+                            if payload_chars is not None:
+                                predecessor_note += (
+                                    f" Tool result payload: ~{payload_chars} chars."
+                                )
+                            _enqueue_system_notification(
+                                agent,
+                                source="kernel.llm_worker_hang",
+                                ref_id=f"llm_worker_hang:{getattr(e, 'elapsed', 0):.0f}s",
+                                body=(
+                                    "LLM worker thread did not settle after "
+                                    f"{getattr(e, 'elapsed', 0):.0f}s + "
+                                    f"{getattr(e, 'grace', 0):.0f}s grace."
+                                    f"{predecessor_note} "
+                                    "Agent is ASLEEP. Use /refresh to recover. "
+                                    "The LLM provider call may still be in flight."
+                                ),
+                            )
+                        except Exception as _notif_err:
+                            agent._log(
+                                "llm_worker_still_running_notification_failed",
+                                error=(str(_notif_err) or repr(_notif_err))[:200],
+                            )
                         break
 
                     # Issue #144: over-window / context-pressure errors must
@@ -1436,9 +1524,10 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
             }
 
         in_tool_loop = True
+        _ctx = _tool_result_context(tool_results)
         try:
             response = agent._session.send(tool_results)
-        except Exception:
+        except Exception as _send_exc:
             # The local tools have already executed and returned results; only
             # the post-tool LLM continuation failed. Some adapters append tool
             # results as part of send(tool_results) and roll that user entry
@@ -1447,6 +1536,16 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
             # completion notice and the real result payload is lost. Restore the
             # real results before re-raising so recovery paths preserve truthful
             # tool completion state.
+            agent._log(
+                "post_tool_continuation_failed",
+                ledger_source=ledger_source,
+                error=(str(_send_exc) or repr(_send_exc))[:300],
+                exception=type(_send_exc).__name__,
+                **_ctx,
+            )
+            for _key, _value in _ctx.items():
+                setattr(_send_exc, _key, _value)
+            setattr(_send_exc, "ledger_source", ledger_source)
             _restore_tool_results_after_continuation_failure(
                 agent, tool_results, ledger_source=ledger_source,
             )

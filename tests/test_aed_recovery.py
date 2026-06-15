@@ -79,6 +79,52 @@ def test_run_loop_skips_chat_history_save_after_worker_still_running(tmp_path, m
     assert not (tmp_path / ".llm_hang").exists()
 
 
+def test_run_loop_publishes_system_notification_on_worker_still_running(tmp_path, monkeypatch):
+    """When WorkerStillRunningError fires, the run loop publishes an operator-
+    visible system notification so the hung-worker condition is surfaced
+    beyond the log event and operators don't have to grep events.jsonl."""
+    import json
+    agent = _make_run_loop_agent(tmp_path)
+
+    def fake_handle(_agent, _msg):
+        exc = WorkerStillRunningError(elapsed=305.0, grace=5.0, agent_name="test")
+        exc.predecessor_tool_count = 1
+        exc.predecessor_tool_names = ["bash"]
+        exc.predecessor_payload_chars = 42
+        exc.ledger_source = "main"
+        raise exc
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+
+    import lingtai_kernel.intrinsics.soul.flow as soul_flow
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+
+    turn._run_loop(agent)
+
+    notif_path = tmp_path / ".notification" / "system.json"
+    assert notif_path.exists(), "Expected .notification/system.json to be written after WorkerStillRunningError"
+    notif = json.loads(notif_path.read_text(encoding="utf-8"))
+    events = notif.get("data", {}).get("events", [])
+    assert len(events) == 1
+    ev = events[0]
+    assert ev["source"] == "kernel.llm_worker_hang"
+    assert "305" in ev["ref_id"] or "305" in ev["body"]
+    assert "Previous tools: bash (1)" in ev["body"]
+    assert "~42 chars" in ev["body"]
+    assert "ASLEEP" in ev["body"]
+    assert "/refresh" in ev["body"]
+    # Log event must also be present, with the same predecessor context.
+    worker_logs = [
+        fields for name, fields in agent._logs
+        if name == "llm_worker_still_running"
+    ]
+    assert worker_logs
+    assert worker_logs[0]["predecessor_tool_names"] == ["bash"]
+    assert worker_logs[0]["predecessor_tool_count"] == 1
+    assert worker_logs[0]["predecessor_payload_chars"] == 42
+    assert worker_logs[0]["ledger_source"] == "main"
+
+
 # ---------------------------------------------------------------------------
 # AED transient provider retry
 # ---------------------------------------------------------------------------
@@ -119,6 +165,9 @@ def _make_run_loop_agent(tmp_path):
     agent.inbox.put(_make_message(MSG_REQUEST, "human", "go"))
     agent._preset_fallback_attempted = False
     agent._can_fallback_preset = lambda: False
+    # Required by _enqueue_system_notification when WorkerStillRunningError fires.
+    agent._system_notification_lock = threading.Lock()
+    agent._wake_nap = lambda _reason: None
     return agent
 
 
