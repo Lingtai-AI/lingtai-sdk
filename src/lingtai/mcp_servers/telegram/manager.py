@@ -26,6 +26,8 @@ import logging
 import threading
 import time
 
+from lingtai_kernel.trace_redaction import redact_text
+
 if TYPE_CHECKING:
     from .service import TelegramService
 
@@ -514,8 +516,11 @@ class TelegramManager:
             )
         except Exception as exc:
             log.warning("_build_conversation_preview failed: %s", exc)
-            preview = text[:300].replace("\n", " ")
-            if len(text) > 300:
+            # Redact before truncating so a credential crossing the 300-char
+            # boundary cannot leak as an unrecognized prefix (issue #134).
+            redacted_text = redact_text(text).replace("\n", " ")
+            preview = redacted_text[:300]
+            if len(redacted_text) > 300:
                 preview += "..."
 
         log.info(
@@ -754,7 +759,9 @@ class TelegramManager:
             if m.get("media"):
                 media_type = m["media"].get("type", "media")
                 text = text or f"[{media_type}]"
-            text_display = text.replace("\n", " ")
+            # Redact credential-shaped substrings before the preview enters the
+            # agent notification body, context, and persisted logs (issue #134).
+            text_display = redact_text(text).replace("\n", " ")
 
             line = f"[{rel}] #{cid} {sender}: {text_display}"
             lines.append(line)
@@ -772,8 +779,9 @@ class TelegramManager:
                         orig_text = (
                             orig.get("text", "") or orig.get("callback_query", "") or ""
                         )
-                        orig_snippet = orig_text[:50]
-                        if len(orig_text) > 50:
+                        redacted_orig = redact_text(orig_text)
+                        orig_snippet = redacted_orig[:50]
+                        if len(redacted_orig) > 50:
                             orig_snippet += "…"
                         lines.append(
                             f"  ↳ [{orig_rel}] #{reply_compound}: {orig_snippet}"
