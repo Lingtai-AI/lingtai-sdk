@@ -16,6 +16,12 @@ into the agent's inbox. The contract:
         "wake": true,                 // optional, default true
         "received_at": "ISO 8601"     // optional, kernel fills in if missing
       }
+- Direction (optional): a producer may tag an event as outgoing/bot-sent via
+  ``"_direction": "outgoing"`` (or ``"direction"`` / boolean ``"from_me"``),
+  at the top level or inside ``metadata``. Outgoing events are excluded from
+  the human-message classification used for the ``[HUMAN]`` priority hint
+  (issue #170 Part C). Absence of any marker means inbound (no behavior
+  change for legacy producers).
 - The kernel polls all subdirs at the same cadence as the mailbox listener
   (0.5s), validates each file, dispatches to the agent's inbox via
   _make_message, calls _wake_nap when wake=true, and deletes the file.
@@ -148,6 +154,42 @@ def _format_notification_summary(mcp_name: str, count: int, has_human_messages: 
         f"{count} unread message{plural}{priority_hint}. "
         f"Call the MCP's read/check action to fetch."
     )
+
+
+def _is_outgoing_event(event: dict) -> bool:
+    """Return True when a LICC event represents an outgoing/bot-sent message.
+
+    Issue #170 (Part C): a surfaced outgoing or bot-echo message can carry a
+    username-like ``from`` value, which would otherwise flip
+    ``has_human_messages`` and emit a misleading ``[HUMAN]`` / ``[NEW]``
+    priority hint (``inbox.py`` summary, ``manager.py`` ``_direction``).
+
+    Messaging MCPs (telegram, wechat, feishu) already tag direction with the
+    ``_direction`` convention (``"outgoing"`` / ``"incoming"``). We honor that
+    signal here whether it appears at the top level of the event or inside the
+    optional ``metadata`` dict, plus the boolean ``from_me`` alias some
+    producers use. Strictly additive and fail-open: a legacy event without any
+    direction marker is treated as inbound, so existing producers are
+    unaffected and no genuine human message is ever suppressed.
+    """
+    # Top-level direction marker (``_direction``/``direction``).
+    for key in ("_direction", "direction"):
+        val = event.get(key)
+        if isinstance(val, str) and val.strip().lower() == "outgoing":
+            return True
+    # Boolean alias.
+    if event.get("from_me") is True:
+        return True
+    # Same markers carried inside the optional metadata dict.
+    meta = event.get("metadata")
+    if isinstance(meta, dict):
+        for key in ("_direction", "direction"):
+            val = meta.get(key)
+            if isinstance(val, str) and val.strip().lower() == "outgoing":
+                return True
+        if meta.get("from_me") is True:
+            return True
+    return False
 
 
 def _extract_preview_meta(event: dict) -> dict:
@@ -385,7 +427,11 @@ def _scan_once(agent: "BaseAgent", inbox_root: Path) -> int:
             # Issue #47: Detect human messages
             # Human messages come from messaging MCPs (telegram, email, feishu, wechat)
             # and have a "from" field that looks like a username (not a system sender)
-            if not has_human_messages:
+            # Issue #170 (Part C): exclude outgoing/bot-sent messages. A surfaced
+            # outgoing echo can carry a username-like ``from`` value, so the
+            # ``from`` heuristic alone would misclassify it as a new human
+            # message. Honor the producer's direction signal first.
+            if not has_human_messages and not _is_outgoing_event(event):
                 sender = event.get("from", "")
                 # Check if this is a human message (not from system/soul/etc.)
                 # Human senders typically have usernames or first names
