@@ -459,8 +459,6 @@ def get_schema(lang: str = "en") -> dict:
                 "type": "string",
                 "enum": [
                     "lingtai",
-                    "claude",
-                    "claude-interactive",
                     "claude-p",
                     "claude-code",
                     "codex",
@@ -475,7 +473,6 @@ def get_schema(lang: str = "en") -> dict:
                 ],
                 "description": (
                     "Execution backend: 'lingtai' (default — parallel LLM reasoning, uses your current model), "
-                    "'claude' / 'claude-interactive' (experimental interactive Claude Code PTY backend), "
                     "'claude-p' (Claude Code print-mode backend; 'claude-code' is a compatibility alias), "
                     "'codex' (coding tasks via OpenAI Codex CLI), "
                     "'opencode' (multi-provider open-source agent via the opencode-ai CLI), "

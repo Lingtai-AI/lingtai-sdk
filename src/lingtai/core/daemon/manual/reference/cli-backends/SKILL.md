@@ -2,10 +2,10 @@
 name: daemon-cli-backends
 description: >
   Nested daemon-manual reference for daemon API details and CLI backends:
-  daemon(action=list), claude/claude-p/codex/opencode behavior,
+  daemon(action=list), claude-p/codex/opencode behavior,
   backend_options flag passing, preset/capability inheritance, and Codex modal
   capabilities.
-version: 1.2.0
+version: 1.3.0
 ---
 
 # Daemon CLI Backend Reference
@@ -62,12 +62,20 @@ The `backend` parameter selects the execution engine for emanations. Default is
 `lingtai` (the built-in ChatSession loop). External CLI backends are also
 available:
 
+For Claude Code daemon work, use the print-mode backend `claude-p` (alias
+`claude-code`). The legacy interactive PTY/TUI backend (`claude` /
+`claude-interactive`) is **no longer a user-selectable backend** — it is hidden
+from the daemon schema enum and description. Do not select it for new work; it
+proved unreliable under the daemon watchdog (mid-exploration SIGTERM / exit code
+143). The print-mode backend covers the same Claude Code use cases without
+driving a TUI. The interactive code path remains in the tree only so older
+callers and stored daemon entries that recorded `backend="claude"` keep
+resolving.
+
 | Backend | CLI command | Session resume | Notes |
 |---------|-------------|----------------|-------|
 | `lingtai` | (built-in) | N/A — in-process `ask` | Default. Uses preset resolution, tool surface curation, model routing. |
-| `claude` | interactive `claude --settings <hook-json> --append-system-prompt-file <managed-prompt>` under a PTY, cwd under `~/.lingtai-claude/runs/<run_id>/worktree` | interactive `claude --resume <claude_session_id> --settings <hook-json> --append-system-prompt-file <managed-prompt>` via `ask` (async) | Experimental interactive Claude Code backend. LingTai drives the TUI through a PTY, creates a LingTai-managed ephemeral workspace, injects a managed system prompt, answers terminal probes, uses `SessionStart`/`Stop` hooks for synchronization, and reads Claude's transcript JSONL for the daemon result. It does **not** directly edit Claude global config, auto-login, handle MFA/tokens, automate `claude.ai/code`, or auto-trust arbitrary workspaces. It may auto-select Claude's workspace trust prompt only for the verified LingTai-managed workspace. |
-| `claude-interactive` | same as `claude` | same as `claude` | Compatibility/descriptive alias for `claude`. Prefer `claude` for new calls unless you want the explicit experimental name in artifacts. |
-| `claude-p` | `claude --print --dangerously-skip-permissions --output-format stream-json --verbose --name <em_id> <task>` | `claude --resume <claude_session_id> --print ...` via `ask` (async — returns immediately, reply arrives via notification / `check`) | Explicit name for the existing print-mode Claude Code backend. Session ID is captured from stream-json output, so `ask` is usable as soon as `emanate` returns. |
+| `claude-p` | `claude --print --dangerously-skip-permissions --output-format stream-json --verbose --name <em_id> <task>` | `claude --resume <claude_session_id> --print ...` via `ask` (async — returns immediately, reply arrives via notification / `check`) | Print-mode Claude Code backend (the recommended Claude backend). Wraps Claude Code's official `--print`/stream-json mode. Session ID is captured from stream-json output, so `ask` is usable as soon as `emanate` returns. |
 | `claude-code` | same as `claude-p` | same as `claude-p` | Backward-compatible alias retained for existing callers and stored daemon entries. |
 | `codex` | `codex exec --json --dangerously-bypass-approvals-and-sandbox <task>` | `codex exec resume <codex_session_id>` via `ask` (async — returns immediately, reply arrives via notification / `check`) | Mirrors the print-mode Claude backend. `thread.started` event carries the session id (codex internally calls it `thread_id`), captured immediately. `ask` resumes the same conversation context. |
 | `opencode` | `opencode run --format json <prompt>` | `opencode run --session <opencode_session_id> ...` via `ask` (async) | Uses opencode's session id/event vocabulary. |
@@ -113,15 +121,17 @@ agent runtime's tool surface (for example Claude Code's built-in file editing or
 Codex's sandboxed execution) rather than the LingTai emanation's curated tool
 set. `mimocode`/`mimo`, `qwen-code`/`qwen`, and `oh-my-pi`/`omp` are accepted as canonical backend names plus short aliases; persisted daemon entries use the canonical name.
 
-**Claude backend naming:** `claude` is the interactive PTY/TUI backend. It
-runs Claude Code in a LingTai-created managed workspace instead of the parent
-agent directory. `claude-p` is the print-mode backend that wraps Claude Code's
-official `--print`/stream-json mode. `claude-code` remains a compatibility alias
-for `claude-p` so older calls and persisted daemon entries keep working.
+**Claude backend naming:** Select `claude-p` for Claude Code daemon work; it is
+the print-mode backend that wraps Claude Code's official `--print`/stream-json
+mode. `claude-code` remains a compatibility alias for `claude-p` so older calls
+and persisted daemon entries keep working. The interactive PTY/TUI names
+(`claude` / `claude-interactive`) are hidden from the daemon schema and are not
+user-selectable; only existing stored entries still resolve through them.
 
-**Claude Code auth environment hygiene.** All Claude backends (`claude`,
-`claude-interactive`, `claude-p`, and compatibility `claude-code`) start
-`claude` with auth override variables stripped from the subprocess environment.
+**Claude Code auth environment hygiene.** The print-mode Claude backend
+(`claude-p` / compatibility `claude-code`) — and the hidden legacy interactive
+path it shares code with — start `claude` with auth override variables stripped
+from the subprocess environment.
 This includes `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` (which force API
 billing; GH #107) and `CLAUDE_CODE_OAUTH_TOKEN` (a stale inherited token can
 override a refreshed `~/.claude/.credentials.json` and appear as a false
@@ -159,21 +169,7 @@ each backend reserves its own harness-owned flags (e.g. Oh-My-Pi reserves
 reserved flag in `backend_options` refuses the whole batch with a clear error.
 
 ```jsonc
-// Interactive Claude backend
-{
-  "action": "emanate",
-  "backend": "claude",
-  "tasks": [{
-    "task": "Refactor auth.py for clarity.",
-    "tools": [],
-    "backend_options": {
-      "model": "claude-opus-4-7",
-      "managed_worktree_from": "/absolute/path/to/source/repo"
-    }
-  }]
-}
-
-// Print-mode Claude backend
+// Print-mode Claude backend (the recommended Claude backend)
 {
   "action": "emanate",
   "backend": "claude-p",
@@ -228,29 +224,12 @@ cap to the *full* task (explore + act + verify), not to a single edit, and prefe
 leaving `max_turns` unset over guessing low. Treat a 143 exit with a short
 transcript as "I starved it," not "the model failed."
 
-**Claude reserved flags:** Claude daemon backends own their execution mode.
-`backend_options` cannot override harness-owned flags such as `--settings`,
-`--print`, `--output-format`, or (for interactive `claude`) the managed system
-prompt flags `--append-system-prompt` / `--append-system-prompt-file`; attempts
-are rejected before spawn. Interactive `claude` must keep LingTai's inline hook
-settings and managed prompt, while `claude-p` must keep stream-json output so
-daemon progress/result extraction remains reliable.
-
-**Interactive Claude managed workspace:** `backend="claude"` always starts in
-`~/.lingtai-claude/runs/<run_id>/worktree` (or the test-only
-`LINGTAI_CLAUDE_MANAGED_ROOT` override). By default this is an empty managed
-workspace. If the task needs repository files, pass
-`backend_options: {"managed_worktree_from": "/absolute/path/to/git/repo"}`; the
-bridge consumes that LingTai-owned option, creates a detached git worktree from
-that repo's `HEAD` at the managed workspace path, and does not forward the option
-to Claude. The source must be inside a git repository. Claude sees the managed
-workspace cwd plus a LingTai-managed system prompt that forbids credential
-handling, global config mutation, and writes outside the managed workspace.
-
-Because the cwd is created and verified under the LingTai managed runs root, the
-interactive backend may answer Claude Code's workspace trust prompt with the
-trust option for that workspace only. It still refuses login/onboarding prompts
-and refuses workspace trust prompts outside the verified managed root.
+**Claude reserved flags:** The `claude-p` daemon backend owns its execution mode.
+`backend_options` cannot override harness-owned flags such as `--print` or
+`--output-format`; attempts are rejected before spawn. `claude-p` must keep
+stream-json output so daemon progress/result extraction remains reliable. (The
+hidden legacy interactive `claude` path also reserves `--settings` and the
+managed system-prompt flags, but that backend is no longer user-selectable.)
 
 **When it applies:** `backend_options` is honored only at `emanate` time (when
 the CLI session is first spawned). `daemon(action="ask", ...)` reuses the
@@ -269,12 +248,10 @@ it to.
 
 ## Progress, resume, and `ask`
 
-**Working directory:** Most CLI backends run in the parent agent's working
+**Working directory:** CLI backends run in the parent agent's working
 directory (`_working_dir`), not in the emanation's `daemons/em-N-*/` folder. The
-interactive `claude` backend is the exception: it runs in the per-run managed
-workspace under `~/.lingtai-claude/runs/<run_id>/worktree`. The `daemons/` folder
-still tracks daemon state (`daemon.json`, logs) and terminal output
-(`result.txt`).
+`daemons/` folder still tracks daemon state (`daemon.json`, logs) and terminal
+output (`result.txt`).
 
 **Progress delivery:** CLI stdout/stderr and parsed transcript events are
 persisted to the run directory as `cli_output` events and
@@ -298,31 +275,12 @@ is drained by the in-process run loop.
 
 ## Backend-specific observability
 
-**Interactive Claude (`claude`).** The daemon writes extra fields to
-`daemon.json`:
-
-- `claude_session_id`: captured from hook payloads or transcript rows.
-- `claude_interactive_transcript_path`: Claude's transcript JSONL path from the
-  `Stop` hook.
-- `claude_interactive_raw_pty_log`: raw ANSI PTY log for debugging terminal
-  startup/hangs, written under the managed run root's `harness/` folder.
-- `claude_interactive_prompt_sent`: set once the daemon pasted the task after
-  `SessionStart`.
-- `claude_interactive_cwd`: the Claude process cwd (the managed workspace).
-- `claude_interactive_managed_root`: per-run managed root.
-- `claude_interactive_managed_worktree`: managed workspace path.
-- `claude_interactive_managed_source`: git root used to create the detached
-  worktree, or `null` for an empty managed workspace.
-- `claude_interactive_managed_source_request`: explicit `managed_worktree_from`
-  request, when provided.
-- `claude_interactive_system_prompt`: path to LingTai's managed system prompt.
-- `claude_interactive_auto_trust`: currently `managed-workspace-only`.
-- `claude_interactive_managed_trust_answered`: set only if the backend answered a
-  Claude workspace trust prompt inside the verified managed workspace.
-
-If the backend appears to be waiting for login/onboarding, or for workspace trust
-outside the verified managed root, LingTai records a stderr warning and
-fails/terminates rather than handling credentials or trusting arbitrary folders.
+**Legacy interactive Claude (`claude` — hidden, not user-selectable).** This
+backend is no longer offered in the daemon schema. Older stored runs may still
+carry `claude_interactive_*` fields in `daemon.json` (managed-workspace path,
+transcript path, raw PTY log, trust-answer flag, etc.); they are kept only for
+forensics on historical runs. Do not start new emanations on this backend — use
+`claude-p`.
 
 **Print-mode Claude (`claude-p` / `claude-code`).** `claude_session_id` is set on
 the first stream-json event that carries a session id (typically the system

@@ -143,13 +143,22 @@ def _write_fake_claude(bin_dir: Path, transcript_text: str = "fake interactive a
     return fake
 
 
-def test_schema_exposes_interactive_and_print_mode_claude_backends():
+def test_schema_hides_interactive_claude_backends_keeps_print_mode():
+    # The legacy interactive Claude Code backend (claude / claude-interactive)
+    # is no longer a user-selectable daemon backend: hidden from the enum and
+    # the human-facing description. Print mode (claude-p / claude-code) stays.
     backend = get_schema()["properties"]["backend"]
-    assert "claude" in backend["enum"]
-    assert "claude-interactive" in backend["enum"]
+    assert "claude" not in backend["enum"]
+    assert "claude-interactive" not in backend["enum"]
     assert "claude-p" in backend["enum"]
     # Backward compatibility for existing callers and stored daemon entries.
     assert "claude-code" in backend["enum"]
+
+    desc = backend["description"]
+    assert "claude-interactive" not in desc
+    assert "interactive" not in desc.lower()
+    assert "claude-p" in desc
+    assert "claude-code" in desc
 
 
 def test_emanate_claude_dispatches_interactive_runner(tmp_path):

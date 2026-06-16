@@ -43,7 +43,7 @@ files, not standalone top-level skills.
 - name: daemon-cli-backends
   location: reference/cli-backends/SKILL.md
   description: |
-    Daemon API details and CLI backends: daemon(action=list), claude/claude-p/codex/opencode behavior,
+    Daemon API details and CLI backends: daemon(action=list), claude-p/codex/opencode behavior,
     backend_options flag passing, preset/capability inheritance, and Codex
     modal capabilities.
 - name: daemon-cleanup
@@ -59,7 +59,7 @@ files, not standalone top-level skills.
 |---|---|
 | Find an emanation's folder; inspect `daemon.json`, transcript, token ledger, event log; understand result paths or token attribution | `reference/forensics/SKILL.md` |
 | Decide whether a daemon is stuck; choose when to list/check/tail; avoid polling too often; set a reminder before resting | `reference/inspection/SKILL.md` |
-| Use `daemon(action="list")`; choose `lingtai` vs `claude`/`claude-p`/`codex`/`opencode`; pass `backend_options`; understand CLI backend limitations | `reference/cli-backends/SKILL.md` |
+| Use `daemon(action="list")`; choose `lingtai` vs `claude-p`/`codex`/`opencode`; pass `backend_options`; understand CLI backend limitations | `reference/cli-backends/SKILL.md` |
 | Retire or audit old daemon artifacts; understand what `reclaim` does and does not delete; scope boundaries | `reference/cleanup/SKILL.md` |
 
 ## Quick decision tree
