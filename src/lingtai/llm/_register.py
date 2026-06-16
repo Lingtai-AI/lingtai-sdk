@@ -110,6 +110,23 @@ def register_all_adapters() -> None:
 
     LLMService.register_adapter("mimo", _mimo)
 
+    def _claude_agent_sdk(*, model=None, defaults=None, **kw):
+        # Experimental clean-room provider. The Claude Agent SDK authenticates
+        # through the local Claude CLI login (no per-request API key), so the
+        # env-resolved key and base_url are ignored.
+        from .claude_agent_sdk.adapter import ClaudeAgentSDKAdapter
+        kw.pop("api_key", None)
+        kw.pop("base_url", None)
+        adapter_kw: dict = {}
+        if model:
+            adapter_kw["model"] = model
+        if kw.get("max_rpm"):
+            adapter_kw["max_rpm"] = kw["max_rpm"]
+        return ClaudeAgentSDKAdapter(**adapter_kw)
+
+    for name in ("claude-agent-sdk", "claude_agent_sdk"):
+        LLMService.register_adapter(name, _claude_agent_sdk)
+
     # Providers routed through the generic custom adapter
     for name in ("grok", "qwen", "kimi"):
         LLMService.register_adapter(name, _custom)
