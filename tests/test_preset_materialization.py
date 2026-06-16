@@ -548,6 +548,100 @@ def test_refresh_preset_keeps_daemon_override_in_manager(tmp_path, monkeypatch):
     assert mgr._handle_list()["max_emanations"] == 30
 
 
+
+def test_refresh_preset_omitting_mcp_keeps_channel_reply_surface(tmp_path, monkeypatch):
+    """Regression for Lingtai-AI/lingtai#235.
+
+    A saved LLM preset may omit ``mcp`` from ``manifest.capabilities``.  When
+    the agent still has configured channel MCPs in init.json, refresh must not
+    strand it with a notification producer but no way to read/reply.  The core
+    floor keeps the ``mcp`` management tool available, intrinsics keep
+    ``email``/``psyche`` available, and init.json MCPs still load into the live
+    tool surface after preset materialization.
+    """
+    from unittest.mock import MagicMock
+
+    from lingtai.agent import Agent
+    from lingtai_kernel.config import AgentConfig
+
+    plib = _make_preset_lib(tmp_path, {
+        "codex": {
+            "name": "codex",
+            "description": {"summary": "codex preset without channel caps"},
+            "manifest": {
+                "llm": {
+                    "provider": "deepseek",
+                    "model": "deepseek-v4-flash",
+                    "api_key": None,
+                    "api_key_env": "DEEPSEEK_API_KEY",
+                },
+                # Deliberately no mcp/email/psyche entries, matching the
+                # stranding incident described in #235.
+                "capabilities": {"file": {}},
+            },
+        },
+    })
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    wd = _make_workdir(
+        tmp_path,
+        active_preset=str(plib / "codex.json"),
+        manifest_extra={"capabilities": {"file": {}}},
+    )
+
+    init_path = wd / "init.json"
+    init_data = json.loads(init_path.read_text(encoding="utf-8"))
+    init_data["mcp"] = {
+        "telegram": {
+            "type": "stdio",
+            "command": "python",
+            "args": ["-m", "fake_telegram_mcp"],
+            "env": {},
+        }
+    }
+    init_path.write_text(json.dumps(init_data), encoding="utf-8")
+    (wd / "mcp_registry.jsonl").write_text(
+        json.dumps({
+            "name": "telegram",
+            "summary": "Telegram channel producer",
+            "transport": "stdio",
+            "command": "python",
+            "args": ["-m", "fake_telegram_mcp"],
+            "source": "test",
+        }) + "\n",
+        encoding="utf-8",
+    )
+
+    class FakeClient:
+        def close(self):
+            pass
+
+        def is_connected(self):
+            return True
+
+    def fake_connect_mcp(self, command, args=None, env=None):
+        self.add_tool("telegram", schema={}, handler=lambda _args: {"status": "ok"})
+        if not hasattr(self, "_mcp_clients"):
+            self._mcp_clients = []
+        self._mcp_clients.append(FakeClient())
+        return ["telegram"]
+
+    monkeypatch.setattr(Agent, "connect_mcp", fake_connect_mcp)
+
+    svc = MagicMock()
+    svc.provider = "mock"
+    svc.model = "mock-model"
+    svc.create_session = MagicMock()
+    svc.make_tool_result = MagicMock()
+    agent = Agent(svc, working_dir=wd, capabilities=[], config=AgentConfig())
+
+    agent._setup_from_init()
+
+    assert "email" in agent._intrinsics
+    assert "psyche" in agent._intrinsics
+    assert "mcp" in agent._tool_handlers
+    assert "telegram" in agent._tool_handlers
+    assert "telegram" in getattr(agent, "_mcp_init_specs", {})
+
 def test_materialize_inherit_expansion_runs(tmp_path, monkeypatch):
     """Capabilities with provider:inherit get the main LLM's provider after materialization."""
     plib = _make_preset_lib(tmp_path, {
