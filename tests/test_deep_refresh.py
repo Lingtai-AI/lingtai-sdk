@@ -36,6 +36,7 @@ def _make_init(
     covenant: str = "",
     principle: str = "",
     memory: str = "",
+    prompt: str = "",
 ) -> dict:
     """Build a minimal valid init.json dict."""
     data = {
@@ -61,7 +62,7 @@ def _make_init(
         "principle": principle,
         "covenant": covenant,
         "pad": memory,
-        "prompt": "",
+        "prompt": prompt,
         "soul": "",
     }
     if addons:
@@ -184,6 +185,65 @@ def test_cli_build_agent_uses_refresh(tmp_path):
 
     # Cleanup
     agent._workdir.release_lock()
+
+
+def test_init_prompt_becomes_base_prompt_before_dynamic_sections(tmp_path):
+    """init.json prompt is the resident/base prompt, not a static section."""
+    init = _make_init(
+        capabilities={"read": {}},
+        covenant="Covenant text.",
+        prompt="SPEDAS resident scientist prompt.",
+    )
+    agent = _make_agent(tmp_path, init)
+
+    agent._setup_from_init()
+    prompt = agent._build_system_prompt()
+
+    assert "SPEDAS resident scientist prompt." in prompt
+    assert "## prompt" not in prompt
+    assert "## covenant" in prompt
+    assert "## tools" in prompt
+    assert prompt.index("SPEDAS resident scientist prompt.") < prompt.index("## covenant")
+    assert prompt.index("SPEDAS resident scientist prompt.") < prompt.index("## tools")
+
+    batches = agent._build_system_prompt_batches()
+    batched_prompt = "\n\n".join(batches)
+    assert "SPEDAS resident scientist prompt." in batched_prompt
+    assert "## prompt" not in batched_prompt
+    assert "## tools" in batched_prompt
+    assert batched_prompt.index("SPEDAS resident scientist prompt.") < batched_prompt.index("## covenant")
+    assert batched_prompt.index("SPEDAS resident scientist prompt.") < batched_prompt.index("## tools")
+
+
+def test_init_prompt_file_becomes_base_prompt(tmp_path):
+    """prompt_file resolves to the same resident/base prompt surface."""
+    prompt_file = tmp_path / "resident.md"
+    prompt_file.write_text("Resident prompt from file.", encoding="utf-8")
+    init = _make_init(capabilities={"read": {}})
+    init.pop("prompt")
+    init["prompt_file"] = str(prompt_file)
+    (tmp_path / "init.json").write_text(json.dumps(init))
+    agent = _make_agent(tmp_path, init)
+
+    agent._setup_from_init()
+    prompt = agent._build_system_prompt()
+
+    assert "Resident prompt from file." in prompt
+    assert "## prompt" not in prompt
+    assert "## tools" in prompt
+    assert prompt.index("Resident prompt from file.") < prompt.index("## tools")
+
+
+def test_empty_init_prompt_preserves_default_prompt_shape(tmp_path):
+    """Empty prompt keeps backward-compatible section-only rendering."""
+    agent = _make_agent(tmp_path, _make_init(capabilities={"read": {}}))
+
+    agent._setup_from_init()
+    prompt = agent._build_system_prompt()
+
+    assert "## prompt" not in prompt
+    assert "## tools" in prompt
+    assert getattr(agent, "_base_prompt", "") == ""
 
 
 def test_deep_refresh_invalid_init_keeps_old_config(tmp_path):

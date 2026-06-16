@@ -365,6 +365,7 @@ class Agent(BaseAgent):
         self._refresh_tool_inventory_section()
         return build_system_prompt(
             prompt_manager=self._prompt_manager,
+            base_prompt=getattr(self, "_base_prompt", ""),
             language=self._config.language,
             activeness=self._config.activeness,
         )
@@ -375,6 +376,7 @@ class Agent(BaseAgent):
         self._refresh_tool_inventory_section()
         return build_system_prompt_batches(
             prompt_manager=self._prompt_manager,
+            base_prompt=getattr(self, "_base_prompt", ""),
             language=self._config.language,
             activeness=self._config.activeness,
         )
@@ -1302,10 +1304,12 @@ class Agent(BaseAgent):
             # Resolve *_file fields (brief_file, covenant_file, etc.)
             from lingtai_kernel.config_resolve import resolve_file
             for key in ("covenant", "principle", "substrate",
-                        "brief", "pad", "comment"):
+                        "brief", "pad", "prompt", "comment"):
                 file_key = f"{key}_file"
                 if file_key in data:
                     data[key] = resolve_file(data.get(key), data.pop(file_key))
+
+        self._base_prompt = data.get("prompt") or ""
 
         system_dir = self._working_dir / "system"
         system_dir.mkdir(exist_ok=True)

@@ -125,6 +125,7 @@ def build_agent(data: dict, working_dir: Path) -> Agent:
         working_dir=working_dir,
         mail_service=mail_service,
         streaming=m.get("streaming", False),
+        prompt=data.get("prompt", ""),
     )
 
     # Full setup from init.json (capabilities, addons, config, covenant, etc.)

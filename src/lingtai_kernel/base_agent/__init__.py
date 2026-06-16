@@ -253,6 +253,7 @@ class BaseAgent:
         brief: str = "",
         pad: str = "",
         comment: str = "",
+        prompt: str = "",
     ):
         self.agent_name = agent_name  # true name (真名) — immutable once set
         self.nickname: str | None = None  # mutable alias (别名)
@@ -260,6 +261,7 @@ class BaseAgent:
         self._config = config or AgentConfig()
         self._context = context
         self._admin = admin or {}
+        self._base_prompt = prompt or ""
         self._cancel_event = threading.Event()
         self._state = AgentState.IDLE
         self._started_at: str = ""

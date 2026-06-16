@@ -14,6 +14,7 @@ def _build_system_prompt(agent) -> str:
     _refresh_tool_inventory_section(agent)
     return build_system_prompt(
         prompt_manager=agent._prompt_manager,
+        base_prompt=getattr(agent, "_base_prompt", ""),
         language=agent._config.language,
         activeness=agent._config.activeness,
     )
@@ -32,6 +33,7 @@ def _build_system_prompt_batches(agent) -> list[str]:
     _refresh_tool_inventory_section(agent)
     return build_system_prompt_batches(
         prompt_manager=agent._prompt_manager,
+        base_prompt=getattr(agent, "_base_prompt", ""),
         language=agent._config.language,
         activeness=agent._config.activeness,
     )
