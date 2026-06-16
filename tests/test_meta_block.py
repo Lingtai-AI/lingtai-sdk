@@ -157,6 +157,66 @@ def test_render_meta_rounds_usage_to_one_decimal():
     assert "7.2%" in result
 
 
+def test_render_meta_caps_over_100_percent_en():
+    """Issue #193 item 3: usage above the hard ceiling (>100%) must not feed
+    a raw runaway percentage like 197.2% to the model. The banner is reworded
+    to a bounded over-ceiling notice while preserving the token breakdown."""
+    agent = _fake_agent_with_lang("en")
+    meta = {
+        "current_time": "2026-04-20T10:15:23-07:00",
+        "context": {
+            "system_tokens": 48489,
+            "history_tokens": 345912,
+            "usage": 1.972005,
+        },
+    }
+    result = render_meta(agent, meta)
+    # The runaway percentage must be gone...
+    assert "197" not in result
+    assert "197.2%" not in result
+    # ...replaced by a bounded over-ceiling wording...
+    assert ">100%" in result
+    assert "over hard ceiling" in result
+    # ...while the necessary token breakdown is preserved.
+    assert "48489" in result
+    assert "345912" in result
+
+
+def test_render_meta_caps_exactly_at_100_percent_uses_breakdown():
+    """At exactly 100% (usage == 1.0) the normal breakdown still renders —
+    only values strictly above the ceiling are reworded."""
+    agent = _fake_agent_with_lang("en")
+    meta = {
+        "current_time": "T",
+        "context": {
+            "system_tokens": 1000,
+            "history_tokens": 500,
+            "usage": 1.0,
+        },
+    }
+    result = render_meta(agent, meta)
+    assert "100.0%" in result
+    assert "over hard ceiling" not in result
+
+
+def test_render_meta_caps_over_100_percent_zh():
+    agent = _fake_agent_with_lang("zh")
+    meta = {
+        "current_time": "2026-04-20T10:15:23-07:00",
+        "context": {
+            "system_tokens": 48489,
+            "history_tokens": 345912,
+            "usage": 1.972005,
+        },
+    }
+    result = render_meta(agent, meta)
+    assert "197" not in result
+    assert ">100%" in result
+    # token breakdown preserved
+    assert "48489" in result
+    assert "345912" in result
+
+
 def test_stamp_meta_writes_meta_keys_and_elapsed_ms_in_place():
     result = {"status": "ok"}
     out = stamp_meta(result, {"current_time": "2026-04-20T10:15:23-07:00"}, 42)

@@ -449,6 +449,19 @@ def _render_context_fragment(agent, meta: dict) -> str:
     usage = ctx.get("usage", -1.0)
     if usage < 0:
         return _t(agent._config.language, "system.context_unknown")
+    # Issue #193 item 3: when usage runs past the hard ceiling (>100%) we must
+    # not feed a runaway percentage like ``197.2%`` back into the model's own
+    # prompt. Rewording to a bounded over-ceiling notice (while preserving the
+    # token breakdown) keeps the banner honest without anchoring the model on a
+    # nonsensical number. The breakdown is kept because operators/the model
+    # still benefit from seeing the sys/ctx split that produced the overflow.
+    if usage > 1.0:
+        return _t(
+            agent._config.language,
+            "system.context_over_ceiling",
+            sys=ctx.get("system_tokens", 0),
+            ctx=ctx.get("history_tokens", 0),
+        )
     return _t(
         agent._config.language,
         "system.context_breakdown",

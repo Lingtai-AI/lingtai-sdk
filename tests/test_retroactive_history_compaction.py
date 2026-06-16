@@ -683,6 +683,71 @@ def test_is_over_window_error_does_not_match_unrelated_errors():
     assert not _is_over_window_error(RuntimeError(""))
 
 
+# -- Issue #193 item 4: typed overflow classification -----------------------
+
+def test_classify_over_window_event_context_length_exceeded():
+    """A provider message carrying the canonical ``context_length_exceeded``
+    fragment classifies as that stable, grep-able type."""
+    from lingtai_kernel.base_agent.turn import _classify_over_window_event
+    assert _classify_over_window_event(
+        RuntimeError("Error code: 400 - context_length_exceeded")
+    ) == "context_length_exceeded"
+
+
+def test_classify_over_window_event_provider_413():
+    """A 413-status hard-cap failure classifies as ``provider_413`` even if
+    the message phrasing is generic, so real provider rejections are
+    distinguishable from estimate-driven overflow."""
+    from lingtai_kernel.base_agent.turn import _classify_over_window_event
+
+    class _Big(Exception):
+        status_code = 413
+
+    assert _classify_over_window_event(_Big("request too large")) == "provider_413"
+
+
+def test_classify_over_window_event_generic_overflow():
+    """An over-window error that is neither 413 nor the canonical
+    ``context_length_exceeded`` fragment still gets a typed bucket."""
+    from lingtai_kernel.base_agent.turn import _classify_over_window_event
+    assert _classify_over_window_event(
+        RuntimeError("prompt is too long for this model")
+    ) == "context_overflow"
+
+
+def test_provider_context_overflow_event_emitted_on_over_window(tmp_path, monkeypatch):
+    """Issue #193 item 4: when an over-window provider failure is detected,
+    a DISTINCT typed event ``provider_context_overflow`` is emitted carrying a
+    stable ``kind`` (here ``context_length_exceeded``) so real hard-cap
+    failures are diagnosable/grep-able — beyond the generic
+    ``aed_over_window_detected`` marker."""
+    from lingtai_kernel.base_agent import turn
+
+    big = "OW" * (RETROACTIVE_MAX_CHARS)
+    agent, iface = _make_run_loop_agent_with_oversized_history(tmp_path, big)
+
+    nonlocal_calls = {"n": 0}
+
+    def fake_handle(_agent, _msg):
+        nonlocal_calls["n"] += 1
+        if nonlocal_calls["n"] == 1:
+            raise RuntimeError("Error code: 400 - context_length_exceeded")
+        _agent._shutdown.set()
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    monkeypatch.setattr(turn.time, "sleep", lambda _seconds: None)
+    import lingtai_kernel.intrinsics.soul.flow as soul_flow
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: None)
+
+    turn._run_loop(agent)
+
+    typed = [e for e in agent._logs if e[0] == "provider_context_overflow"]
+    assert len(typed) == 1
+    assert typed[0][1]["kind"] == "context_length_exceeded"
+    # The generic marker still fires too (back-compat).
+    assert any(e[0] == "aed_over_window_detected" for e in agent._logs)
+
+
 def test_aed_over_window_takes_deterministic_branch_not_transient(tmp_path, monkeypatch):
     """An over-window error must NOT take the transient retry loop —
     retrying on the same wire would just refire the same error.  It must

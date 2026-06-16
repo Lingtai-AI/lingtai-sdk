@@ -1,6 +1,7 @@
 {
   "system.current_time": "[Current time: {time} | context: {ctx}]",
   "system.context_breakdown": "{pct} (sys {sys} + ctx {ctx})",
+  "system.context_over_ceiling": ">100% over hard ceiling; compacting (sys {sys} + ctx {ctx})",
   "system.context_unknown": "unavailable",
   "system.new_mail.no_subject": "(no subject)",
   "system.mail_bounce": "[system] Mail delivery failed: {error}\n  To: {address}\n  Subject: {subject}",

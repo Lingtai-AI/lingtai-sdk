@@ -334,6 +334,29 @@ def _is_over_window_error(exc: Exception) -> bool:
     return any(fragment in msg for fragment in _OVER_WINDOW_MSG_FRAGMENTS)
 
 
+def _classify_over_window_event(exc: Exception) -> str:
+    """Bucket an over-window error into a stable, grep-able event ``kind``.
+
+    Issue #193 item 4: ``_is_over_window_error`` only answers yes/no, and the
+    generic ``aed_over_window_detected`` marker hides *why* the wire was
+    rejected.  A distinct typed ``kind`` lets operators tell a real provider
+    hard-cap rejection (HTTP 413) and the canonical
+    ``context_length_exceeded`` provider code apart from a merely
+    estimate/phrasing-driven overflow, so genuine hard-cap failures are
+    diagnosable in ``events.jsonl``.
+
+    Precedence is provider-truth first: an explicit 413 status is the most
+    authoritative signal, then the canonical ``context_length_exceeded``
+    fragment, then a generic ``context_overflow`` fallback.
+    """
+    if _exception_status_code(exc) == 413:
+        return "provider_413"
+    msg = (str(exc) or "").lower()
+    if "context_length_exceeded" in msg:
+        return "context_length_exceeded"
+    return "context_overflow"
+
+
 def _compact_history_before_retry(agent, *, source: str) -> "CompactionStats | None":
     """Retroactively spill oversized tool results before an AED retry.
 
@@ -574,6 +597,18 @@ def _run_loop(agent) -> None:
                             "aed_over_window_detected",
                             error=err_desc[:300],
                             exception=type(e).__name__,
+                        )
+                        # Issue #193 item 4: also emit a distinct typed event
+                        # carrying the classified ``kind`` (provider_413 /
+                        # context_length_exceeded / context_overflow) so real
+                        # provider hard-cap failures are grep-able beyond the
+                        # generic marker above.
+                        agent._log(
+                            "provider_context_overflow",
+                            kind=_classify_over_window_event(e),
+                            status_code=_exception_status_code(e),
+                            exception=type(e).__name__,
+                            error=err_desc[:300],
                         )
 
                     if not over_window and _is_transient_provider_error(e):

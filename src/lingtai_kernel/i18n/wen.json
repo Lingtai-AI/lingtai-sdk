@@ -1,6 +1,7 @@
 {
   "system.current_time": "[此时：{time} | 上下文：{ctx}]",
   "system.context_breakdown": "{pct} (系统 {sys} + 对话 {ctx})",
+  "system.context_over_ceiling": ">100% 逾硬限，方压缩 (系统 {sys} + 对话 {ctx})",
   "system.context_unknown": "未知",
   "system.new_mail.no_subject": "（无题）",
   "system.mail_bounce": "[系统] 书信未达：{error}\n  收者：{address}\n  题：{subject}",
