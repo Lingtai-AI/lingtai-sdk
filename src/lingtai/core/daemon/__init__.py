@@ -512,7 +512,16 @@ class DaemonManager:
         self._pools: list[tuple[ThreadPoolExecutor, threading.Event]] = []
         # CLI process tracking for direct process-group kill on reclaim/timeout.
         # Guarded by _cli_lock — accessed from pool workers, watchdog, and reclaim.
+        #
+        # ``_cli_procs`` is the flat global list used by reclaim-all / agent stop.
+        # ``_cli_proc_groups`` is the per-batch index keyed by daemon ``group_id``
+        # so a batch's timeout watchdog kills only *its own* CLI subprocesses and
+        # never a newer, unrelated batch's (GH overlapping-batch kill). Procs that
+        # do not belong to a batch (e.g. CLI ``ask`` follow-ups) register with
+        # ``group_id=None`` — they are tracked globally for reclaim but no batch
+        # watchdog owns them.
         self._cli_procs: list[subprocess.Popen] = []
+        self._cli_proc_groups: dict[str, set[subprocess.Popen]] = {}
         self._cli_lock = threading.Lock()
         # Dedicated pool for CLI-backend `ask` follow-ups so they run off the
         # caller's tool-dispatch thread. The agent's `daemon(action="ask")` call
@@ -1471,8 +1480,7 @@ class DaemonManager:
             exc = RuntimeError(f"Failed to start claude CLI: {e}")
             run_dir.mark_failed(exc)
             raise exc
-        with self._cli_lock:
-            self._cli_procs.append(proc)
+        self._register_cli_proc(proc, group_id=run_dir.group_id)
 
         # Drain stderr in a background thread so diagnostic messages reach
         # the run dir even while the main thread is parsing stdout events.
@@ -1618,11 +1626,7 @@ class DaemonManager:
             # remaining bytes before the pipe closes on us.
             stderr_thread.join(timeout=2.0)
             # Remove from tracked procs to prevent PID recycling issues
-            with self._cli_lock:
-                try:
-                    self._cli_procs.remove(proc)
-                except ValueError:
-                    pass  # already removed by reclaim/watchdog
+            self._unregister_cli_proc(proc, group_id=run_dir.group_id)
 
         stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
 
@@ -1782,8 +1786,7 @@ class DaemonManager:
             exc = RuntimeError(f"Failed to start codex CLI: {e}")
             run_dir.mark_failed(exc)
             raise exc
-        with self._cli_lock:
-            self._cli_procs.append(proc)
+        self._register_cli_proc(proc, group_id=run_dir.group_id)
 
         stderr_lines: list[str] = []
 
@@ -1868,11 +1871,7 @@ class DaemonManager:
         finally:
             stderr_thread.join(timeout=2.0)
             # Remove from tracked procs to prevent PID recycling issues
-            with self._cli_lock:
-                try:
-                    self._cli_procs.remove(proc)
-                except ValueError:
-                    pass  # already removed by reclaim/watchdog
+            self._unregister_cli_proc(proc, group_id=run_dir.group_id)
 
         stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
 
@@ -2254,13 +2253,21 @@ class DaemonManager:
                 "run_dir": run_dir,
             }
 
-        # Start watchdog — sets timeout_event AND cancel_event when timer fires
+        # Start watchdog — sets timeout_event AND cancel_event when timer fires.
+        # The lingtai backend spawns no CLI procs, so cli_group_id stays None;
+        # the watchdog only flips the cancel/timeout events for the run loops.
         watchdog = threading.Thread(
             target=self._watchdog,
             args=(cancel_event, timeout_event, effective_timeout),
             daemon=True,
         )
         watchdog.start()
+        # When every future in this batch finishes, signal cancel so the
+        # watchdog returns instead of waking later to do work.
+        self._arm_batch_done_cancel(
+            [self._emanations[eid]["future"] for eid in ids],
+            cancel_event,
+        )
 
         self._log("daemon_emanate", ids=ids, group_id=group_id, count=len(tasks),
                   tasks=[{"task": s["task"][:80], "tools": s["tools"]} for s in tasks])
@@ -2433,13 +2440,21 @@ class DaemonManager:
                 "ask_future": None,
             }
 
-        # Start watchdog
+        # Start watchdog — scoped to this batch's CLI procs (group_id) so an
+        # earlier batch's timeout can never kill this one's subprocesses.
         watchdog = threading.Thread(
             target=self._watchdog,
             args=(cancel_event, timeout_event, effective_timeout),
+            kwargs={"cli_group_id": group_id},
             daemon=True,
         )
         watchdog.start()
+        # When every future in this batch finishes, signal cancel so the
+        # watchdog returns instead of waking later to do work.
+        self._arm_batch_done_cancel(
+            [self._emanations[eid]["future"] for eid in ids],
+            cancel_event,
+        )
 
         self._log("daemon_emanate", ids=ids, group_id=group_id, count=len(tasks), backend=backend,
                   tasks=[{"task": s["task"][:80], "tools": s.get("tools", [])}
@@ -3097,8 +3112,9 @@ class DaemonManager:
                 entry["ask_in_flight"] = False
             return {"status": "error",
                     "message": f"Failed to start claude CLI: {e}"}
-        with self._cli_lock:
-            self._cli_procs.append(proc)
+        # Ask follow-ups are not part of any batch; track globally only so
+        # reclaim-all still kills them, but no batch watchdog owns them.
+        self._register_cli_proc(proc, group_id=None)
 
         # Surface that an ask just started so `daemon(check)` shows it
         # immediately, even before any stream-json event arrives.
@@ -3211,11 +3227,7 @@ class DaemonManager:
                     _kill_process_group(proc)
         finally:
             stderr_thread.join(timeout=2.0)
-            with self._cli_lock:
-                try:
-                    self._cli_procs.remove(proc)
-                except ValueError:
-                    pass  # already removed by reclaim/watchdog
+            self._unregister_cli_proc(proc, group_id=None)
             with entry["followup_lock"]:
                 entry["ask_in_flight"] = False
 
@@ -3309,8 +3321,8 @@ class DaemonManager:
                 entry["ask_in_flight"] = False
             return {"status": "error",
                     "message": f"Failed to start codex CLI: {e}"}
-        with self._cli_lock:
-            self._cli_procs.append(proc)
+        # Ask follow-ups are not part of any batch (see claude-code ask).
+        self._register_cli_proc(proc, group_id=None)
 
         # See _handle_ask_cli for the rationale on the narrowed except.
         try:
@@ -3410,11 +3422,7 @@ class DaemonManager:
                     _kill_process_group(proc)
         finally:
             stderr_thread.join(timeout=2.0)
-            with self._cli_lock:
-                try:
-                    self._cli_procs.remove(proc)
-                except ValueError:
-                    pass  # already removed by reclaim/watchdog
+            self._unregister_cli_proc(proc, group_id=None)
             with entry["followup_lock"]:
                 entry["ask_in_flight"] = False
 
@@ -3630,8 +3638,7 @@ class DaemonManager:
             exc = RuntimeError(f"Failed to start {backend_name} CLI: {e}")
             run_dir.mark_failed(exc)
             raise exc
-        with self._cli_lock:
-            self._cli_procs.append(proc)
+        self._register_cli_proc(proc, group_id=run_dir.group_id)
 
         stderr_lines: list[str] = []
 
@@ -3726,11 +3733,7 @@ class DaemonManager:
             raise
         finally:
             stderr_thread.join(timeout=2.0)
-            with self._cli_lock:
-                try:
-                    self._cli_procs.remove(proc)
-                except ValueError:
-                    pass  # already removed by reclaim/watchdog
+            self._unregister_cli_proc(proc, group_id=run_dir.group_id)
 
         stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
 
@@ -3869,8 +3872,7 @@ class DaemonManager:
             exc = RuntimeError(f"Failed to start qwen-code CLI: {e}")
             run_dir.mark_failed(exc)
             raise exc
-        with self._cli_lock:
-            self._cli_procs.append(proc)
+        self._register_cli_proc(proc, group_id=run_dir.group_id)
 
         stdout_lines: list[str] = []
         stderr_lines: list[str] = []
@@ -3914,11 +3916,7 @@ class DaemonManager:
             raise
         finally:
             stderr_thread.join(timeout=2.0)
-            with self._cli_lock:
-                try:
-                    self._cli_procs.remove(proc)
-                except ValueError:
-                    pass
+            self._unregister_cli_proc(proc, group_id=run_dir.group_id)
 
         stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
         output = "\n".join(stdout_lines).strip()
@@ -4007,8 +4005,8 @@ class DaemonManager:
                 entry["ask_in_flight"] = False
             return {"status": "error",
                     "message": f"Failed to start {backend_name} CLI: {e}"}
-        with self._cli_lock:
-            self._cli_procs.append(proc)
+        # Ask follow-ups are not part of any batch (see claude-code ask).
+        self._register_cli_proc(proc, group_id=None)
 
         try:
             run_dir.record_cli_output(
@@ -4147,11 +4145,7 @@ class DaemonManager:
                     _kill_process_group(proc)
         finally:
             stderr_thread.join(timeout=2.0)
-            with self._cli_lock:
-                try:
-                    self._cli_procs.remove(proc)
-                except ValueError:
-                    pass  # already removed by reclaim/watchdog
+            self._unregister_cli_proc(proc, group_id=None)
             with entry["followup_lock"]:
                 entry["ask_in_flight"] = False
 
@@ -4262,8 +4256,7 @@ class DaemonManager:
             exc = RuntimeError(f"Failed to start Cursor CLI: {e}")
             run_dir.mark_failed(exc)
             raise exc
-        with self._cli_lock:
-            self._cli_procs.append(proc)
+        self._register_cli_proc(proc, group_id=run_dir.group_id)
 
         stderr_lines: list[str] = []
 
@@ -4350,11 +4343,7 @@ class DaemonManager:
             raise
         finally:
             stderr_thread.join(timeout=2.0)
-            with self._cli_lock:
-                try:
-                    self._cli_procs.remove(proc)
-                except ValueError:
-                    pass
+            self._unregister_cli_proc(proc, group_id=run_dir.group_id)
 
         stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
 
@@ -4440,8 +4429,8 @@ class DaemonManager:
                 entry["ask_in_flight"] = False
             return {"status": "error",
                     "message": f"Failed to start Cursor CLI: {e}"}
-        with self._cli_lock:
-            self._cli_procs.append(proc)
+        # Ask follow-ups are not part of any batch (see claude-code ask).
+        self._register_cli_proc(proc, group_id=None)
 
         try:
             run_dir.record_cli_output(
@@ -4544,11 +4533,7 @@ class DaemonManager:
                     _kill_process_group(proc)
         finally:
             stderr_thread.join(timeout=2.0)
-            with self._cli_lock:
-                try:
-                    self._cli_procs.remove(proc)
-                except ValueError:
-                    pass
+            self._unregister_cli_proc(proc, group_id=None)
             with entry["followup_lock"]:
                 entry["ask_in_flight"] = False
 
@@ -4726,9 +4711,7 @@ class DaemonManager:
         # Kill all tracked CLI process groups first — this terminates child
         # shells/tools that cancel_event alone cannot reach (GH #122).
         # Snapshot under lock, kill outside to avoid holding lock during wait.
-        with self._cli_lock:
-            procs_to_kill = list(self._cli_procs)
-            self._cli_procs.clear()
+        procs_to_kill = self._drain_all_cli_procs()
         for proc in procs_to_kill:
             try:
                 _kill_process_group(proc)
@@ -4824,34 +4807,129 @@ class DaemonManager:
             em_id, status=status, text=text, run_dir=run_dir
         )
 
+    # ------------------------------------------------------------------
+    # CLI process-group tracking helpers
+    #
+    # Every external-CLI backend registers its Popen here on spawn and
+    # unregisters it on exit, instead of poking _cli_procs directly. Ownership
+    # metadata (the batch ``group_id``) lets a batch's timeout watchdog kill
+    # only its own subprocesses (_kill_cli_group), while reclaim-all still
+    # drains everything (_drain_all_cli_procs).
+    # ------------------------------------------------------------------
+
+    def _register_cli_proc(self, proc: subprocess.Popen,
+                           group_id: str | None = None) -> None:
+        """Track *proc* globally and (if batched) under its ``group_id``."""
+        with self._cli_lock:
+            self._cli_procs.append(proc)
+            if group_id is not None:
+                self._cli_proc_groups.setdefault(group_id, set()).add(proc)
+
+    def _unregister_cli_proc(self, proc: subprocess.Popen,
+                             group_id: str | None = None) -> None:
+        """Detach *proc* from global and group tracking. Idempotent."""
+        with self._cli_lock:
+            try:
+                self._cli_procs.remove(proc)
+            except ValueError:
+                pass  # already removed by reclaim/watchdog
+            if group_id is not None:
+                bucket = self._cli_proc_groups.get(group_id)
+                if bucket is not None:
+                    bucket.discard(proc)
+                    if not bucket:
+                        del self._cli_proc_groups[group_id]
+
+    def _kill_cli_group(self, group_id: str) -> None:
+        """Kill only the CLI process groups owned by *group_id*.
+
+        Snapshots the group's procs under the lock, detaches them from both
+        the group index and the global list, then kills outside the lock so we
+        never hold ``_cli_lock`` across a multi-second ``proc.wait``. Procs from
+        other batches (and ungrouped ``ask`` procs) are left untouched.
+        """
+        with self._cli_lock:
+            bucket = self._cli_proc_groups.pop(group_id, None)
+            procs_to_kill = list(bucket) if bucket else []
+            for proc in procs_to_kill:
+                try:
+                    self._cli_procs.remove(proc)
+                except ValueError:
+                    pass
+        for proc in procs_to_kill:
+            _kill_process_group(proc)
+
+    def _drain_all_cli_procs(self) -> list[subprocess.Popen]:
+        """Clear all CLI tracking and return the procs to kill (reclaim path)."""
+        with self._cli_lock:
+            procs_to_kill = list(self._cli_procs)
+            self._cli_procs.clear()
+            self._cli_proc_groups.clear()
+        return procs_to_kill
+
+    def _arm_batch_done_cancel(self, futures: list,
+                               cancel_event: threading.Event) -> None:
+        """Set *cancel_event* once every future in *futures* is done.
+
+        This stops a completed batch's watchdog from sleeping out its full
+        timeout and then waking to kill/scan after all work already finished.
+        A done-callback runs per future; the last one to complete trips the
+        event. Setting cancel after all futures are done is harmless to the run
+        loops (they have already returned) — only the idle watchdog observes it.
+
+        ``timeout_event`` is intentionally left unset: this is normal
+        completion, not a timeout, so terminal run state stays "done"/"failed".
+        """
+        if not futures:
+            cancel_event.set()
+            return
+        remaining = {"n": len(futures)}
+        lock = threading.Lock()
+
+        def _done(_f):
+            with lock:
+                remaining["n"] -= 1
+                if remaining["n"] > 0:
+                    return
+            cancel_event.set()
+
+        for future in futures:
+            future.add_done_callback(_done)
+
     def _watchdog(self, cancel_event: threading.Event,
-                  timeout_event: threading.Event, timeout: float) -> None:
+                  timeout_event: threading.Event, timeout: float,
+                  cli_group_id: str | None = None) -> None:
         """Kill emanations that exceed the timeout.
 
         Sets timeout_event BEFORE cancel_event so the run loop can observe
         the timeout flag at its next checkpoint and call mark_timeout instead
         of mark_cancelled.
 
-        Also directly kills all tracked CLI process groups so that long
-        child tool/CLI commands are terminated even if the run loop is
-        blocked on stdout (GH #121).
+        Also directly kills the CLI process groups *belonging to this batch*
+        (``cli_group_id``) so that long child tool/CLI commands are terminated
+        even if the run loop is blocked on stdout (GH #121) — without touching
+        a newer, unrelated batch's procs (GH overlapping-batch kill). When
+        ``cli_group_id`` is None (e.g. the in-process lingtai backend, which
+        spawns no CLI procs) no kill scan runs.
+
+        Returns early without firing if ``cancel_event`` is already set — once
+        a batch's futures are all done, the dispatch path signals cancel so a
+        completed batch's watchdog cannot wake later and do work.
         """
         deadline = time.time() + timeout
         while time.time() < deadline:
             if cancel_event.is_set():
                 return
             time.sleep(1.0)
+        if cancel_event.is_set():
+            return
         timeout_event.set()
         cancel_event.set()
         # Kill CLI process groups directly — the run loop may be blocked
         # reading stdout from a long child command and cannot check
-        # cancel_event until that command finishes.
-        # Snapshot under lock, kill outside to avoid holding lock during wait.
-        with self._cli_lock:
-            procs_to_kill = list(self._cli_procs)
-            self._cli_procs.clear()
-        for proc in procs_to_kill:
-            _kill_process_group(proc)
+        # cancel_event until that command finishes. Scoped to this batch only.
+        if cli_group_id is not None:
+            self._kill_cli_group(cli_group_id)
 
     def _log(self, event_type: str, **fields) -> None:
         """Log through the parent agent's logging system."""

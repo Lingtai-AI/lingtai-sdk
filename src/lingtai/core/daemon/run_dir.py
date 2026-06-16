@@ -129,6 +129,11 @@ class DaemonRunDir:
         return self._handle
 
     @property
+    def group_id(self) -> str | None:
+        """The daemon batch group id this run belongs to (None if ungrouped)."""
+        return self._state.get("group_id")
+
+    @property
     def path(self) -> Path:
         return self._path
 
