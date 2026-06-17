@@ -132,8 +132,11 @@ shape of a bundle without coupling to its internals.
   `backend_replaceability=NATIVE_ONLY`.
 - `CapabilitySurfaces` — the named surfaces a bundle contributes: `tools`,
   `resources`, `prompts`, `events`, `hooks`, `lifecycle`, `state`.
-- `SecurityPolicy` — `permissions`, `requires_confirmation`, `danger`.
-- `TransportSpec` — `kind` (`native` / `stdio` / `http` / `in_process`) + config.
+- `SecurityPolicy` — `permissions`, `requires_confirmation`, `danger`
+  (validated against `SecurityDanger`: `safe` / `caution` / `destructive` — see
+  §15.1).
+- `TransportSpec` — `kind` (validated against `TransportKind`: `native` /
+  `in_process` / `stdio` / `http` — see §15.1) + config.
 
 The only concrete bundle is `proof_bundle()` — a synthetic, metadata-only,
 read-only `echo` bundle that exercises the schema end to end at the lowest
@@ -280,6 +283,8 @@ tests/
   test_sdk_capabilities.py      # manifest invariants + proof bundle
   test_sdk_capability_host.py   # manifest load + host boundary: load->validate->register->invoke; refuses privileged
   test_sdk_skill_bundle.py      # stage 6: committed skill asset -> bundle -> host (tool/resource/prompt), purity
+  test_sdk_strict_manifest.py   # stage 7: strict bool/danger/transport/mapping validation
+  test_sdk_native_bundle_host.py # stage 7: NativeBundleHost — privileged native hosting only with explicit authority
   test_sdk_native_runtime.py          # stage 1: translation, lifecycle, purity (fake agent)
   test_sdk_native_runtime_llm.py      # stage 2: LLM-service translation
   test_sdk_native_runtime_manifest.py # stage 3: manifest.llm translation
@@ -688,3 +693,105 @@ undeclared / non-callable handler) is enforced; the privileged-core refusal
 still holds with the new surfaces present; the bundle names none of
 `system`/`psyche`/`soul`; and importing the module stays wrapper-free
 (`tests/test_sdk_skill_bundle.py`).
+
+## 15. Stage 7 — strict manifest validation + native privileged bundle contract (stacked PR)
+
+Stage 7 is the **safety-contract layer** immediately before the privileged-core
+declaration. Stages 5–6 proved the manifest/load/host *boundary* against
+harmless non-privileged bundles; stage 7 *hardens* that boundary on two fronts so
+the next stage can declare `system` / `psyche` / `soul` manifests against a
+contract that cannot quietly mean something other than it says. It still migrates
+**no privileged behavior** and does not touch the kernel turn loop — `system` /
+`psyche` / `soul` remain deferred (named only in docs).
+
+### 15.1 Strict manifest validation
+
+`load_manifest()` and `BundleManifest.validate()` no longer accept loose input:
+
+- **Real-boolean role flags.** `required` / `privileged` / `native_only` /
+  `can_override` must be *actual* booleans. A previous `bool(...)` coercion let
+  the string `"false"` (truthy!) silently *enable* a privilege, or `1` stand in
+  for `True`. `load_manifest()` now rejects any non-`bool` present value with
+  `BundleLoadError` (an absent flag still falls back to its default). The check
+  tests `bool` before `int` because `True`/`False` are `int` instances.
+- **Enum-like `danger` and `transport.kind`.** Two public, `str`-valued Enums are
+  added to `lingtai_sdk.capabilities`:
+  - `SecurityDanger` — `safe` / `caution` / `destructive`;
+  - `TransportKind` — `native` / `in_process` / `stdio` / `http`.
+  Being `str`-valued, a member compares equal to its wire string and serializes
+  transparently through `to_dict()` / JSON, so the `SecurityPolicy.danger` and
+  `TransportSpec.kind` fields stay plain strings (no breaking type change). Both
+  `validate()` and `load_manifest()` now **reject** any value outside the
+  allow-list — `validate()` so a *directly constructed* manifest is also checked,
+  `load_manifest()` transitively via the validate step.
+- **Strict mappings.** `metadata` and `transport.config` must be mappings. A
+  list, tuple, or scalar is rejected with a clear `BundleLoadError` instead of
+  being half-coerced (e.g. `dict([...])` quietly accepting a list of pairs). An
+  absent block still yields `{}`.
+
+### 15.2 Native privileged bundle contract
+
+A second host joins `BundleHost` in `lingtai_sdk.capability_host`, sharing one
+boundary contract via a private `_BaseBundleHost` (manifest validation, the
+per-surface declared↔provided handler contract, the three read-only surfaces).
+The two hosts differ only in *admission*:
+
+- **`BundleHost` (unchanged).** Still **refuses** any `privileged` / `native_only`
+  bundle and hosts only `in_process` transports — the guardrail that keeps the
+  privileged core out is byte-for-byte the same behavior (asserted by tests).
+- **`NativeBundleHost` (new).** May host a privileged / native-only bundle, but
+  only when **explicitly constructed as native authority** — `native_authority`
+  is a keyword-only flag defaulting to `False`, so privileged hosting is never
+  granted by accident — and only for a `native` transport. It applies the *same*
+  manifest validation and the *same* declared↔provided handler contract; a
+  privileged bundle with a missing / undeclared / non-callable handler is still
+  refused.
+
+`native_privileged_proof_bundle()` + `native_proof_host()` are the
+privileged-side mirror of `proof_bundle()` / `proof_host()`: a harmless,
+synthetic, native-proof bundle (privileged, `native_only`, `native` transport,
+one deterministic `native_noop` tool) that proves the native-authority hosting
+boundary end to end. **It names no real privileged surface** — `system` /
+`psyche` / `soul` are not migrated here.
+
+### What it deliberately is NOT
+
+- It does **not** declare or migrate `system` / `psyche` / `soul` (that is the
+  next stage) nor any real privileged surface; `NativeBundleHost` is exercised
+  only by the synthetic `native_privileged_proof`.
+- It does **not** change the kernel turn loop, `BaseAgent`, or `Agent`.
+- It does **not** change `SecurityPolicy.danger` / `TransportSpec.kind` from
+  `str` to an Enum-typed field — the public Enums are an *allow-list*, and the
+  fields stay string-valued for backward-compatible (de)serialization.
+
+### Import purity
+
+`lingtai_sdk.capabilities` and `lingtai_sdk.capability_host` remain import-pure:
+the new Enums, helpers, host, and native proof all import nothing from the
+`lingtai` wrapper or any provider SDK. Asserted by the existing module-purity
+tests plus `tests/test_sdk_native_bundle_host.py::test_native_bundle_host_import_is_pure`.
+
+### Tested without a model
+
+Stage-7 tests need no API key and no running agent
+(`tests/test_sdk_strict_manifest.py`, `tests/test_sdk_native_bundle_host.py`).
+They assert: non-`bool` role flags are rejected while real booleans (and absent
+defaults) are accepted; the two Enums expose exactly the documented values;
+known `danger` / `transport.kind` load and unknown ones raise (through both
+`load_manifest()` and `validate()`); non-mapping `metadata` / `transport.config`
+are rejected; the proof bundle still round-trips through the stricter loader;
+`NativeBundleHost` hosts the privileged native proof *only* with explicit
+authority and a `native` transport, enforces the full per-surface contract, and
+refuses without authority or with the wrong transport; the `BundleHost`
+privileged / native-transport refusals are unchanged; and the privileged host
+stays wrapper-free.
+
+### Roadmap note
+
+This closes the **strict-contract** prerequisite for the deferred core-bundle
+migration (doc §8 stage 3 / “core bundle migration”): the next stage may declare
+`system` / `psyche` / `soul` manifests knowing that (a) a declaration's role
+flags, danger, transport, and nested blocks cannot be silently mis-read, and
+(b) a privileged manifest can be hosted only by an explicitly-constructed native
+authority over a `native` transport. The migration itself — and any real
+privileged surface — remains future, higher-risk work.

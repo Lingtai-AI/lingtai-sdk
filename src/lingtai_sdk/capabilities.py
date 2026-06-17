@@ -29,6 +29,36 @@ class BackendReplaceability(str, enum.Enum):
     AUGMENTABLE = "augmentable"  # backend may extend but not replace
 
 
+class SecurityDanger(str, enum.Enum):
+    """The declared danger posture of a bundle's tools.
+
+    Public, enum-like allow-list for ``SecurityPolicy.danger``. ``str``-valued so
+    a member compares equal to its wire string (``SecurityDanger.SAFE == "safe"``)
+    and serializes transparently through ``to_dict()`` / JSON. ``validate()`` and
+    ``load_manifest()`` reject any value outside this set.
+    """
+
+    SAFE = "safe"  # read-only / pure / network-free
+    CAUTION = "caution"  # has side effects worth a second look
+    DESTRUCTIVE = "destructive"  # can delete/overwrite/irreversibly act
+
+
+class TransportKind(str, enum.Enum):
+    """How a bundle's surfaces are carried.
+
+    Public, enum-like allow-list for ``TransportSpec.kind``. ``str``-valued (see
+    :class:`SecurityDanger`). ``native`` is the privileged in-runtime carrier
+    (only a native authority host may host it); ``in_process`` is the
+    non-native :class:`~lingtai_sdk.capability_host.BundleHost` carrier; ``stdio``
+    / ``http`` are out-of-process carriers reserved for later backends.
+    """
+
+    NATIVE = "native"  # carried by the native runtime in-process, privileged
+    IN_PROCESS = "in_process"  # carried in-process by a non-native host
+    STDIO = "stdio"  # carried over a stdio subprocess transport
+    HTTP = "http"  # carried over an HTTP transport
+
+
 @dataclass(frozen=True)
 class RoleFlags:
     """Privilege / role posture of a bundle."""
@@ -60,14 +90,14 @@ class SecurityPolicy:
 
     permissions: tuple[str, ...] = ()  # named permissions the bundle needs
     requires_confirmation: tuple[str, ...] = ()  # tool names gated on confirm
-    danger: str = "safe"  # "safe" | "caution" | "destructive"
+    danger: str = SecurityDanger.SAFE.value  # see SecurityDanger
 
 
 @dataclass(frozen=True)
 class TransportSpec:
     """How the bundle's surfaces are carried."""
 
-    kind: str = "native"  # "native" | "stdio" | "http" | "in_process"
+    kind: str = TransportKind.NATIVE.value  # see TransportKind
     config: dict[str, Any] = field(default_factory=dict)
 
 
@@ -98,6 +128,22 @@ class BundleManifest:
             raise ValueError("BundleManifest.name is required")
         if not self.version:
             raise ValueError("BundleManifest.version is required")
+        try:
+            SecurityDanger(self.security.danger)
+        except ValueError as exc:
+            allowed = [d.value for d in SecurityDanger]
+            raise ValueError(
+                f"unknown security.danger {self.security.danger!r} "
+                f"(bundle {self.name!r}); allowed: {allowed}"
+            ) from exc
+        try:
+            TransportKind(self.transport.kind)
+        except ValueError as exc:
+            allowed = [t.value for t in TransportKind]
+            raise ValueError(
+                f"unknown transport.kind {self.transport.kind!r} "
+                f"(bundle {self.name!r}); allowed: {allowed}"
+            ) from exc
         if self.roles.native_only and not self.roles.privileged:
             raise ValueError(
                 f"native_only bundles must also be privileged (bundle {self.name!r})"
@@ -134,6 +180,42 @@ def _as_tuple(value: Any) -> tuple[str, ...]:
     if not all(isinstance(item, str) for item in value):
         raise BundleLoadError("manifest name lists must contain only strings")
     return tuple(value)
+
+
+def _strict_bool(value: Any, field_name: str, default: bool) -> bool:
+    """Read a role flag as a *real* boolean.
+
+    A missing flag falls back to ``default``. A present value must be an actual
+    ``bool`` — ``"false"``, ``"true"``, ``1``, ``0`` and the like are rejected
+    rather than truthiness-coerced, so a declaration can never quietly mean the
+    opposite of what it reads (e.g. the string ``"false"`` silently enabling a
+    privilege). ``bool`` is checked before ``int`` because ``True``/``False`` are
+    ``int`` instances in Python.
+    """
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise BundleLoadError(
+            f"role flag {field_name!r} must be a boolean, got "
+            f"{type(value).__name__} ({value!r})"
+        )
+    return value
+
+
+def _mapping_block(value: Any, field_name: str) -> dict[str, Any]:
+    """Coerce an optional mapping-valued field into a plain dict, strictly.
+
+    ``None`` (absent) yields ``{}``. A present value must be a ``Mapping`` — a
+    list, tuple, or scalar is rejected with a clear message instead of being
+    half-coerced (e.g. ``dict([("a", "b")])`` quietly accepting a list of pairs).
+    """
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise BundleLoadError(
+            f"manifest {field_name!r} must be a mapping, got {type(value).__name__}"
+        )
+    return dict(value)
 
 
 def load_manifest(data: Mapping[str, Any]) -> BundleManifest:
@@ -184,10 +266,16 @@ def load_manifest(data: Mapping[str, Any]) -> BundleManifest:
             version=data.get("version", ""),
             summary=data.get("summary", ""),
             roles=RoleFlags(
-                required=bool(roles_d.get("required", False)),
-                privileged=bool(roles_d.get("privileged", False)),
-                native_only=bool(roles_d.get("native_only", False)),
-                can_override=bool(roles_d.get("can_override", False)),
+                required=_strict_bool(roles_d.get("required"), "required", False),
+                privileged=_strict_bool(
+                    roles_d.get("privileged"), "privileged", False
+                ),
+                native_only=_strict_bool(
+                    roles_d.get("native_only"), "native_only", False
+                ),
+                can_override=_strict_bool(
+                    roles_d.get("can_override"), "can_override", False
+                ),
                 backend_replaceability=replaceability,
             ),
             surfaces=CapabilitySurfaces(
@@ -207,11 +295,11 @@ def load_manifest(data: Mapping[str, Any]) -> BundleManifest:
                 danger=security_d.get("danger", "safe"),
             ),
             transport=TransportSpec(
-                kind=transport_d.get("kind", "native"),
-                config=dict(transport_d.get("config", {}) or {}),
+                kind=transport_d.get("kind", TransportKind.NATIVE.value),
+                config=_mapping_block(transport_d.get("config"), "transport.config"),
             ),
             manual=_as_tuple(data.get("manual")),
-            metadata=dict(data.get("metadata", {}) or {}),
+            metadata=_mapping_block(data.get("metadata"), "metadata"),
         )
     except (TypeError, ValueError) as exc:
         raise BundleLoadError(f"malformed manifest declaration: {exc}") from exc
@@ -250,6 +338,8 @@ def proof_bundle() -> BundleManifest:
 
 __all__ = [
     "BackendReplaceability",
+    "SecurityDanger",
+    "TransportKind",
     "RoleFlags",
     "CapabilitySurfaces",
     "SecurityPolicy",
