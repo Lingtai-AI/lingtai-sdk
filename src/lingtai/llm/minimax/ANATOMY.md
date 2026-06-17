@@ -16,7 +16,7 @@ MiniMax adapter — inherits Anthropic-compatible endpoint, adds MCP client fact
 ## Connections
 
 - **Inherits**: `AnthropicAdapter` from `../anthropic/adapter.py` — full Anthropic Messages API protocol.
-- **MCP client**: `mcp_client.py` imports `MCPClient` from `lingtai_kernel.services.mcp`.
+- **MCP client**: `mcp_client.py` imports `MCPClient` via `...services.mcp` (the `lingtai.services.mcp` shim, now aliased to `lingtai_sdk.services.mcp`).
 - **External**: `anthropic` SDK (inherited), `uvx` binary (for MCP subprocess).
 - **No direct google/openai imports**.
 
