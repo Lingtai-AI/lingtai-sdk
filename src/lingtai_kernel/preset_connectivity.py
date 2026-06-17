@@ -14,7 +14,6 @@ Concurrency: check_many() runs all checks in parallel via ThreadPoolExecutor.
 """
 from __future__ import annotations
 
-import importlib.util
 import os
 import socket
 import time
@@ -23,15 +22,6 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 _PROBE_TIMEOUT_S = 2.0
-
-# Local CLI-login providers authenticate through a locally installed CLI/login
-# session (no per-request API key, no base_url) — so a TCP probe would be a
-# false negative. Health for these is "is the optional package importable?".
-# Maps the provider name (and its aliases) to the module that backs it.
-_LOCAL_CLI_LOGIN_PROVIDERS = {
-    "claude-agent-sdk": "claude_agent_sdk",
-    "claude_agent_sdk": "claude_agent_sdk",
-}
 
 # Default base_url per provider for presets that omit base_url.
 _PROVIDER_DEFAULT_URLS = {
@@ -62,19 +52,6 @@ def _probe_host(host: str, port: int, timeout: float) -> int:
     return elapsed_ms
 
 
-def _module_available(module_name: str) -> bool:
-    """Return True if ``module_name`` can be imported without importing it.
-
-    Used to gauge a local CLI-login provider's health: the optional package
-    being installed is the in-process, network-free signal that the provider
-    is usable.
-    """
-    try:
-        return importlib.util.find_spec(module_name) is not None
-    except (ImportError, ValueError):
-        return False
-
-
 def _resolve_url(provider: str | None, base_url: str | None) -> str | None:
     """Pick the URL to probe: explicit base_url > provider default > None."""
     if base_url:
@@ -99,31 +76,6 @@ def check_connectivity(
          "latency_ms": int (only on ok),
          "error": str | None}
     """
-    # Local CLI-login providers (e.g. claude-agent-sdk) have no network
-    # endpoint and no API key — they authenticate through a local CLI/login
-    # session. Probing a base_url would be a false negative, so gauge health
-    # by whether the optional backing package is importable. Never reach the
-    # base_url resolution below for these.
-    module_name = _LOCAL_CLI_LOGIN_PROVIDERS.get((provider or "").lower())
-    if module_name is not None:
-        if _module_available(module_name):
-            return {
-                "status": "ok",
-                "checked_at": datetime.now(timezone.utc).isoformat(),
-                "latency_ms": None,
-                "error": None,
-            }
-        return {
-            "status": "no_credentials",
-            "checked_at": datetime.now(timezone.utc).isoformat(),
-            "latency_ms": None,
-            "error": (
-                f"{provider} is a local CLI-login provider but its package "
-                f"{module_name!r} is not installed — run `pip install "
-                f"{module_name.replace('_', '-')}` and `claude login`"
-            ),
-        }
-
     # Credential check (free) — never makes a network call.
     if api_key_env and not os.environ.get(api_key_env):
         return {
