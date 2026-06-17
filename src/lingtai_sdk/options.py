@@ -47,6 +47,13 @@ class SystemPromptAssets:
         return not self.to_kwargs()
 
 
+def _redact_env(env: dict[str, str] | None) -> dict[str, str] | None:
+    """Return env with values redacted, preserving key names for diagnostics."""
+    if not env:
+        return None
+    return {k: _REDACTED for k in env}
+
+
 @dataclass
 class LingTaiOptions:
     """Declarative configuration for building/constructing a LingTai agent.
@@ -56,7 +63,8 @@ class LingTaiOptions:
     ``working_dir`` is required by :meth:`LingTaiClient.create_agent`).
 
     Secret safety: ``api_key`` is never shown in ``repr`` or in ``to_dict()``
-    when ``redact=True`` (the default). MCP configs redact their own secrets.
+    when ``redact=True`` (the default). Top-level ``env`` values and MCP
+    headers/env values are redacted by default.
     """
 
     # LLM
@@ -81,10 +89,13 @@ class LingTaiOptions:
     system_prompt: SystemPromptAssets | None = None
 
     # Budget / loop
+    # ``max_turns`` is recorded in AgentConfig for forward compatibility, but
+    # the current runtime deliberately ignores AgentConfig.max_turns for the
+    # active tool-loop guard. Do not treat it as an enforced limit yet.
     max_turns: int | None = None
     context_limit: int | None = None
 
-    # Environment / extra dirs (recorded; add_dirs not yet wired — see ANATOMY)
+    # Environment / extra dirs (recorded; not yet wired — see ANATOMY)
     env: dict[str, str] | None = None
     add_dirs: list[str | Path] | None = None
 
@@ -124,7 +135,7 @@ class LingTaiOptions:
             "disallowed_tools": self.disallowed_tools,
             "max_turns": self.max_turns,
             "context_limit": self.context_limit,
-            "env": dict(self.env) if self.env else None,
+            "env": (_redact_env(self.env) if (self.env and redact) else (dict(self.env) if self.env else None)),
             "add_dirs": ([str(d) for d in self.add_dirs] if self.add_dirs else None),
             "permission_mode": self.permission_mode,
         }

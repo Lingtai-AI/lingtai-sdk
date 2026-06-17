@@ -3,6 +3,8 @@ imports the facade (one-directional dependency)."""
 from __future__ import annotations
 
 import importlib
+import subprocess
+import sys
 
 import lingtai_sdk
 
@@ -15,6 +17,23 @@ def test_all_public_symbols_importable():
 def test_version_is_a_string():
     assert isinstance(lingtai_sdk.__version__, str)
     assert lingtai_sdk.__version__
+
+
+def test_plain_import_does_not_load_runtime_registry():
+    code = """
+import sys
+import lingtai_sdk
+print('lingtai' in sys.modules)
+print('lingtai.capabilities' in sys.modules)
+print(hasattr(lingtai_sdk, 'LingTaiOptions'))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    assert result.stdout.splitlines() == ["False", "False", "True"]
 
 
 def test_expected_symbols_present():

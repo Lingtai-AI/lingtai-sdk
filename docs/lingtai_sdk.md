@@ -53,16 +53,22 @@ client = LingTaiClient(options)
 # Pure, side-effect-free: inspect exactly what would be passed to Agent(...)
 kwargs = client.build_agent_kwargs()
 
-# Construct a live Agent (does NOT call .start() — you own the lifecycle)
+# Construct a live Agent (does NOT call .start() — you own the lifecycle).
+# Construction acquires the runtime workdir lock, so call agent.stop() even if
+# you never start the loop.
 agent = client.create_agent()
-# agent.start(); ...; agent.stop()
+# try:
+#     agent.start(); ...
+# finally:
+#     agent.stop()
 ```
 
 ### Options and secrets
 
-`LingTaiOptions.to_dict()` redacts `api_key` and MCP `headers`/`env` values by
-default (`to_dict(redact=False)` for the raw form). `repr(options)` never prints
-the API key. MCP config `repr`s show only key names, never secret values.
+`LingTaiOptions.to_dict()` redacts `api_key`, top-level `env` values, and MCP
+`headers`/`env` values by default (`to_dict(redact=False)` for the raw form).
+`repr(options)` never prints the API key. MCP config `repr`s show only key names,
+never secret values.
 
 ### MCP servers
 
@@ -108,4 +114,21 @@ optionally starts it, sends the prompt, and yields lifecycle events only.
 For deterministic programmatic control today, use
 `LingTaiClient.build_agent_kwargs` / `LingTaiClient.create_agent`. A full
 turn-loop `query` is a documented TODO pending a request/response contract in the
-runtime.
+runtime. With `autostart=True`, the queued prompt may begin a real turn before
+`stop()` completes; `query()` still does not wait for or collect that reply.
+
+## Forward-compatible placeholders
+
+Some fields deliberately exist before full runtime enforcement so the future
+`lingtai-cli` can translate project state into a stable SDK contract without an
+API break:
+
+- `permission_mode` is recorded but not enforced.
+- `add_dirs` and top-level `env` are serialized/redacted but not yet wired into
+  `Agent(...)`.
+- `allowed_tools` is surfaced for hosts but is not a runtime allowlist yet; use
+  `disallowed_tools` for current capability opt-out.
+- `max_turns` is recorded in `AgentConfig` for compatibility but is not an
+  enforced active tool-loop limit in the current runtime.
+- SSE and SDK MCP configs are typed placeholders; stdio/http are the current live
+  runtime connection paths.

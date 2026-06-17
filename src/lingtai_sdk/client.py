@@ -45,6 +45,10 @@ class LingTaiClient:
         Does NOT call ``.start()`` — the caller controls the message loop and
         lifecycle. ``working_dir`` is required (raises ``ValueError`` if absent).
 
+        Construction still acquires the runtime's exclusive working-directory
+        lock. Call ``agent.stop()`` to release it even if you never start the
+        loop.
+
         When *connect_mcp* is true and the options declare ``mcp_servers``, each
         server is connected after construction via the agent's ``connect_mcp`` /
         ``connect_mcp_http``. Connection failures are swallowed (logged via the

@@ -35,6 +35,12 @@ def test_to_dict_redacts_api_key_by_default():
     assert o.to_dict(redact=False)["api_key"] == "supersecret"
 
 
+def test_to_dict_redacts_top_level_env_by_default():
+    o = LingTaiOptions(env={"API_KEY": "supersecret"})
+    assert o.to_dict()["env"] == {"API_KEY": "***"}
+    assert o.to_dict(redact=False)["env"] == {"API_KEY": "supersecret"}
+
+
 def test_to_dict_serializes_mcp_servers_with_redaction():
     o = LingTaiOptions(
         mcp_servers={"web": MCPHttpServerConfig(url="https://x", headers={"A": "tok"})}

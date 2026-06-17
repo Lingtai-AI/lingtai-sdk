@@ -80,6 +80,8 @@ def options_to_agent_kwargs(
     - ``disable`` — derived from ``disallowed_tools`` (capability opt-outs)
     - prompt-asset kwargs (``covenant``/``principle``/...) when set
     - ``config`` — an ``AgentConfig`` when ``context_limit``/``max_turns`` set
+      (``max_turns`` is recorded for compatibility but not enforced by the
+      current active tool-loop guard)
     - ``_sdk_mcp_servers`` — runtime MCP dicts, NOT a real Agent kwarg. The SDK
       surfaces these here for :meth:`LingTaiClient.create_agent` to connect
       post-construction (the runtime loads MCP from the working dir, not via a
@@ -132,6 +134,9 @@ def _build_config(options: LingTaiOptions) -> Any | None:
     Returns ``None`` when no config-bearing field is set, so callers don't
     construct an all-default config unnecessarily.
     """
+    # AgentConfig.max_turns is preserved for API compatibility, but the
+    # current runtime ignores it for active tool-loop enforcement. We still
+    # record it here so future runtime/CLI adoption does not need an API break.
     if options.context_limit is None and options.max_turns is None:
         return None
 
