@@ -67,6 +67,9 @@ _LAZY_WRAPPER_EXPORTS: dict[str, tuple[str, str]] = {
 _LAZY_SDK_EXPORTS: dict[str, tuple[str, str]] = {
     "NativeRuntime": (".native", "NativeRuntime"),
     "NativeRuntimeSession": (".native", "NativeRuntimeSession"),
+    "LingTaiClient": (".client", "LingTaiClient"),
+    "QueryResult": (".client", "QueryResult"),
+    "query": (".client", "query"),
 }
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -79,6 +82,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
         VisionService,
     )
     from .native import NativeRuntime, NativeRuntimeSession  # noqa: F401
+    from .client import LingTaiClient, QueryResult, query  # noqa: F401
 
 
 def __getattr__(name: str):  # PEP 562 module-level lazy attributes
@@ -113,6 +117,10 @@ __all__ = [
     # Native runtime adapter (lazy, SDK-internal; wrapper loads only on start)
     "NativeRuntime",
     "NativeRuntimeSession",
+    # Thin public client facade (lazy, SDK-internal)
+    "LingTaiClient",
+    "QueryResult",
+    "query",
     # Configuration / state / messaging
     "AgentConfig",
     "AgentState",

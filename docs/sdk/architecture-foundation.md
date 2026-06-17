@@ -939,3 +939,39 @@ The import-purity boundary still holds: `import lingtai_sdk.native`, constructin
 `NativeRuntime(core_handlers=dummies)`, and creating a session load only
 import-pure SDK siblings and do not import the `lingtai` wrapper. Tests exercise
 the seam with dummy callables only.
+
+
+## 18. Stage 10 — thin public client facade (stacked PR)
+
+Stage 10 adds the first small user-facing SDK facade on top of the already
+defined runtime contract. It is deliberately a wrapper around the contract, not
+a new backend and not a revival of the held PR #321 implementation.
+
+New public pieces:
+
+- `LingTaiClient(runtime=None, options=None)` — a convenience object that owns a
+  `Runtime` and optional default `RuntimeOptions`. If no runtime is supplied, it
+  imports `NativeRuntime` lazily; the wrapper `Agent` still loads only when a
+  native session starts.
+- `LingTaiClient.query(message, ...)` — creates a fresh runtime session, starts
+  it, sends one `RuntimeMessage`, drains the immediately available events, stops
+  by default, and returns a `QueryResult`.
+- `QueryResult(text, events)` — stores concatenated `TEXT` event chunks and the
+  full event tuple for callers that need state/tool/usage/error data.
+- module-level `query(...)` — a one-shot helper around `LingTaiClient`.
+
+The facade is intentionally synchronous and minimal. It does not block on a
+full LingTai turn beyond whatever the supplied runtime/session implements; it
+only follows the current runtime contract. Tests inject a fake runtime, so the
+slice needs no model, no provider key, and no wrapper process.
+
+Import-purity rule: `lingtai_sdk.client` imports only `lingtai_sdk.runtime` and
+standard-library modules. The root package exposes `LingTaiClient`,
+`QueryResult`, and `query` through the existing SDK-internal lazy export table,
+so `import lingtai_sdk` and then accessing the facade stays wrapper-free.
+
+What Stage 10 deliberately is **not**:
+
+- no Anthropic / Claude Code / non-native backend;
+- no kernel turn-loop, wrapper, provider, or core bundle behavior change;
+- no wholesale import of the held #321 candidate.
