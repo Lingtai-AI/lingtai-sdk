@@ -102,7 +102,7 @@ def build_agent(data: dict, working_dir: Path) -> Agent:
     # by default. Set to 0 in init.json to disable gating.
     max_rpm = m.get("max_rpm", 60)
     provider_defaults = build_provider_defaults_from_manifest_llm(
-        llm, max_rpm=max_rpm
+        llm, max_rpm=max_rpm, agent_init_path=working_dir / "init.json"
     )
     service = LLMService(
         provider=llm["provider"],

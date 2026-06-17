@@ -40,6 +40,33 @@ class TestAdapterRegistry:
         adapter = svc.get_adapter("myprovider")
         assert adapter._init_kwargs["api_key"] == "test-key"
 
+
+    def test_codex_receives_agent_init_path_default(self, tmp_path):
+        LLMService.register_adapter("codex", _make_stub_adapter)
+        init_path = tmp_path / "agent" / "init.json"
+        svc = LLMService(
+            "codex",
+            "gpt-5.5",
+            api_key="test-key",
+            provider_defaults={"codex": {"agent_init_path": str(init_path)}},
+        )
+
+        adapter = svc.get_adapter("codex")
+        assert adapter._init_kwargs["agent_init_path"] == str(init_path)
+
+    def test_agent_init_path_default_is_codex_only(self, tmp_path):
+        LLMService.register_adapter("openai", _make_stub_adapter)
+        init_path = tmp_path / "agent" / "init.json"
+        svc = LLMService(
+            "openai",
+            "gpt-5.5",
+            api_key="test-key",
+            provider_defaults={"openai": {"agent_init_path": str(init_path)}},
+        )
+
+        adapter = svc.get_adapter("openai")
+        assert "agent_init_path" not in adapter._init_kwargs
+
     def test_create_adapter_unknown_provider_raises(self):
         import pytest
         with pytest.raises(RuntimeError, match="No adapter registered"):

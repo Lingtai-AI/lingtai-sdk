@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import threading
+from pathlib import Path
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -67,6 +68,7 @@ def build_provider_defaults_from_manifest_llm(
     llm: dict,
     *,
     max_rpm: int,
+    agent_init_path: str | os.PathLike[str] | None = None,
 ) -> dict | None:
     """Convert a manifest.llm block into LLMService.provider_defaults.
 
@@ -79,6 +81,8 @@ def build_provider_defaults_from_manifest_llm(
     per_provider: dict = {}
     if max_rpm > 0:
         per_provider["max_rpm"] = max_rpm
+    if provider_key == "codex" and agent_init_path is not None:
+        per_provider["agent_init_path"] = str(Path(agent_init_path).expanduser().resolve(strict=False))
     user_headers = llm.get("default_headers")
     if isinstance(user_headers, dict) and user_headers:
         # Pass-through; LLMService._default_headers_for honors caller-supplied
@@ -170,10 +174,14 @@ class LLMService(LLMServiceABC):
                 f"If using lingtai, ensure 'import lingtai' runs before creating LLMService."
             )
 
+        extra_kw: dict = {}
+        if p == "codex" and defaults and defaults.get("agent_init_path") is not None:
+            extra_kw["agent_init_path"] = defaults["agent_init_path"]
+
         return factory(
             model=self._model,
             defaults=defaults,
-            **key_kw, **url_kw, **rpm_kw, **headers_kw,
+            **key_kw, **url_kw, **rpm_kw, **headers_kw, **extra_kw,
         )
 
     def _default_headers_for(self, provider: str, defaults: dict | None) -> dict | None:

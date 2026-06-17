@@ -12,8 +12,10 @@ parameter``). These tests assert the wire kwargs the session sends:
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 
 from lingtai.llm.openai.adapter import (
@@ -77,12 +79,23 @@ def _function_schema() -> FunctionSchema:
     )
 
 
-def _create_codex_session(events: list[Event], *, model: str = "gpt-5.5"):
+def _expected_init_key(init_path: Path, *, model: str = "gpt-5.5") -> str:
+    init_hash = hashlib.sha256(str(init_path.resolve(strict=False)).encode("utf-8")).hexdigest()[:16]
+    return f"lingtai-codex:{model}:init-{init_hash}:v2"
+
+
+def _create_codex_session(
+    events: list[Event],
+    *,
+    model: str = "gpt-5.5",
+    agent_init_path: Path | None = None,
+):
     adapter = CodexOpenAIAdapter(
         api_key="fake",
         base_url="http://fake",
         use_responses=True,
         force_responses=True,
+        agent_init_path=agent_init_path,
     )
     adapter._client = FakeClient(events)
     return adapter.create_chat(
@@ -108,6 +121,37 @@ def test_codex_request_includes_default_prompt_cache_key():
     assert sent["prompt_cache_key"] == "lingtai-codex:gpt-5.5:v1"
 
 
+def test_codex_request_uses_agent_init_path_hash_when_available(tmp_path):
+    init_path = tmp_path / "agent-a" / "init.json"
+    session = _create_codex_session(
+        [_completed()],
+        model="gpt-5.5",
+        agent_init_path=init_path,
+    )
+
+    session.send("please answer via tool")
+
+    sent = session._client.responses.kwargs[0]
+    assert sent["prompt_cache_key"] == _expected_init_key(init_path)
+    assert str(init_path) not in sent["prompt_cache_key"]
+
+
+def test_codex_agent_init_path_hash_distinguishes_agents(tmp_path):
+    init_a = tmp_path / "agent-a" / "init.json"
+    init_b = tmp_path / "agent-b" / "init.json"
+
+    session_a = _create_codex_session([_completed()], agent_init_path=init_a)
+    session_b = _create_codex_session([_completed()], agent_init_path=init_b)
+    session_a.send("hi")
+    session_b.send("hi")
+
+    key_a = session_a._client.responses.kwargs[0]["prompt_cache_key"]
+    key_b = session_b._client.responses.kwargs[0]["prompt_cache_key"]
+    assert key_a == _expected_init_key(init_a)
+    assert key_b == _expected_init_key(init_b)
+    assert key_a != key_b
+
+
 def test_codex_request_omits_prompt_cache_retention():
     session = _create_codex_session([_completed()])
 
@@ -126,14 +170,19 @@ def test_codex_request_has_no_cache_control_anywhere():
     assert _no_cache_control(sent)
 
 
-def test_codex_prompt_cache_key_is_stable_across_requests():
-    session = _create_codex_session([_completed(), _completed()], model="gpt-5.5")
+def test_codex_prompt_cache_key_is_stable_across_requests(tmp_path):
+    init_path = tmp_path / "agent-a" / "init.json"
+    session = _create_codex_session(
+        [_completed(), _completed()],
+        model="gpt-5.5",
+        agent_init_path=init_path,
+    )
 
     session.send("first")
     session.send("second")
 
     keys = [kw["prompt_cache_key"] for kw in session._client.responses.kwargs]
-    assert keys == ["lingtai-codex:gpt-5.5:v1", "lingtai-codex:gpt-5.5:v1"]
+    assert keys == [_expected_init_key(init_path), _expected_init_key(init_path)]
 
 
 def test_explicit_prompt_cache_key_overrides_default():

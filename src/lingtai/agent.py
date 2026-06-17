@@ -1126,7 +1126,7 @@ class Agent(BaseAgent):
         # 60 RPM cap by default. Set to 0 in init.json to disable gating.
         new_max_rpm = m.get("max_rpm", 60)
         new_provider_defaults = build_provider_defaults_from_manifest_llm(
-            llm, max_rpm=new_max_rpm
+            llm, max_rpm=new_max_rpm, agent_init_path=self._working_dir / "init.json"
         )
 
         cur_provider_defaults_bucket = getattr(
@@ -1138,6 +1138,7 @@ class Agent(BaseAgent):
             or new_base_url != getattr(self.service, "_base_url", None)
             or new_max_rpm != cur_provider_defaults_bucket.get("max_rpm", 0)
             or llm.get("api_compat") != cur_provider_defaults_bucket.get("api_compat")
+            or (new_provider_defaults or {}).get(new_provider.lower(), {}).get("agent_init_path") != cur_provider_defaults_bucket.get("agent_init_path")
         ):
             self.service = LLMService(
                 provider=new_provider, model=new_model,

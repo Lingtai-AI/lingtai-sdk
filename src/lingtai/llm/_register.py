@@ -70,6 +70,7 @@ def register_all_adapters() -> None:
             base_url="https://chatgpt.com/backend-api/codex",
             use_responses=True,
             force_responses=True,
+            agent_init_path=kw.get("agent_init_path"),
         )
         # Store the token manager so we can refresh before each API call.
         # The openai SDK's client.api_key is mutable — we update it in-place.

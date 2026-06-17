@@ -73,6 +73,20 @@ def test_build_provider_defaults_returns_none_when_nothing_set():
     assert out is None
 
 
+
+
+def test_build_provider_defaults_includes_agent_init_path(tmp_path):
+    init_path = tmp_path / "agent" / "init.json"
+    out = build_provider_defaults_from_manifest_llm(
+        {"provider": "codex", "model": "gpt-5.5"},
+        max_rpm=0,
+        agent_init_path=init_path,
+    )
+    assert out == {
+        "codex": {"agent_init_path": str(init_path.resolve(strict=False))},
+    }
+
+
 def test_build_provider_defaults_includes_default_headers():
     out = build_provider_defaults_from_manifest_llm(
         {
