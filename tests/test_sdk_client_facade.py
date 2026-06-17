@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from lingtai_sdk import runtime as rt
-from lingtai_sdk.client import LingTaiClient, QueryResult, query
+from lingtai_sdk.client import LingTaiClient, QueryResult, open_session, query
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC = REPO_ROOT / "src"
@@ -135,6 +135,67 @@ assert Result.__name__ == 'QueryResult'
 assert callable(helper)
 bad = [m for m in sys.modules if m == 'lingtai' or m.startswith('lingtai.')]
 assert not bad, bad
+print('OK')
+"""
+    r = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
+        env={**os.environ, "PYTHONPATH": str(SRC)},
+    )
+    assert r.returncode == 0, r.stderr
+    assert "OK" in r.stdout
+
+
+def test_open_session_keeps_session_live_for_multiple_messages(tmp_path):
+    runtime = FakeRuntime()
+    client = LingTaiClient(runtime=runtime, options=rt.RuntimeOptions(working_dir=tmp_path))
+
+    session = client.open_session()
+    assert session.state is rt.RuntimeState.ACTIVE
+    assert session.working_dir == tmp_path
+
+    session.send("one").send("two", sender="ops")
+    assert session.text() == "echo:oneecho:two"
+    assert runtime.sessions[0].sent[0].content == "one"
+    assert runtime.sessions[0].sent[1].sender == "ops"
+    final_events = session.close()
+    assert runtime.sessions[0].stopped is True
+    assert [event.kind for event in final_events] == [rt.EventKind.STATE]
+
+
+def test_open_session_helper_and_context_manager_close(tmp_path):
+    runtime = FakeRuntime()
+
+    with open_session(runtime=runtime, options=rt.RuntimeOptions(working_dir=tmp_path)) as session:
+        assert session.raw_session is runtime.sessions[0]
+        session.send("ctx")
+        assert session.text() == "echo:ctx"
+        assert runtime.sessions[0].stopped is False
+
+    assert runtime.sessions[0].stopped is True
+
+
+def test_open_session_requires_options():
+    client = LingTaiClient(runtime=FakeRuntime())
+    with pytest.raises(ValueError, match="open_session.*requires RuntimeOptions"):
+        client.open_session()
+
+
+def test_root_exports_session_facade_lazily_and_wrapper_free(tmp_path):
+    code = f"""
+import sys
+sys.path.insert(0, {str(SRC)!r})
+import lingtai_sdk
+Session = lingtai_sdk.LingTaiSession
+open_session = lingtai_sdk.open_session
+assert Session.__name__ == 'LingTaiSession'
+assert callable(open_session)
+bad = [m for m in sys.modules if m == 'lingtai' or m.startswith('lingtai.')]
+assert not bad, bad
+assert 'LingTaiSession' in dir(lingtai_sdk)
+assert 'open_session' in dir(lingtai_sdk)
 print('OK')
 """
     r = subprocess.run(

@@ -68,7 +68,9 @@ _LAZY_SDK_EXPORTS: dict[str, tuple[str, str]] = {
     "NativeRuntime": (".native", "NativeRuntime"),
     "NativeRuntimeSession": (".native", "NativeRuntimeSession"),
     "LingTaiClient": (".client", "LingTaiClient"),
+    "LingTaiSession": (".client", "LingTaiSession"),
     "QueryResult": (".client", "QueryResult"),
+    "open_session": (".client", "open_session"),
     "query": (".client", "query"),
 }
 
@@ -82,7 +84,13 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
         VisionService,
     )
     from .native import NativeRuntime, NativeRuntimeSession  # noqa: F401
-    from .client import LingTaiClient, QueryResult, query  # noqa: F401
+    from .client import (  # noqa: F401
+        LingTaiClient,
+        LingTaiSession,
+        QueryResult,
+        open_session,
+        query,
+    )
 
 
 def __getattr__(name: str):  # PEP 562 module-level lazy attributes
@@ -119,7 +127,9 @@ __all__ = [
     "NativeRuntimeSession",
     # Thin public client facade (lazy, SDK-internal)
     "LingTaiClient",
+    "LingTaiSession",
     "QueryResult",
+    "open_session",
     "query",
     # Configuration / state / messaging
     "AgentConfig",

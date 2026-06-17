@@ -975,3 +975,27 @@ What Stage 10 deliberately is **not**:
 - no Anthropic / Claude Code / non-native backend;
 - no kernel turn-loop, wrapper, provider, or core bundle behavior change;
 - no wholesale import of the held #321 candidate.
+
+
+## 19. Stage 11 — session facade over RuntimeSession (stacked PR)
+
+Stage 11 fills the gap called out by the Stage-10 GLM review: `query()` is an
+immediate-events one-shot helper and should not pretend to hold a conversation
+or wait for a full asynchronous native turn. The new session facade gives
+callers an explicit live-session surface instead.
+
+New pieces:
+
+- `LingTaiClient.open_session(options=None)` — creates, starts, and returns a
+  `LingTaiSession`. Options may come from the client default or the call.
+- `LingTaiSession` — a small public wrapper over `RuntimeSession` with
+  `send(...)`, `events()`, `text()`, `close()`, `state`, `working_dir`,
+  `raw_session`, and context-manager support.
+- module-level `open_session(...)` — a one-shot helper mirroring `query(...)` but
+  returning a live session.
+
+This is still only a facade over the runtime contract. It adds no backend, no
+blocking turn loop, and no wrapper/provider behavior. Tests use the existing
+fake runtime; they verify multiple sends, event polling, explicit/context close,
+missing-options errors, and root lazy exports without importing the `lingtai`
+wrapper.
