@@ -140,6 +140,39 @@ read-only `echo` bundle that exercises the schema end to end at the lowest
 possible risk. **Core bundles (`system` / `psyche` / `soul`) are deliberately
 not migrated in this PR.**
 
+### 6.1 The load/host boundary (proof)
+
+The schema alone is a declaration; proving it is *usable* means walking the
+whole path a non-native host walks for a declared bundle:
+
+```
+declared manifest (plain dict)
+   -> capabilities.load_manifest()   # parse + validate -> typed BundleManifest
+   -> capability_host.BundleHost      # register manifest + tool handlers
+   -> BundleHost.invoke(tool, ...)    # call a declared, harmless tool
+```
+
+- `capabilities.load_manifest(data)` is the inverse of `BundleManifest.to_dict()`:
+  it reconstructs the nested frozen dataclasses and the `BackendReplaceability`
+  enum from a plain dict, then `validate()`s — so a loaded manifest is always a
+  valid one. Unknown enum values, non-mapping nested blocks, or failed
+  invariants raise `BundleLoadError`. Unknown keys are ignored (forward
+  compatibility).
+- `capability_host.BundleHost` is the **non-native** host. It validates the
+  manifest on registration, **refuses** any `privileged`/`native_only` bundle
+  (only the native runtime may host those — which is exactly why the core
+  bundles stay out), and enforces the manifest↔implementation contract: every
+  declared `surfaces.tools` name has a handler and no handler is undeclared.
+  Breaches raise `BundleHostError`.
+- `capability_host.proof_host()` wires `proof_bundle()` to a deterministic,
+  network-free `echo` handler. `proof_host().invoke("echo", text="hi")` returns
+  `{"echo": "hi"}` with no I/O — the end-to-end proof.
+
+Both modules are import-pure (no wrapper, no provider SDK), so `import
+lingtai_sdk.capability_host` stays as cheap as the schema. This proves the
+*boundary*; it does **not** migrate any real intrinsic behavior, wire the
+wrapper's real capabilities through manifests, or touch the kernel turn loop.
+
 
 ## 7. Top-level assets and `lingtai-sdk-skill`
 
@@ -217,10 +250,11 @@ src/lingtai_sdk/
   __init__.py        # curated public surface (eager kernel, lazy wrapper)
   _version.py        # best-effort __version__ from lingtai metadata
   types.py           # kernel type re-exports under a stable path
-  errors.py          # LingTaiSDKError + kernel UnknownToolError
+  errors.py          # LingTaiSDKError (+ BundleLoadError/BundleHostError) + kernel UnknownToolError
   _compat.py         # legacy -> SDK migration map
   runtime.py         # runtime contract seed (DTOs + ABCs)
-  capabilities.py    # CapabilityBundle manifest seed + proof_bundle()
+  capabilities.py    # CapabilityBundle manifest seed + load_manifest() + proof_bundle()
+  capability_host.py # CapabilityBundle host boundary proof (BundleHost + proof_host)
   native.py          # NativeRuntime adapter (stages 1-4; wraps Agent; lazy)
   ANATOMY.md         # per-folder anatomy
 
@@ -229,6 +263,7 @@ tests/
   test_sdk_compat.py            # legacy paths resolve to the same object
   test_sdk_runtime_contract.py  # runtime DTOs (incl. activity constructors) + a usable concrete subclass
   test_sdk_capabilities.py      # manifest invariants + proof bundle
+  test_sdk_capability_host.py   # manifest load + host boundary: load->validate->register->invoke; refuses privileged
   test_sdk_native_runtime.py          # stage 1: translation, lifecycle, purity (fake agent)
   test_sdk_native_runtime_llm.py      # stage 2: LLM-service translation
   test_sdk_native_runtime_manifest.py # stage 3: manifest.llm translation

@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import enum
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, Mapping
+
+from .errors import BundleLoadError
 
 
 class BackendReplaceability(str, enum.Enum):
@@ -117,6 +119,110 @@ class BundleManifest:
         return d
 
 
+def _as_tuple(value: Any) -> tuple[str, ...]:
+    """Coerce a JSON array/tuple of names into a ``tuple[str, ...]``.
+
+    Strings are rejected explicitly rather than split into characters; the
+    manifest schema treats named surfaces as arrays of names.
+    """
+    if value is None:
+        return ()
+    if isinstance(value, str | bytes) or not isinstance(value, (list, tuple)):
+        raise BundleLoadError(
+            f"manifest name lists must be arrays, got {type(value).__name__}"
+        )
+    if not all(isinstance(item, str) for item in value):
+        raise BundleLoadError("manifest name lists must contain only strings")
+    return tuple(value)
+
+
+def load_manifest(data: Mapping[str, Any]) -> BundleManifest:
+    """Load a validated :class:`BundleManifest` from a plain-dict declaration.
+
+    The inverse of :meth:`BundleManifest.to_dict`: a host receives a bundle's
+    *declaration* as data (e.g. parsed from a manifest file) and gets back a
+    typed, **validated** manifest. Reconstructs the nested frozen dataclasses
+    and the ``BackendReplaceability`` enum, then calls ``validate()`` — so a
+    successfully loaded manifest is always a valid one. Unknown enum values,
+    non-mapping nested blocks, or failed invariants raise
+    :class:`~lingtai_sdk.errors.BundleLoadError`.
+
+    Only recognized fields are read; unknown keys are ignored so a newer
+    declaration stays loadable by an older reader.
+    """
+    if not isinstance(data, Mapping):
+        raise BundleLoadError(
+            f"manifest declaration must be a mapping, got {type(data).__name__}"
+        )
+
+    def _block(key: str) -> Mapping[str, Any]:
+        block = data.get(key, {}) or {}
+        if not isinstance(block, Mapping):
+            raise BundleLoadError(f"manifest {key!r} block must be a mapping")
+        return block
+
+    roles_d = _block("roles")
+    repl_raw = roles_d.get("backend_replaceability")
+    try:
+        replaceability = (
+            BackendReplaceability(repl_raw)
+            if repl_raw is not None
+            else BackendReplaceability.REPLACEABLE
+        )
+    except ValueError as exc:
+        raise BundleLoadError(
+            f"unknown backend_replaceability {repl_raw!r}"
+        ) from exc
+
+    surfaces_d = _block("surfaces")
+    security_d = _block("security")
+    transport_d = _block("transport")
+
+    try:
+        manifest = BundleManifest(
+            name=data.get("name", ""),
+            version=data.get("version", ""),
+            summary=data.get("summary", ""),
+            roles=RoleFlags(
+                required=bool(roles_d.get("required", False)),
+                privileged=bool(roles_d.get("privileged", False)),
+                native_only=bool(roles_d.get("native_only", False)),
+                can_override=bool(roles_d.get("can_override", False)),
+                backend_replaceability=replaceability,
+            ),
+            surfaces=CapabilitySurfaces(
+                tools=_as_tuple(surfaces_d.get("tools")),
+                resources=_as_tuple(surfaces_d.get("resources")),
+                prompts=_as_tuple(surfaces_d.get("prompts")),
+                events=_as_tuple(surfaces_d.get("events")),
+                hooks=_as_tuple(surfaces_d.get("hooks")),
+                lifecycle=_as_tuple(surfaces_d.get("lifecycle")),
+                state=_as_tuple(surfaces_d.get("state")),
+            ),
+            security=SecurityPolicy(
+                permissions=_as_tuple(security_d.get("permissions")),
+                requires_confirmation=_as_tuple(
+                    security_d.get("requires_confirmation")
+                ),
+                danger=security_d.get("danger", "safe"),
+            ),
+            transport=TransportSpec(
+                kind=transport_d.get("kind", "native"),
+                config=dict(transport_d.get("config", {}) or {}),
+            ),
+            manual=_as_tuple(data.get("manual")),
+            metadata=dict(data.get("metadata", {}) or {}),
+        )
+    except (TypeError, ValueError) as exc:
+        raise BundleLoadError(f"malformed manifest declaration: {exc}") from exc
+
+    try:
+        manifest.validate()
+    except ValueError as exc:
+        raise BundleLoadError(str(exc)) from exc
+    return manifest
+
+
 def proof_bundle() -> BundleManifest:
     """A harmless, metadata-only synthetic bundle exercising the schema.
 
@@ -149,5 +255,6 @@ __all__ = [
     "SecurityPolicy",
     "TransportSpec",
     "BundleManifest",
+    "load_manifest",
     "proof_bundle",
 ]
