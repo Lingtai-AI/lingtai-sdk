@@ -51,7 +51,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 
 ## Composition
 
-Parent: `src/lingtai/` under `lingtai-kernel/src/` alongside `lingtai_kernel/` (kernel package). Siblings: `capabilities/`, `core/`, `llm/`, `services/`, `auth/`, `i18n/`. See `../ANATOMY.md`.
+Parent: `src/lingtai/` under `lingtai-kernel/src/` alongside `lingtai_kernel/` (kernel package) and `lingtai_sdk/` (public programmable facade — see `../lingtai_sdk/ANATOMY.md`; it imports `lingtai` but `lingtai` never imports it). Siblings within this package: `capabilities/`, `core/`, `llm/`, `services/`, `auth/`, `i18n/`. See `../ANATOMY.md`.
 
 ## State
 
