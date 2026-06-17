@@ -208,3 +208,40 @@ print('OK')
     )
     assert r.returncode == 0, r.stderr
     assert "OK" in r.stdout
+
+
+def test_root_exports_runtime_contract_lazily_and_wrapper_free(tmp_path):
+    code = f"""
+import sys
+sys.path.insert(0, {str(SRC)!r})
+import lingtai_sdk
+Options = lingtai_sdk.RuntimeOptions
+Message = lingtai_sdk.RuntimeMessage
+Event = lingtai_sdk.RuntimeEvent
+State = lingtai_sdk.RuntimeState
+Kind = lingtai_sdk.EventKind
+Runtime = lingtai_sdk.Runtime
+Session = lingtai_sdk.RuntimeSession
+assert Options.__name__ == 'RuntimeOptions'
+assert Message.__name__ == 'RuntimeMessage'
+assert Event.text('hi').kind is Kind.TEXT
+assert State.PENDING.value == 'pending'
+assert Runtime.__name__ == 'Runtime'
+assert Session.__name__ == 'RuntimeSession'
+opts = Options(working_dir={str(tmp_path)!r})
+assert str(opts.working_dir).endswith({tmp_path.name!r})
+bad = [m for m in sys.modules if m == 'lingtai' or m.startswith('lingtai.')]
+assert not bad, bad
+for name in ('RuntimeOptions', 'RuntimeMessage', 'RuntimeEvent', 'RuntimeState', 'EventKind', 'Runtime', 'RuntimeSession'):
+    assert name in dir(lingtai_sdk)
+print('OK')
+"""
+    r = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
+        env={**os.environ, "PYTHONPATH": str(SRC)},
+    )
+    assert r.returncode == 0, r.stderr
+    assert "OK" in r.stdout

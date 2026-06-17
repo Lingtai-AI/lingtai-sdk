@@ -72,6 +72,13 @@ _LAZY_SDK_EXPORTS: dict[str, tuple[str, str]] = {
     "QueryResult": (".client", "QueryResult"),
     "open_session": (".client", "open_session"),
     "query": (".client", "query"),
+    "EventKind": (".runtime", "EventKind"),
+    "Runtime": (".runtime", "Runtime"),
+    "RuntimeEvent": (".runtime", "RuntimeEvent"),
+    "RuntimeMessage": (".runtime", "RuntimeMessage"),
+    "RuntimeOptions": (".runtime", "RuntimeOptions"),
+    "RuntimeSession": (".runtime", "RuntimeSession"),
+    "RuntimeState": (".runtime", "RuntimeState"),
 }
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -90,6 +97,15 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
         QueryResult,
         open_session,
         query,
+    )
+    from .runtime import (  # noqa: F401
+        EventKind,
+        Runtime,
+        RuntimeEvent,
+        RuntimeMessage,
+        RuntimeOptions,
+        RuntimeSession,
+        RuntimeState,
     )
 
 
@@ -125,12 +141,19 @@ __all__ = [
     # Native runtime adapter (lazy, SDK-internal; wrapper loads only on start)
     "NativeRuntime",
     "NativeRuntimeSession",
-    # Thin public client facade (lazy, SDK-internal)
+    # Thin public client/runtime facade (lazy, SDK-internal)
     "LingTaiClient",
     "LingTaiSession",
     "QueryResult",
     "open_session",
     "query",
+    "EventKind",
+    "Runtime",
+    "RuntimeEvent",
+    "RuntimeMessage",
+    "RuntimeOptions",
+    "RuntimeSession",
+    "RuntimeState",
     # Configuration / state / messaging
     "AgentConfig",
     "AgentState",

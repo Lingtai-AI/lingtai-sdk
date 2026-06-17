@@ -1032,3 +1032,32 @@ What Stage 12 deliberately is **not**:
 - no kernel turn-loop, wrapper, provider, or core bundle behavior change;
 - no change to the runtime contract shape beyond the public return annotation on
   the facade property.
+
+
+## 21. Stage 13 — root runtime contract exports (stacked PR)
+
+Stage 13 is a small public-API ergonomics layer on top of the Stage-10/11 client
+facades. The root package now exposes the runtime contract names through the same
+SDK-internal lazy export table used by `LingTaiClient` and `NativeRuntime`:
+
+- `RuntimeOptions`
+- `RuntimeMessage`
+- `RuntimeEvent`
+- `RuntimeState`
+- `EventKind`
+- `Runtime`
+- `RuntimeSession`
+
+This lets users write `lingtai_sdk.RuntimeOptions(...)` next to
+`lingtai_sdk.query(...)` / `lingtai_sdk.open_session(...)` without a separate
+`from lingtai_sdk import runtime` hop. The target module is the existing
+import-pure `lingtai_sdk.runtime` contract seed, so the wrapper boundary remains
+unchanged: `import lingtai_sdk` and accessing these names do not import the
+`lingtai` wrapper or provider SDKs.
+
+What Stage 13 deliberately is **not**:
+
+- no new runtime/backend behavior;
+- no kernel turn-loop, wrapper, provider, or core bundle behavior change;
+- no change to the runtime DTO/ABC definitions themselves; this only exposes
+  existing contract names at the public root.
