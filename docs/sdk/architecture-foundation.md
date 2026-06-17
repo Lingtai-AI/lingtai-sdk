@@ -180,12 +180,13 @@ PR, sequenced so contracts stabilize before implementations depend on them.
 
 1. **Stage 0 (this PR) — foundation.** Public doorway, import-purity guarantee,
    compatibility map, runtime + capability-bundle contract seeds, docs.
-2. **Stage 1 — live NativeRuntime _(skeleton landed; see §10)_.** A thin
-   `Runtime`/`RuntimeSession` implementation wrapping the existing `Agent` (no
-   kernel turn-loop changes), driven through the contract from stage 0. Tested
-   against a fake agent — no real model, API key, or running process. Stacked on
-   the stage-0 PR. LLM-service translation and a live event bridge are follow-ups
-   within this stage.
+2. **Stage 1 — live NativeRuntime _(skeleton + LLM-service translation landed;
+   see §10, §11)_.** A thin `Runtime`/`RuntimeSession` implementation wrapping
+   the existing `Agent` (no kernel turn-loop changes), driven through the
+   contract from stage 0. Tested against a fake agent — no real model, API key,
+   or running process. Stacked on the stage-0 PR. The default-factory
+   LLM-service translation landed as a stacked follow-up (§11); a live event
+   bridge is still a follow-up within this stage.
 3. **Stage 2 — capability-bundle adoption.** Express one or two *low-risk*
    real capabilities as `BundleManifest`s and wire the wrapper to read the
    manifest. Still no `system`/`psyche`/`soul`.
@@ -261,7 +262,7 @@ changes, no `LLMService` construction, no non-native backend.
 |---|---|
 | `working_dir` | → `Agent(working_dir=...)` (required) |
 | `agent_name`, `capabilities`, `addons`, `streaming` | → `Agent(...)` kwargs when set |
-| `provider`, `model`, `base_url`, `api_key` | **deferred** → `session.deferred['llm']` (building an `LLMService` is a later stage; `Agent` takes a ready service, not raw provider fields) |
+| `provider`, `model`, `base_url`, `api_key` | stage 1: **deferred** → `session.deferred['llm']`. **Stage 2 (§11):** on the default factory path these build the `LLMService` and move to `session.applied['llm']` (secret-free) |
 | `manifest`, `system_prompt_overrides`, `extra` | **deferred** → `session.deferred[...]` (recorded, not applied) |
 
 Deferring rather than force-applying keeps stage 1 honest: anything recognized
@@ -282,3 +283,63 @@ A subprocess test asserts this.
 All stage-1 tests run with no API key and no real agent process: a fake agent
 is injected through `agent_factory`, so lifecycle transitions, event emission,
 `send()` routing, and the translation table are all exercised in-memory.
+
+## 11. Stage 2 — LLM-service translation (stacked PR)
+
+Stage 2 is a small PR **stacked on top of the stage-1 skeleton**. It closes
+GLM stage-1 review nit **N2**: the default `agent_factory` called
+`Agent(**kwargs)` without a `service`, but the wrapper `Agent` (via `BaseAgent`)
+requires one — so a real `start()` raised an opaque missing-`service`
+`TypeError`. Stage 2 makes the default factory build the service the agent
+needs, and fails loudly and early when it can't.
+
+### What it adds
+
+- **`_llm_service_from_options(options)`** — lazily imports
+  `lingtai.llm.service.LLMService` (which registers the built-in adapters and
+  pulls the active provider's SDK) and builds a service from `provider` /
+  `model` / `base_url` / `api_key`. The lazy import keeps `import
+  lingtai_sdk.native` and constructing a `NativeRuntime` provider-free.
+- **`NativeRuntimeConfigurationError`** (`lingtai_sdk.errors`, subclass of
+  `LingTaiSDKError`) — raised *before* any agent is constructed when the default
+  factory is used but `provider`/`model` are partial or absent. The session
+  stays `PENDING`; no opaque `TypeError` leaks. The message never echoes
+  `api_key`.
+- **`session.applied`** — a secret-free record of what was actually applied to
+  the agent. On the default path, the LLM config moves out of
+  `session.deferred['llm']` (cleared to `{}`) and into `session.applied['llm']`
+  with `api_key` stripped (`_public_llm_fields`).
+- **`_uses_default_factory`** — an injected `agent_factory` bypasses service
+  building entirely (it supplies its own agent/service), so fakes and hosts boot
+  without a real `LLMService` and the runtime stays network-free.
+
+### Applied vs. deferred (stage 2)
+
+| `RuntimeOptions` field | Default factory | Injected factory |
+|---|---|---|
+| `provider`, `model`, `base_url` | built into `LLMService`, recorded in `session.applied['llm']` | left in `session.deferred['llm']` (factory owns the service) |
+| `api_key` | consumed into the `LLMService`; **never** stored on the session, in events, or in errors/reprs | **never** stored on the session; the injected factory owns any service/secret handling |
+| `manifest`, `system_prompt_overrides`, `extra` | still deferred (init.json-level translation is a later stage) | still deferred |
+
+### Secret hygiene
+
+`api_key` is consumed into the `LLMService` constructor and **never** retained on
+the session, surfaced in any `RuntimeEvent`, echoed in
+`NativeRuntimeConfigurationError`, or written to `session.applied`. The applied
+record is built by `_public_llm_fields`, which drops `api_key` by construction.
+
+### Out of scope (still deferred)
+
+- init.json-level manifest translation — only `provider`/`model`/`base_url`/
+  `api_key` are plumbed into the default-factory service. `api_compat`,
+  `default_headers`, `compact_threshold`, `max_rpm`, etc.
+  (`build_provider_defaults_from_manifest_llm`) are not yet wired.
+- A non-native backend, a live event bridge, and any kernel turn-loop change.
+
+### Tested without a model
+
+Stage-2 tests run with no API key and no network: the service builder is
+monkeypatched with a fake, the default factory is exercised through a fake agent
+that mirrors the real `service`-required contract, and a subprocess test asserts
+that constructing a `NativeRuntime` and a session with LLM options stays
+provider-free (`tests/test_sdk_native_runtime_llm.py`).

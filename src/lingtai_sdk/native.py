@@ -8,12 +8,22 @@ kwargs, drives the agent's start/stop lifecycle, and surfaces lifecycle / error
 
 Scope (intentionally small — see ``docs/sdk/architecture-foundation.md`` §8):
 
-- This wraps ``Agent``; it does **not** change the kernel turn loop, build an
-  ``LLMService``, or implement a non-native backend.
-- LLM/provider fields (``provider`` / ``model`` / ``base_url`` / ``api_key``)
-  are **deferred, not applied** — ``Agent`` takes a ready ``LLMService``, not
-  raw provider fields, and constructing that service is a later stage. They are
-  recorded on the session (``session.deferred['llm']``) for transparency.
+- This wraps ``Agent``; it does **not** change the kernel turn loop or implement
+  a non-native backend.
+- Stage 2 adds an **LLM-service translation** for the *default* agent factory:
+  when ``provider`` and ``model`` are set, ``start()`` lazily builds a wrapper
+  ``LLMService`` from ``provider`` / ``model`` / ``base_url`` / ``api_key`` and
+  passes it to ``Agent`` (which requires a ready service). Once applied, those
+  LLM fields move from ``session.deferred['llm']`` to ``session.applied['llm']``
+  **without** the secret — ``api_key`` is consumed into the service and never
+  stored on the session, surfaced in events, or echoed in errors/reprs.
+- If the default factory is used but ``provider``/``model`` are partial or
+  absent, ``start()`` raises :class:`NativeRuntimeConfigurationError` *before*
+  constructing any agent — no opaque missing-``service`` ``TypeError`` leaks and
+  the session stays ``PENDING``.
+- An injected ``agent_factory`` **bypasses** service building entirely: tests
+  (and hosts that supply their own service) boot without a real ``LLMService``,
+  keeping the runtime network-free.
 - ``send()`` routes to ``Agent.send()`` — the existing fire-and-forget queue
   path. It does not block on a turn, so it is safe and deterministic in tests.
 
@@ -32,6 +42,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+from .errors import NativeRuntimeConfigurationError
 from .runtime import (
     EventKind,
     Runtime,
@@ -82,7 +93,13 @@ def _agent_kwargs_from_options(
         elif value is not None:
             agent_kwargs[field] = value
 
-    llm = {f: getattr(options, f) for f in _LLM_FIELDS if getattr(options, f) is not None}
+    # Public/deferred LLM fields intentionally omit api_key. The secret remains
+    # only on RuntimeOptions until the lazy service builder consumes it.
+    llm = {
+        f: getattr(options, f)
+        for f in _LLM_FIELDS
+        if f != "api_key" and getattr(options, f) is not None
+    }
 
     deferred: dict[str, Any] = {
         "llm": llm,
@@ -104,6 +121,55 @@ def _default_agent_factory(**kwargs: Any) -> Any:
     return Agent(**kwargs)
 
 
+def _public_llm_fields(llm: dict[str, Any]) -> dict[str, Any]:
+    """Return the LLM config minus secrets.
+
+    ``api_key`` is the only secret-bearing field in ``_LLM_FIELDS``; it is
+    stripped so the result is safe for ``session.applied``, events, reprs, and
+    reports. Empty values are dropped for a tidy surface.
+    """
+    return {k: v for k, v in llm.items() if k != "api_key" and v}
+
+
+def _llm_service_from_options(options: RuntimeOptions) -> Any:
+    """Build a wrapper ``LLMService`` from ``RuntimeOptions`` (default factory).
+
+    Lazily imports ``lingtai.llm`` — which registers the built-in adapters on
+    import — so ``import lingtai_sdk.native`` and constructing a
+    ``NativeRuntime`` stay provider-free; the providers load only here, when a
+    session is actually started through the default factory.
+
+    Requires both ``provider`` and ``model`` (non-empty). Raises
+    :class:`NativeRuntimeConfigurationError` otherwise — never the raw missing-
+    ``service`` ``TypeError`` from ``Agent``. The error message deliberately
+    does not echo ``api_key``.
+    """
+    provider = (options.provider or "").strip()
+    model = (options.model or "").strip()
+    if not provider or not model:
+        missing = [
+            name
+            for name, val in (("provider", provider), ("model", model))
+            if not val
+        ]
+        raise NativeRuntimeConfigurationError(
+            "NativeRuntime default factory requires RuntimeOptions.provider and "
+            "model (or an injected agent_factory/service) until init.json "
+            f"translation lands. Missing/empty: {', '.join(missing)}."
+        )
+
+    # Lazy: importing lingtai.llm registers the built-in adapters and pulls the
+    # active provider's SDK. Kept out of module scope to preserve import purity.
+    from lingtai.llm.service import LLMService
+
+    return LLMService(
+        provider=provider,
+        model=model,
+        api_key=options.api_key,
+        base_url=options.base_url,
+    )
+
+
 class NativeRuntimeSession(RuntimeSession):
     """A single agent session backed by the wrapper ``Agent``.
 
@@ -118,11 +184,18 @@ class NativeRuntimeSession(RuntimeSession):
         self, options: RuntimeOptions, *, agent_factory: AgentFactory | None = None
     ) -> None:
         self._options = options
+        # Track whether we're on the default (service-building) path. An
+        # injected factory supplies its own agent/service and bypasses service
+        # building entirely — so it must not require provider/model.
+        self._uses_default_factory = agent_factory is None
         self._agent_factory = agent_factory or _default_agent_factory
         self._agent: Any | None = None
         self._state = RuntimeState.PENDING
         self._events: list[RuntimeEvent] = []
         self._agent_kwargs, self.deferred = _agent_kwargs_from_options(options)
+        #: Fields that have actually been applied to the agent (secret-free).
+        #: LLM config moves here from ``deferred`` once a service is built.
+        self.applied: dict[str, Any] = {}
 
     # -- contract properties ------------------------------------------------
     @property
@@ -142,7 +215,18 @@ class NativeRuntimeSession(RuntimeSession):
     def start(self) -> None:
         if self._state in (RuntimeState.ACTIVE, RuntimeState.STOPPED):
             return  # idempotent: never rebuild a running or stopped session
-        self._agent = self._agent_factory(**self._agent_kwargs)
+        kwargs = dict(self._agent_kwargs)
+        # Default factory path: build the LLMService the wrapper Agent requires
+        # and apply the (secret-free) LLM config. An injected factory supplies
+        # its own agent/service, so it is left untouched. Service building runs
+        # BEFORE any agent is constructed, so a bad LLM config raises a clear
+        # SDK error and the session stays PENDING (no partial ACTIVE state).
+        if self._uses_default_factory:
+            service = _llm_service_from_options(self._options)
+            kwargs["service"] = service
+            self.applied["llm"] = _public_llm_fields(self.deferred.get("llm", {}))
+            self.deferred["llm"] = {}  # no longer deferred — it's applied
+        self._agent = self._agent_factory(**kwargs)
         self._agent.start()
         self._set_state(RuntimeState.ACTIVE)
 

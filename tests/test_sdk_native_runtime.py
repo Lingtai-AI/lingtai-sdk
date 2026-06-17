@@ -102,8 +102,8 @@ def test_translate_defers_llm_and_manifest_fields():
         "provider": "anthropic",
         "model": "claude-opus-4-8",
         "base_url": "https://example",
-        "api_key": "sk-secret",
     }
+    assert "sk-secret" not in repr(deferred)
     assert deferred["manifest"] == {"covenant": "be good"}
     assert deferred["system_prompt_overrides"] == {"rules": "no harm"}
 
