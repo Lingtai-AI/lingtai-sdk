@@ -903,3 +903,39 @@ manifests now *exist* and can be hosted via an explicit native authority, but th
 privileged *behavior* is still deferred. A later, higher-risk stage supplies the
 real injected handlers from the native runtime and wires the hosted core bundles
 into a live turn loop.
+
+
+## 17. Stage 9 — NativeRuntime core bundle seam (stacked PR)
+
+Stage 9 connects the Stage-8 core bundle declarations to the native runtime
+**as a visible contract seam only**. It does not migrate the privileged behavior.
+
+`NativeRuntimeSession` now exposes:
+
+- `core_bundle_manifests` — the stable `(system, psyche, soul)` manifests from
+  `lingtai_sdk.core_bundles`; every session can inspect the required /
+  privileged / native-only capability contract without booting a model or
+  importing the wrapper.
+- `core_bundle_hosts` — an empty mapping by default. If the host constructs
+  `NativeRuntime(core_handlers={...})`, session creation validates the supplied
+  injected handlers with `native_core_hosts()` and exposes the resulting
+  `NativeBundleHost`s.
+
+The validation remains strict: all three core handlers must be present, no extra
+non-core handler is accepted, and every handler must be callable. The hosts are
+created through the Stage-8 native-authority path, so the non-native `BundleHost`
+still refuses the privileged core. The exposed mapping is a shallow copy, so
+callers can inspect or invoke the injected handlers without mutating session
+wiring.
+
+What Stage 9 deliberately is **not**:
+
+- no import, movement, rewrite, or call of the real `system` / `psyche` / `soul`
+  implementations;
+- no kernel turn-loop, wrapper, provider, or non-native backend change;
+- no root `lingtai_sdk.__all__` expansion for these submodule helpers.
+
+The import-purity boundary still holds: `import lingtai_sdk.native`, constructing
+`NativeRuntime(core_handlers=dummies)`, and creating a session load only
+import-pure SDK siblings and do not import the `lingtai` wrapper. Tests exercise
+the seam with dummy callables only.

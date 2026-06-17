@@ -29,8 +29,9 @@ Scope (intentionally small — see ``docs/sdk/architecture-foundation.md`` §8):
 
 Import purity
 -------------
-``import lingtai_sdk.native`` imports only the pure contract module
-(:mod:`lingtai_sdk.runtime`); the wrapper ``Agent`` is imported **lazily**, the
+``import lingtai_sdk.native`` imports only import-pure SDK siblings
+(:mod:`lingtai_sdk.runtime`, capability-bundle schema/host helpers, and core
+bundle manifest declarations); the wrapper ``Agent`` is imported **lazily**, the
 first time a session is actually started (or via the default agent factory).
 Constructing a :class:`NativeRuntime` therefore stays free of the wrapper's
 heavy provider SDKs — they load only when an agent boots. ``NativeRuntime`` and
@@ -43,6 +44,9 @@ import threading
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
 
+from .capabilities import BundleManifest
+from .capability_host import NativeBundleHost, ToolHandler
+from .core_bundles import core_bundle_manifests, native_core_hosts
 from .errors import NativeRuntimeConfigurationError
 from .runtime import (
     EventKind,
@@ -327,6 +331,7 @@ class NativeRuntimeSession(RuntimeSession):
         *,
         agent_factory: AgentFactory | None = None,
         bridge_events: bool = True,
+        core_handlers: Mapping[str, ToolHandler] | None = None,
     ) -> None:
         self._options = options
         # Track whether we're on the default (service-building) path. An
@@ -338,6 +343,10 @@ class NativeRuntimeSession(RuntimeSession):
         #: A host can disable it to fall back to the stage-1 lifecycle/
         #: notification/error snapshot only.
         self._bridge_events = bridge_events
+        self._core_bundle_manifests = core_bundle_manifests()
+        self._core_bundle_hosts: dict[str, NativeBundleHost] = (
+            native_core_hosts(core_handlers) if core_handlers is not None else {}
+        )
         self._agent: Any | None = None
         self._state = RuntimeState.PENDING
         self._events: list[RuntimeEvent] = []
@@ -360,6 +369,28 @@ class NativeRuntimeSession(RuntimeSession):
     @property
     def working_dir(self) -> Path:
         return Path(self._options.working_dir)
+
+    @property
+    def core_bundle_manifests(self) -> tuple[BundleManifest, ...]:
+        """The native core bundle manifests visible to this session.
+
+        Stage 9 exposes the contract only: these are the required/privileged/
+        native-only ``system`` / ``psyche`` / ``soul`` manifests declared by
+        :mod:`lingtai_sdk.core_bundles`. They do not imply that real core
+        handlers were imported or migrated.
+        """
+        return self._core_bundle_manifests
+
+    @property
+    def core_bundle_hosts(self) -> dict[str, NativeBundleHost]:
+        """Native core hosts built from injected handlers, if any.
+
+        Returns a shallow copy so callers can inspect or invoke the injected
+        dummy/native handlers without mutating session wiring. When no
+        ``core_handlers`` were supplied, the session remains manifest-only and
+        this mapping is empty.
+        """
+        return dict(self._core_bundle_hosts)
 
     @property
     def agent(self) -> Any | None:
@@ -543,17 +574,25 @@ class NativeRuntime(Runtime):
         *,
         agent_factory: AgentFactory | None = None,
         bridge_events: bool = True,
+        core_handlers: Mapping[str, ToolHandler] | None = None,
     ) -> None:
         self._agent_factory = agent_factory
         #: Default for sessions: install the live event bridge (stage 4). Set
         #: ``False`` for the stage-1 lifecycle/notification/error snapshot only.
         self._bridge_events = bridge_events
+        #: Optional injected handlers for the required native core bundles.
+        #: Copy the mapping, but do not validate/build hosts until a session is
+        #: created; constructing ``NativeRuntime`` remains side-effect-free.
+        self._core_handlers = (
+            dict(core_handlers) if core_handlers is not None else None
+        )
 
     def create_session(self, options: RuntimeOptions) -> NativeRuntimeSession:
         return NativeRuntimeSession(
             options,
             agent_factory=self._agent_factory,
             bridge_events=self._bridge_events,
+            core_handlers=self._core_handlers,
         )
 
 
