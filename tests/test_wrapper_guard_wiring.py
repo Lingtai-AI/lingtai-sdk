@@ -300,6 +300,187 @@ def test_installed_guard_threads_through_stage16_seam_to_executor(tmp_path):
     assert decision.action == "warn"
 
 
+# --- Stage 19: provenance / reset safety before registry population ---------
+#
+# Stage 18 wired an advisory bundle guard but its ``wire_agent_guard`` returns
+# early when no manifests are collected, so it could not *clear* a stale guard
+# this wrapper had previously installed (e.g. a later refresh/reconstruct with
+# an emptied registry/capabilities). Stage 19 adds provenance tracking so the
+# wrapper can reset its own bundle-derived guard back to a pass-through while
+# never clobbering a host/subclass manually-installed guard.
+
+
+def test_install_bundle_guard_sets_provenance_marker():
+    """Installing a bundle-derived guard tags the agent so later wiring can
+    recognise the guard as wrapper-installed (and safely reset it)."""
+    agent = MagicMock()
+    agent._tool_call_guard = ToolCallGuard()
+    destructive = _manifest("scary", ("wipe",), cap.SecurityDanger.DESTRUCTIVE.value)
+
+    gw.install_bundle_guard(agent, manifests=[destructive])
+
+    assert getattr(agent, "_bundle_guard_installed", False) is True
+    # The source records which bundles derived the installed guard.
+    assert "scary" in (getattr(agent, "_bundle_guard_source", None) or ())
+
+
+def test_install_bundle_guard_empty_manifests_does_not_mark_provenance():
+    """Installing with no manifests is a pass-through and must NOT claim
+    provenance — there is no wrapper-derived posture to later reset."""
+    agent = MagicMock(spec=[])  # bare object; no attrs unless we set them
+    agent._tool_call_guard = ToolCallGuard()
+
+    gw.install_bundle_guard(agent, manifests=[])
+
+    assert getattr(agent, "_bundle_guard_installed", False) is False
+
+
+def test_wire_agent_guard_resets_stale_bundle_guard_when_no_manifests():
+    """A previously wrapper-installed (bundle-derived) guard is reset to a
+    pass-through when a subsequent wiring call collects no manifests."""
+    agent = MagicMock()
+    agent._tool_call_guard = ToolCallGuard()
+    agent._capabilities = [("scary", {})]
+    registry = {
+        "scary": lambda: _manifest(
+            "scary", ("wipe",), cap.SecurityDanger.DESTRUCTIVE.value
+        )
+    }
+    # First wiring installs a bundle-derived advisory guard.
+    gw.wire_agent_guard(agent, registry=registry)
+    assert agent._tool_call_guard.evaluate(_proposal("wipe")).action == "warn"
+    assert getattr(agent, "_bundle_guard_installed", False) is True
+
+    # Now capabilities/registry go empty (refresh/reconstruct). Re-wiring must
+    # clear the stale bundle-derived guard back to a clean pass-through.
+    agent._capabilities = []
+    gw.wire_agent_guard(agent)
+
+    decision = agent._tool_call_guard.evaluate(_proposal("wipe"))
+    assert decision.allowed is True
+    assert decision.approval_mode == "pass_through"
+    # Provenance cleared so we don't keep "owning" a now-default guard.
+    assert getattr(agent, "_bundle_guard_installed", False) is False
+
+
+def test_wire_agent_guard_does_not_clobber_manual_guard_when_no_manifests():
+    """A host/subclass manually-installed guard (no wrapper provenance) is left
+    untouched when wiring collects no manifests — never clobbered."""
+    from lingtai_kernel.tool_call_guard import GuardDecision
+
+    def _deny_check(proposal):
+        return GuardDecision(allowed=False, check_name="host_manual", reason="nope")
+
+    manual_guard = ToolCallGuard([_deny_check])
+    agent = MagicMock()
+    agent._tool_call_guard = manual_guard
+    agent._capabilities = []  # no manifests will be collected
+
+    gw.wire_agent_guard(agent)  # default empty registry → no manifests
+
+    # The host's manual guard object is preserved untouched.
+    assert agent._tool_call_guard is manual_guard
+    assert agent._tool_call_guard.evaluate(_proposal("anything")).allowed is False
+
+
+def test_wire_agent_guard_rederives_bundle_guard_when_manifests_change():
+    """A bundle-derived guard can be replaced/re-derived when manifests change
+    on a later wiring call (e.g. a different capability set)."""
+    agent = MagicMock()
+    agent._tool_call_guard = ToolCallGuard()
+    agent._capabilities = [("scary", {})]
+    registry = {
+        "scary": lambda: _manifest(
+            "scary", ("wipe",), cap.SecurityDanger.DESTRUCTIVE.value
+        ),
+        "spooky": lambda: _manifest(
+            "spooky", ("erase",), cap.SecurityDanger.DESTRUCTIVE.value
+        ),
+    }
+    gw.wire_agent_guard(agent, registry=registry)
+    assert agent._tool_call_guard.evaluate(_proposal("wipe")).action == "warn"
+    assert agent._tool_call_guard.evaluate(_proposal("erase")).approval_mode == "pass_through"
+
+    # Capability set changes to a different declared bundle.
+    agent._capabilities = [("spooky", {})]
+    gw.wire_agent_guard(agent, registry=registry)
+
+    # New bundle advises its tool; the old bundle's tool is no longer known.
+    assert agent._tool_call_guard.evaluate(_proposal("erase")).action == "warn"
+    assert agent._tool_call_guard.evaluate(_proposal("wipe")).approval_mode == "pass_through"
+    assert "spooky" in (getattr(agent, "_bundle_guard_source", None) or ())
+
+
+def test_wire_agent_guard_reset_failure_is_fail_open():
+    """If resetting the stale guard raises, wiring must not break the agent —
+    fail open, leaving the prior (safe, advisory) seam rather than failing."""
+    agent = MagicMock()
+    agent._tool_call_guard = ToolCallGuard()
+    agent._capabilities = [("scary", {})]
+    registry = {
+        "scary": lambda: _manifest(
+            "scary", ("wipe",), cap.SecurityDanger.DESTRUCTIVE.value
+        )
+    }
+    gw.wire_agent_guard(agent, registry=registry)
+
+    # Make assignment to the seam blow up to simulate a pathological reset.
+    class _Boom:
+        def __setattr__(self, name, value):
+            if name == "_tool_call_guard":
+                raise RuntimeError("cannot set guard")
+            object.__setattr__(self, name, value)
+
+    boom = _Boom()
+    object.__setattr__(boom, "_capabilities", [])
+    object.__setattr__(boom, "_bundle_guard_installed", True)
+    object.__setattr__(boom, "_tool_call_guard", agent._tool_call_guard)
+
+    # Must not raise.
+    gw.wire_agent_guard(boom)
+
+
+def test_agent_rewire_clears_stale_bundle_guard_on_emptied_capabilities():
+    """Refresh-like path: the agent's own ``_wire_bundle_guard`` shares the
+    wiring seam, so re-running it after capabilities/registry are emptied must
+    not leave a stale bundle-derived guard. Mock-level: we exercise the real
+    ``BaseAgent._wire_bundle_guard`` against a minimal stand-in agent rather
+    than building a full live Agent."""
+    from lingtai.agent import Agent
+
+    # A minimal object exposing just what wiring touches; bind the real method.
+    class _Stub:
+        _wire_bundle_guard = Agent._wire_bundle_guard
+
+        def __init__(self):
+            self._tool_call_guard = ToolCallGuard()
+            self._capabilities = [("scary", {})]
+            self._logs = []
+
+        def _log(self, event, **fields):
+            self._logs.append((event, fields))
+
+    stub = _Stub()
+    registry = {
+        "scary": lambda: _manifest(
+            "scary", ("wipe",), cap.SecurityDanger.DESTRUCTIVE.value
+        )
+    }
+    # Install a bundle-derived guard via the shared seam.
+    gw.wire_agent_guard(stub, registry=registry)
+    assert getattr(stub, "_bundle_guard_installed", False) is True
+
+    # Capabilities go empty; the agent re-wires via its own (default-registry)
+    # path — the stale bundle guard must be reset to pass-through.
+    stub._capabilities = []
+    stub._wire_bundle_guard()
+
+    decision = stub._tool_call_guard.evaluate(_proposal("wipe"))
+    assert decision.allowed is True
+    assert decision.approval_mode == "pass_through"
+    assert getattr(stub, "_bundle_guard_installed", False) is False
+
+
 # --- import direction: kernel stays SDK-free --------------------------------
 
 

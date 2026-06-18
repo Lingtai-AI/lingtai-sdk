@@ -40,11 +40,22 @@ from __future__ import annotations
 
 from typing import Any, Callable, Iterable
 
+from lingtai_kernel.tool_call_guard import ToolCallGuard
 from lingtai_sdk.capabilities import BundleManifest
 from lingtai_sdk.guard_bridge import (
     GuardPolicyMode,
     tool_call_guard_from_manifests,
 )
+
+#: Private agent attribute set to ``True`` when this wrapper wiring has
+#: installed a bundle-derived guard onto the agent's ``_tool_call_guard`` seam.
+#: Used to distinguish a wrapper-owned guard from a host/subclass manually
+#: installed one, so a later wiring call with *no* manifests can safely reset
+#: only its own stale guard and never clobber a manual one.
+PROVENANCE_FLAG = "_bundle_guard_installed"
+#: Private agent attribute recording the names of the bundle manifests the
+#: currently installed wrapper guard was derived from (provenance/debug only).
+PROVENANCE_SOURCE = "_bundle_guard_source"
 
 #: A capability→manifest provider maps an enabled capability name to a
 #: zero-arg callable returning that capability's declared :class:`BundleManifest`.
@@ -127,9 +138,43 @@ def install_bundle_guard(
     safe. The turn loop already threads ``_tool_call_guard`` into every
     ``ToolExecutor`` it builds (Stage 16), so the installed guard becomes live
     without any executor/turn change.
+
+    Provenance (Stage 19): when manifests are supplied this tags the agent with
+    :data:`PROVENANCE_FLAG`/:data:`PROVENANCE_SOURCE` so a later wiring call can
+    recognise the guard as wrapper-derived and safely reset it (see
+    :func:`reset_bundle_guard`). With *no* manifests the guard is a plain
+    pass-through and no provenance is claimed — there is nothing to later reset,
+    and claiming ownership of a default guard could wrongly mask a host guard.
     """
-    guard = tool_call_guard_from_manifests(list(manifests), mode=mode)
+    manifest_list = list(manifests)
+    guard = tool_call_guard_from_manifests(manifest_list, mode=mode)
     agent._tool_call_guard = guard
+    if manifest_list:
+        setattr(agent, PROVENANCE_FLAG, True)
+        setattr(
+            agent,
+            PROVENANCE_SOURCE,
+            tuple(m.name for m in manifest_list if isinstance(m, BundleManifest)),
+        )
+
+
+def reset_bundle_guard(agent: Any) -> None:
+    """Reset a wrapper-installed bundle guard back to a pass-through.
+
+    Stage 19 safety seam. Restores ``agent._tool_call_guard`` to a default,
+    empty :class:`~lingtai_kernel.tool_call_guard.ToolCallGuard` (the same
+    pass-through posture a freshly built default agent owns) and clears the
+    provenance markers. Intended for the case where a previous wiring installed
+    a bundle-derived guard but a later wiring collects no manifests — without
+    this, the stale advisory guard would linger.
+
+    Caller responsibility: only invoke when the agent's current guard is known
+    to be wrapper-derived (i.e. :data:`PROVENANCE_FLAG` is truthy), so a
+    host/subclass manually-installed guard is never clobbered.
+    """
+    agent._tool_call_guard = ToolCallGuard()
+    setattr(agent, PROVENANCE_FLAG, False)
+    setattr(agent, PROVENANCE_SOURCE, ())
 
 
 def wire_agent_guard(
@@ -146,17 +191,28 @@ def wire_agent_guard(
     * collects manifests for enabled capabilities from ``registry`` (default:
       the empty :func:`default_manifest_registry`, i.e. behaviour-neutral);
     * installs an advisory guard (default ``mode``) onto the Stage-16 seam;
+    * when **no** manifests are collected, resets *only* a previously
+      wrapper-installed bundle guard back to a pass-through (Stage 19), leaving
+      any host/subclass manually-installed guard untouched;
     * on **any** error leaves the seam untouched (safe pass-through) rather than
       failing closed.
 
-    A default (empty-registry) call leaves the seam a pure pass-through, so
-    existing/default agents are unaffected.
+    A default (empty-registry) call on a default agent leaves the seam a pure
+    pass-through, so existing/default agents are unaffected.
     """
     try:
         manifests = collect_agent_bundle_manifests(agent, registry=registry)
         if not manifests:
-            # Nothing declared — leave the existing (default pass-through) seam
-            # untouched. Avoids needlessly replacing a guard a host may have set.
+            # Nothing declared. Only reset a guard *this wrapper* previously
+            # installed (provenance flag set); never clobber a host/subclass
+            # manual guard, and never needlessly churn an already-default seam.
+            # The flag is set to the literal ``True`` by install_bundle_guard;
+            # an identity check (rather than truthiness) is deliberate so a host
+            # agent that never had the flag — including a test double whose
+            # missing attributes auto-vivify to a truthy stand-in — is treated
+            # as *not* wrapper-owned and left untouched.
+            if getattr(agent, PROVENANCE_FLAG, False) is True:
+                reset_bundle_guard(agent)
             return
         install_bundle_guard(agent, manifests=manifests, mode=mode)
     except Exception as exc:  # fail open — never break construction
@@ -177,8 +233,11 @@ __all__ = [
     "ManifestProvider",
     "ManifestRegistry",
     "DEFAULT_LIVE_GUARD_MODE",
+    "PROVENANCE_FLAG",
+    "PROVENANCE_SOURCE",
     "default_manifest_registry",
     "collect_agent_bundle_manifests",
     "install_bundle_guard",
+    "reset_bundle_guard",
     "wire_agent_guard",
 ]

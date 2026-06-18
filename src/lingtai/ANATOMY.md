@@ -12,7 +12,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 | `__main__.py` | `python -m lingtai` → `cli.main()` |
 | `agent.py` | **THE key file.** `Agent(BaseAgent)` — layer-2 agent with capability composition, preset swap, MCP, init.json refresh |
 | `cli.py` | `lingtai-agent run <dir>` / `lingtai-agent check-caps` entry points |
-| `guard_wiring.py` | Advisory-first wrapper wiring of the SDK guard bridge (stage 18, C3) — installs an advisory `ToolCallGuard` built from declared bundle manifests onto the Stage-16 `BaseAgent._tool_call_guard` seam. Default registry is empty (behaviour-neutral); fail-open |
+| `guard_wiring.py` | Advisory-first wrapper wiring of the SDK guard bridge (stage 18, C3) — installs an advisory `ToolCallGuard` built from declared bundle manifests onto the Stage-16 `BaseAgent._tool_call_guard` seam. Default registry is empty (behaviour-neutral); fail-open. Stage 19 adds provenance tracking so a re-wire with no manifests resets only a wrapper-installed guard (never a host/manual one) |
 | `network.py` | Read-only network topology crawler — avatar/contact/mail edge discovery |
 | `presets.py` | Compatibility shim re-exporting the kernel preset library (`lingtai_kernel.presets`) |
 | `init_schema.py` | `validate_init()` plus `strip_deprecated()` — strict schema for active init.json fields, simple deprecated-field cleanup, and known-but-inactive legacy fields migrated by `lingtai_kernel.migrate` |
@@ -26,7 +26,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 
 **`cli.py`**: `load_init` :21 · `build_agent` :77 · `run` :202 · `main` :287
 
-**`guard_wiring.py`** — `DEFAULT_LIVE_GUARD_MODE` (advisory) · `default_manifest_registry` (empty) · `collect_agent_bundle_manifests` (walk `_capabilities`, fail-open per provider) · `install_bundle_guard` (build advisory `ToolCallGuard` via `lingtai_sdk.guard_bridge.tool_call_guard_from_manifests`, write to `_tool_call_guard`) · `wire_agent_guard` (live entry point; fail-open). Invoked by `Agent._wire_bundle_guard` near the end of `__init__` and `_setup_from_init`.
+**`guard_wiring.py`** — `DEFAULT_LIVE_GUARD_MODE` (advisory) · `default_manifest_registry` (empty) · `collect_agent_bundle_manifests` (walk `_capabilities`, fail-open per provider) · `install_bundle_guard` (build advisory `ToolCallGuard` via `lingtai_sdk.guard_bridge.tool_call_guard_from_manifests`, write to `_tool_call_guard`, tag provenance `PROVENANCE_FLAG`/`PROVENANCE_SOURCE` when manifests present) · `reset_bundle_guard` (Stage 19; restore a default pass-through `ToolCallGuard` and clear provenance) · `wire_agent_guard` (live entry point; fail-open — when no manifests collected, resets only a wrapper-owned guard via the `PROVENANCE_FLAG is True` identity check, leaving host/manual guards untouched). Invoked by `Agent._wire_bundle_guard` near the end of `__init__` and `_setup_from_init`.
 
 **`presets.py`**: compatibility re-export shim (`presets.py:1-21`); implementation lives in `lingtai_kernel.presets` (`load_preset` :174 · `materialize_active_preset` :289 · `expand_inherit` :503 · `discover_presets_in_dirs` :121).
 
@@ -46,7 +46,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 
 **Cross-module:** `agent.py` → `capabilities.setup_capability`, `core.mcp.{decompress_addons,read_registry,MCPInboxPoller}`, `services.mcp.{MCPClient,HTTPMCPClient}`, `llm.service.LLMService`, `presets`, `lingtai_kernel.config_resolve`, `init_schema`, `guard_wiring.wire_agent_guard`. `cli.py` → `agent.Agent`, `lingtai_kernel.config_resolve`, `presets`.
 
-**Outbound — SDK (wrapper → SDK edge, allowed):** `guard_wiring.py` → `lingtai_sdk.guard_bridge.{GuardPolicyMode, tool_call_guard_from_manifests}` and `lingtai_sdk.capabilities.BundleManifest`. The wrapper may depend on the SDK; the kernel must never import the SDK, so the guard chain is built wrapper-side and installed onto the kernel's `_tool_call_guard` seam — no `lingtai_kernel → lingtai_sdk` inversion.
+**Outbound — SDK (wrapper → SDK edge, allowed):** `guard_wiring.py` → `lingtai_sdk.guard_bridge.{GuardPolicyMode, tool_call_guard_from_manifests}` and `lingtai_sdk.capabilities.BundleManifest`. The wrapper may depend on the SDK; the kernel must never import the SDK, so the guard chain is built wrapper-side and installed onto the kernel's `_tool_call_guard` seam — no `lingtai_kernel → lingtai_sdk` inversion. `guard_wiring.py` also imports `lingtai_kernel.tool_call_guard.ToolCallGuard` (wrapper → kernel, allowed) to construct the Stage-19 default pass-through reset guard.
 
 **Agent → BaseAgent:** Three-layer hierarchy: `BaseAgent` (kernel) → `Agent` (capabilities) → `CustomAgent` (domain). Agent adds capability registration, MCP auto-loading, preset swap, full init.json reconstruct.
 
