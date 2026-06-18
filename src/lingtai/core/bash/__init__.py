@@ -502,6 +502,65 @@ class BashManager:
                     pass
 
 
+def resolve_policy(
+    policy_file: str | None = None,
+    yolo: bool = False,
+) -> BashPolicy:
+    """Resolve the :class:`BashPolicy` from the ``policy_file`` / ``yolo`` args.
+
+    Single source of truth for policy resolution: ``yolo=True`` allows everything,
+    an explicit ``policy_file`` loads that file, and otherwise the bundled default
+    denylist (``bash_policy.json``) is loaded. Both :func:`make_manager` (and so
+    ``setup()``) and the SDK bash bundle bridge resolve the policy through this
+    helper, so the bundle-hosted ``bash`` tool runs against a policy resolved
+    identically to the one ``setup()`` registers.
+    """
+    if yolo:
+        return BashPolicy.yolo()
+    if policy_file is not None:
+        return BashPolicy.from_file(policy_file)
+    return BashPolicy.from_file(str(_DEFAULT_POLICY_FILE))
+
+
+def make_manager(
+    agent: "BaseAgent",
+    policy_file: str | None = None,
+    yolo: bool = False,
+) -> BashManager:
+    """Build the :class:`BashManager` bound to *agent* with the resolved policy.
+
+    Single source of truth for bash-manager construction: both ``setup()`` (the
+    normal capability-registration path) and the SDK bash bundle bridge
+    (``lingtai.core.bash_bundle``) build the manager through this factory, so the
+    bundle-hosted ``bash`` tool runs against a manager constructed identically to
+    the one ``setup()`` registers — same policy resolution, same
+    ``agent._working_dir`` sandbox. Constructing the manager runs no command and
+    starts no job — only an explicit ``run`` / ``poll`` / ``cancel`` call does.
+    """
+    policy = resolve_policy(policy_file=policy_file, yolo=yolo)
+    return BashManager(
+        policy=policy,
+        working_dir=str(agent._working_dir),
+    )
+
+
+def make_handler(
+    agent: "BaseAgent",
+    policy_file: str | None = None,
+    yolo: bool = False,
+):
+    """Build the ``bash`` tool handler bound to *agent*.
+
+    Returns the ``handle`` method of a freshly-built :class:`BashManager` (see
+    :func:`make_manager`). The handler is the same ``mgr.handle`` callable
+    ``setup()`` registers, so the SDK bundle bridge and the live capability path
+    share one behavior. Use :func:`make_manager` directly when the manager object
+    itself is needed (as ``setup()`` does, to return it and read ``policy`` for
+    the description).
+    """
+    return make_manager(agent, policy_file=policy_file, yolo=yolo).handle
+
+
 def setup(
     agent: "BaseAgent",
     policy_file: str | None = None,
@@ -517,22 +576,11 @@ def setup(
     Returns:
         The BashManager instance for programmatic access.
     """
-    # Resolve policy: explicit arg or default
-    resolved_policy_file = policy_file
-
-    if yolo:
-        policy = BashPolicy.yolo()
-    elif resolved_policy_file is not None:
-        policy = BashPolicy.from_file(resolved_policy_file)
-    else:
-        policy = BashPolicy.from_file(str(_DEFAULT_POLICY_FILE))
+    mgr = make_manager(agent, policy_file=policy_file, yolo=yolo)
+    policy = mgr._policy
 
     lang = agent._config.language
 
-    mgr = BashManager(
-        policy=policy,
-        working_dir=str(agent._working_dir),
-    )
     # Build description with policy rules
     desc = get_description(lang)
     policy_summary = policy.describe()
