@@ -21,7 +21,7 @@ The SDK's committed, **read-only resource package** — the `lingtai_sdk.assets`
 ## Composition
 
 - **Parent:** `src/lingtai_sdk/` (see `ANATOMY.md`).
-- **Siblings:** `sdk_skill.py` is the sole consumer; `capabilities.py`/`capability_host.py` define the bundle/host contract the asset is adopted through.
+- **Siblings:** `sdk_skill.py` is the sole consumer; `bundles/contracts.py`/`bundles/host.py` (legacy paths `capabilities.py`/`capability_host.py`) define the bundle/host contract the asset is adopted through.
 - **Subfolders:** `lingtai-sdk-skill/` — one skill-shaped asset tree. Future SDK assets land as additional sibling trees here.
 
 ## State

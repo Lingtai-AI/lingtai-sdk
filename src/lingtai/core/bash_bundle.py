@@ -55,7 +55,7 @@ from typing import TYPE_CHECKING, Any, Callable
 if TYPE_CHECKING:
     from lingtai_kernel.base_agent import BaseAgent
 
-    from lingtai_sdk.capability_host import BundleHost
+    from lingtai_sdk.bundles.host import BundleHost
 
 # The wrapper's real bash handler factory — the single source of truth shared with
 # the capability ``setup()`` path (``bash.make_manager`` / ``make_handler``).
@@ -120,7 +120,7 @@ def bash_exec_bundle_host(
     live capability registration — and constructing the host runs no command and
     starts no job.
     """
-    from lingtai_sdk.bash_tools import bash_exec_host
+    from lingtai_sdk.bundles.bash_tools import bash_exec_host
 
     return bash_exec_host(bash_exec_handler(agent, policy_file=policy_file, yolo=yolo))
 
@@ -139,7 +139,7 @@ def bash_exec_bundle_hosts(
     ``bash_exec_hosts`` mapping seam, which enforces the single-``bash``-handler
     contract.
     """
-    from lingtai_sdk.bash_tools import BASH_TOOL_NAME, bash_exec_hosts
+    from lingtai_sdk.bundles.bash_tools import BASH_TOOL_NAME, bash_exec_hosts
 
     return bash_exec_hosts(
         {BASH_TOOL_NAME: bash_exec_handler(agent, policy_file=policy_file, yolo=yolo)}

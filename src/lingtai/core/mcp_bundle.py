@@ -49,7 +49,7 @@ from typing import TYPE_CHECKING, Any, Callable
 if TYPE_CHECKING:
     from lingtai_kernel.base_agent import BaseAgent
 
-    from lingtai_sdk.capability_host import BundleHost
+    from lingtai_sdk.bundles.host import BundleHost
 
 # The wrapper's real mcp handler factory — the single source of truth shared with
 # the capability ``setup()`` path (``mcp.make_handler``). Imported at wrapper
@@ -101,7 +101,7 @@ def mcp_config_bundle_host(agent: "BaseAgent") -> "BundleHost":
     capability registration — and constructing the host writes nothing and starts
     no MCP server.
     """
-    from lingtai_sdk.mcp_tools import mcp_config_host
+    from lingtai_sdk.bundles.mcp_tools import mcp_config_host
 
     return mcp_config_host(mcp_config_handler(agent))
 
@@ -116,7 +116,7 @@ def mcp_config_bundle_hosts(agent: "BaseAgent") -> dict[str, "BundleHost"]:
     ``{name: host}`` shape across all stages. Builds via the SDK ``mcp_config_hosts``
     mapping seam, which enforces the single-``mcp``-handler contract.
     """
-    from lingtai_sdk.mcp_tools import MCP_TOOL_NAME, mcp_config_hosts
+    from lingtai_sdk.bundles.mcp_tools import MCP_TOOL_NAME, mcp_config_hosts
 
     return mcp_config_hosts({MCP_TOOL_NAME: mcp_config_handler(agent)})
 

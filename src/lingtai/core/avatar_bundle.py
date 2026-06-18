@@ -56,7 +56,7 @@ from typing import TYPE_CHECKING, Any, Callable
 if TYPE_CHECKING:
     from lingtai.agent import Agent
 
-    from lingtai_sdk.capability_host import BundleHost
+    from lingtai_sdk.bundles.host import BundleHost
 
 # The wrapper's real avatar capability — the single source of truth shared with the
 # capability ``setup()`` path (``avatar.make_manager`` / ``make_spawn_handler`` /
@@ -121,7 +121,7 @@ def avatar_spawn_bundle_host(agent: "Agent") -> "BundleHost":
     logic through the declared manifest without altering the agent's live capability
     registration — and constructing the host spawns no process.
     """
-    from lingtai_sdk.avatar_tools import avatar_spawn_host
+    from lingtai_sdk.bundles.avatar_tools import avatar_spawn_host
 
     return avatar_spawn_host(avatar_spawn_handler(agent))
 
@@ -137,7 +137,7 @@ def avatar_rules_bundle_host(agent: "Agent") -> "BundleHost":
     through the declared manifest without altering the agent's live capability
     registration — and constructing the host writes nothing.
     """
-    from lingtai_sdk.avatar_tools import avatar_rules_host
+    from lingtai_sdk.bundles.avatar_tools import avatar_rules_host
 
     return avatar_rules_host(avatar_rules_handler(agent))
 
@@ -154,7 +154,7 @@ def avatar_bundle_hosts(agent: "Agent") -> dict[str, "BundleHost"]:
     ``avatar_tool_hosts`` mapping seam, which enforces the exactly-two-handlers
     contract.
     """
-    from lingtai_sdk.avatar_tools import (
+    from lingtai_sdk.bundles.avatar_tools import (
         AVATAR_RULES_TOOL_NAME,
         AVATAR_SPAWN_TOOL_NAME,
         avatar_tool_hosts,

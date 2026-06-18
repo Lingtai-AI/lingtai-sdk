@@ -49,7 +49,7 @@ from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     from lingtai_kernel.base_agent import BaseAgent
-    from lingtai_sdk.capability_host import NativeBundleHost
+    from lingtai_sdk.bundles.host import NativeBundleHost
 
 # The single source of truth for ``soul`` behavior — the kernel intrinsic the live
 # ``_wire_intrinsics`` path also dispatches. Imported at wrapper module load (the
@@ -107,7 +107,7 @@ def soul_voice_bundle_host(agent: "BaseAgent") -> "NativeBundleHost":
     gate is the kernel intrinsic's ``agent._soul_fire_lock``, and danger-based
     gating is the stage-17 guard bridge's job, neither installed here.
     """
-    from lingtai_sdk.soul_tools import soul_voice_host
+    from lingtai_sdk.bundles.soul_tools import soul_voice_host
 
     return soul_voice_host(soul_voice_handler(agent))
 
@@ -121,7 +121,7 @@ def soul_voice_bundle_hosts(agent: "BaseAgent") -> dict[str, "NativeBundleHost"]
     SDK ``soul_voice_hosts`` mapping seam, which enforces the single-``soul``-handler
     contract.
     """
-    from lingtai_sdk.soul_tools import SOUL_TOOL_NAME, soul_voice_hosts
+    from lingtai_sdk.bundles.soul_tools import SOUL_TOOL_NAME, soul_voice_hosts
 
     return soul_voice_hosts({SOUL_TOOL_NAME: soul_voice_handler(agent)})
 

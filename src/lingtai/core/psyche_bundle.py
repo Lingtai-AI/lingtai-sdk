@@ -46,7 +46,7 @@ from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     from lingtai_kernel.base_agent import BaseAgent
-    from lingtai_sdk.capability_host import NativeBundleHost
+    from lingtai_sdk.bundles.host import NativeBundleHost
 
 # The single source of truth for ``psyche`` behavior — the kernel intrinsic the
 # live ``_wire_intrinsics`` path also dispatches. Imported at wrapper module load
@@ -103,7 +103,7 @@ def psyche_identity_bundle_host(agent: "BaseAgent") -> "NativeBundleHost":
     grading) is a declaration only: the host runs the handler unconditionally;
     danger-based gating is the stage-17 guard bridge's job, not installed here.
     """
-    from lingtai_sdk.psyche_tools import psyche_identity_host
+    from lingtai_sdk.bundles.psyche_tools import psyche_identity_host
 
     return psyche_identity_host(psyche_identity_handler(agent))
 
@@ -117,7 +117,7 @@ def psyche_identity_bundle_hosts(agent: "BaseAgent") -> dict[str, "NativeBundleH
     SDK ``psyche_identity_hosts`` mapping seam, which enforces the
     single-``psyche``-handler contract.
     """
-    from lingtai_sdk.psyche_tools import PSYCHE_TOOL_NAME, psyche_identity_hosts
+    from lingtai_sdk.bundles.psyche_tools import PSYCHE_TOOL_NAME, psyche_identity_hosts
 
     return psyche_identity_hosts(
         {PSYCHE_TOOL_NAME: psyche_identity_handler(agent)}
