@@ -206,6 +206,12 @@ This preserves the usefulness of top-level assets while still giving the SDK a
 single, skill-shaped semantic container for manuals, templates, and coding-agent
 observation.
 
+**Realized in stage 6 (§14):** the `lingtai-sdk-skill` asset is now committed at
+`src/lingtai_sdk/assets/lingtai-sdk-skill/SKILL.md` and adopted as a real,
+non-privileged CapabilityBundle (`lingtai_sdk.sdk_skill`). The asset and the
+bundle exist; the broader CLI/backend assembly layer that *selects* templates per
+profile is still future work.
+
 ## 8. Staged roadmap
 
 This PR is **stage 0: the foundation.** Each later stage is its own reviewable
@@ -221,9 +227,12 @@ PR, sequenced so contracts stabilize before implementations depend on them.
    LLM-service translation (§11), `manifest.llm` translation (§12), and a
    **minimal live event bridge** (§13) landed as stacked follow-ups within
    this stage.
-3. **Stage 2 — capability-bundle adoption.** Express one or two *low-risk*
-   real capabilities as `BundleManifest`s and wire the wrapper to read the
-   manifest. Still no `system`/`psyche`/`soul`.
+3. **Stage 2 — capability-bundle adoption** _(first real adoption landed; see
+   §14)_. Express *low-risk* real capabilities as `BundleManifest`s. The
+   committed `lingtai-sdk-skill` asset is now adopted as a real, non-privileged
+   bundle hosted across tool/resource/prompt surfaces (§14); wiring the
+   wrapper's own existing capabilities through manifests remains follow-up work.
+   Still no `system`/`psyche`/`soul`.
 4. **Stage 3 — core bundle migration.** Migrate the privileged core bundles,
    once the manifest schema and the native runtime have proven out.
 5. **Stage 4 — non-native backend (e.g. Anthropic).** Only after the runtime,
@@ -254,7 +263,13 @@ src/lingtai_sdk/
   _compat.py         # legacy -> SDK migration map
   runtime.py         # runtime contract seed (DTOs + ABCs)
   capabilities.py    # CapabilityBundle manifest seed + load_manifest() + proof_bundle()
-  capability_host.py # CapabilityBundle host boundary proof (BundleHost + proof_host)
+  capability_host.py # CapabilityBundle host boundary (BundleHost: tool/resource/prompt + proof_host)
+  sdk_skill.py       # stage 6: committed lingtai-sdk-skill asset -> bundle -> host
+  assets/            # committed read-only resource package (importlib.resources root)
+    __init__.py      #   package marker (no code)
+    ANATOMY.md       #   per-folder anatomy for the asset package
+    lingtai-sdk-skill/
+      SKILL.md       #   the top-level SDK observation-entry skill
   native.py          # NativeRuntime adapter (stages 1-4; wraps Agent; lazy)
   ANATOMY.md         # per-folder anatomy
 
@@ -264,6 +279,7 @@ tests/
   test_sdk_runtime_contract.py  # runtime DTOs (incl. activity constructors) + a usable concrete subclass
   test_sdk_capabilities.py      # manifest invariants + proof bundle
   test_sdk_capability_host.py   # manifest load + host boundary: load->validate->register->invoke; refuses privileged
+  test_sdk_skill_bundle.py      # stage 6: committed skill asset -> bundle -> host (tool/resource/prompt), purity
   test_sdk_native_runtime.py          # stage 1: translation, lifecycle, purity (fake agent)
   test_sdk_native_runtime_llm.py      # stage 2: LLM-service translation
   test_sdk_native_runtime_manifest.py # stage 3: manifest.llm translation
@@ -521,3 +537,154 @@ absent. One test borrows the genuine `BaseAgent._on_tool_result_hook` /
 `_post_request` implementations to pin the bridge to the real hook contract, and
 the new contract constructors are covered in
 `tests/test_sdk_runtime_contract.py` (`tests/test_sdk_native_runtime_events.py`).
+
+## 14. Stage 6 — committed SDK skill asset + real bundle adoption (stacked PR)
+
+Stage 6 is a small PR **stacked on the stage-5 host proof**. Where stage 5 proved
+the manifest/load/host *boundary* against a synthetic metadata-only echo, stage 6
+makes the first **real, low-risk** adoption: it ships a committed asset and
+expresses it as a non-privileged CapabilityBundle hosted in process. It still
+does **not** migrate the privileged core (`system` / `psyche` / `soul`) or touch
+the kernel turn loop.
+
+### What it adds
+
+- **A committed asset.** `src/lingtai_sdk/assets/lingtai-sdk-skill/SKILL.md` — the
+  top-level SDK *observation entry* of §7, realized. It is a skill-shaped,
+  read-only Markdown file describing the SDK/kernel/wrapper split, import purity,
+  the runtime contract, the CapabilityBundle contract, and the privileged-core
+  deferral, so a later coding-agent or system prompt can point at one stable
+  surface without importing the runtime. It lives under the new
+  `lingtai_sdk.assets` resource package (`assets/__init__.py` is a marker only),
+  reachable via `importlib.resources` and shipped by the
+  `lingtai_sdk = ["assets/**/*"]` `package-data` glob.
+- **A real bundle over the asset** (`lingtai_sdk.sdk_skill`):
+  - `load_sdk_skill()` reads the asset through `importlib.resources` (source
+    checkout *or* installed wheel) — network-free and deterministic;
+  - `sdk_skill_bundle()` declares a non-privileged, replaceable, `in_process`
+    `BundleManifest` with one read-only tool (`read_sdk_skill`), one resource
+    (`sdk_skill`), one prompt (`sdk_skill_orientation`), and `manual` pointing at
+    the shipped `SKILL.md`;
+  - `sdk_skill_host()` returns a ready `BundleHost` wiring those three surfaces to
+    deterministic handlers that read the asset.
+- **A conservative `BundleHost` extension.** `BundleHost` now hosts read-only
+  **resources** (`read_resource(name)`) and **prompts** (`read_prompt(name,
+  **kwargs)`) alongside tools, with the same per-surface contract enforcement
+  (every declared name has a callable handler, no handler undeclared) via a small
+  `_check_contract` helper. It still **refuses** privileged / native-only
+  manifests and non-`in_process` transports — unchanged guardrails.
+
+### The adoption path
+
+```
+asset (SKILL.md via importlib.resources)
+   -> sdk_skill.load_sdk_skill()      # read the committed text
+   -> sdk_skill.sdk_skill_bundle()    # declare a validated BundleManifest
+   -> capabilities.load_manifest()    # round-trips (dict <-> manifest)
+   -> sdk_skill.sdk_skill_host()      # BundleHost: tool + resource + prompt
+   -> read_resource / invoke / read_prompt   # deterministic, network-free
+```
+
+### What it deliberately is NOT
+
+- It does **not** migrate `system` / `psyche` / `soul`, nor any privileged or
+  native-only behavior — `BundleHost` would refuse those, and none are named by
+  the bundle's surfaces (asserted by a test).
+- It does **not** change the kernel turn loop or the wrapper `Agent`.
+- It does **not** wire the wrapper's *own existing* runtime capabilities through
+  manifests yet, nor add the CLI/backend assembly layer that *selects* templates
+  per profile (§7). Those remain follow-up work.
+
+### Import purity
+
+`lingtai_sdk.sdk_skill` and `lingtai_sdk.assets` import no wrapper and no provider
+SDK; a bare `import lingtai_sdk` does not eagerly load either. Reads go through
+`importlib.resources`, never a raw filesystem path, so they resolve identically
+from an installed wheel.
+
+### Tested without a model
+
+`tests/test_sdk_skill_bundle.py` exercises the whole path with no API key and no
+running agent: the asset exists and loads via `importlib.resources`; the manifest
+validates and round-trips through `load_manifest`; the host reads the resource,
+invokes the read-only tool, and renders the prompt deterministically; the host
+enforces the resource/prompt contract and rejects unknown/undeclared names; the
+bundle names no privileged-core surface; and `lingtai_sdk.sdk_skill` imports
+purely.
+
+## 14. Stage 6 — real low-risk bundle adoption + the `lingtai-sdk-skill` asset (stacked PR)
+
+Stage 5 proved the manifest/load/host *boundary* against a synthetic
+metadata-only echo (`proof_bundle()`). Stage 6 takes the smallest *real* step
+past that: it ships a **committed asset** and adopts it through the same boundary
+as a non-privileged CapabilityBundle. It still migrates **no privileged behavior**
+and does not touch the kernel turn loop.
+
+### What it adds
+
+- **A committed, read-only asset.** `src/lingtai_sdk/assets/lingtai-sdk-skill/
+  SKILL.md` — the top-level SDK *observation entry* (§7). It is skill-shaped
+  (YAML frontmatter + prose) and explains the SDK/kernel/wrapper split, the
+  runtime contract, the CapabilityBundle contract, and the privileged-core
+  deferral, so a coding agent or system prompt can point at one stable surface
+  without importing the runtime. `src/lingtai_sdk/assets/` is a resource package
+  (`__init__.py` marker only) so the file is reachable via
+  `importlib.resources.files("lingtai_sdk.assets")` from a checkout or a wheel;
+  packaging is handled by the `lingtai_sdk = ["assets/**/*"]` `package-data` glob.
+- **A real bundle over the asset.** `lingtai_sdk.sdk_skill`:
+  - `load_sdk_skill()` reads the committed `SKILL.md` through
+    `importlib.resources` (deterministic, network-free).
+  - `sdk_skill_bundle()` declares a non-privileged, replaceable, `in_process`
+    `BundleManifest` with three read-only surfaces — a `read_sdk_skill` tool, an
+    `sdk_skill` resource, and an `sdk_skill_orientation` prompt — plus a `manual`
+    pointer at the shipped asset.
+  - `sdk_skill_host()` returns a ready `BundleHost` wiring those surfaces to
+    deterministic handlers reading the asset.
+- **A conservative `BundleHost` extension.** `BundleHost` now hosts three
+  *read-only* surfaces, not just tools: `invoke(tool, ...)`,
+  `read_resource(name)`, and `read_prompt(name, ...)`. Each surface enforces the
+  same declared↔provided parity (`_check_contract`): every declared name has a
+  callable handler and no handler is undeclared. The privileged/native-only and
+  non-`in_process` refusals are unchanged — the guardrail that keeps the core
+  bundles out still holds.
+
+The end-to-end adoption path:
+
+```
+asset (SKILL.md, importlib.resources)
+   -> sdk_skill.load_sdk_skill()      # read the committed asset text
+   -> sdk_skill.sdk_skill_bundle()    # declare a validated non-privileged manifest
+   -> capabilities.load_manifest()    # round-trips the declaration
+   -> sdk_skill.sdk_skill_host()       # BundleHost: tool + resource + prompt
+   -> invoke / read_resource / read_prompt   # deterministic, network-free
+```
+
+### What it deliberately is NOT
+
+- It does **not** migrate `system` / `psyche` / `soul`, nor wire any *privileged*
+  wrapper capability through a manifest. `BundleHost` still refuses
+  privileged/native-only bundles.
+- It does **not** change the kernel turn loop, `BaseAgent`, or `Agent`.
+- It does **not** add the CLI/backend assembly layer that selects templates per
+  profile (§7) — only the asset and the bundle exist.
+- The hosted surfaces are read-only: no mutation, no I/O beyond reading the
+  committed asset.
+
+### Import purity
+
+`lingtai_sdk.sdk_skill` and `lingtai_sdk.assets` import nothing from the
+`lingtai` wrapper and no provider SDK. `sdk_skill` imports only
+`importlib.resources` and the import-pure `.capabilities` / `.capability_host`
+siblings; `assets` is a marker package. Enforced by
+`tests/test_sdk_skill_bundle.py::test_sdk_skill_import_is_pure`.
+
+### Tested without a model
+
+Stage-6 tests need no API key and no running agent. They assert: the asset
+exists and loads through `importlib.resources`; the manifest validates and
+round-trips through `load_manifest`; the host exposes and invokes the read-only
+tool/resource/prompt deterministically; the per-surface contract (missing /
+undeclared / non-callable handler) is enforced; the privileged-core refusal
+still holds with the new surfaces present; the bundle names none of
+`system`/`psyche`/`soul`; and importing the module stays wrapper-free
+(`tests/test_sdk_skill_bundle.py`).

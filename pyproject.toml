@@ -62,6 +62,10 @@ exclude = [
 
 [tool.setuptools.package-data]
 lingtai_kernel = ["i18n/*.json"]
+# SDK assets: committed, read-only skill-shaped asset trees reachable via
+# importlib.resources (see src/lingtai_sdk/assets/). Globbed so new asset files
+# under a skill directory are packaged without editing this list.
+lingtai_sdk = ["assets/**/*"]
 lingtai = [
     "i18n/*.json",
     "mcp_catalog.json",
