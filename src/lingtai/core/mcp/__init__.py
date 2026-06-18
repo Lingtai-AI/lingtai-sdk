@@ -25,7 +25,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
     from lingtai_kernel.base_agent import BaseAgent
@@ -381,15 +381,23 @@ def get_schema(lang: str = "en") -> dict:
     return _SCHEMA
 
 
-def setup(agent: "BaseAgent", **_ignored) -> None:
-    """Set up the mcp capability.
+def make_handler(agent: "BaseAgent") -> Callable[[dict], dict]:
+    """Build the ``mcp`` tool handler bound to *agent*.
 
-    The capability is pure presentation: it reads the registry from disk and
-    renders it into the system prompt. Decompression of init.json's addons:
-    field happens in the Agent initializer via decompress_addons() before
-    setup is called.
+    Single source of truth for the ``mcp`` tool's behavior: both ``setup()`` (the
+    normal capability-registration path) and the SDK tool-config bundle bridge
+    (``lingtai.core.mcp_bundle``) obtain the handler through this factory, so the
+    bundle-hosted ``mcp`` tool runs byte-identical logic to the one ``setup()``
+    registers — against the same ``agent`` state (``agent._working_dir`` and the
+    rendered ``mcp`` system-prompt section).
+
+    The returned handler takes a single ``args: dict`` and supports the one
+    ``show`` action (re-reconcile: read registry, re-render the prompt section,
+    return the health snapshot). Any other action returns the same shape-stable
+    error dict the live tool returns. The handler is pure presentation: it reads
+    the registry and re-renders the prompt — it never writes to the registry, and
+    constructing it starts no MCP server.
     """
-    _reconcile(agent)
 
     def handle_mcp(args: dict) -> dict:
         action = args.get("action", "")
@@ -400,9 +408,22 @@ def setup(agent: "BaseAgent", **_ignored) -> None:
             "message": f"unknown action: {action!r}, only 'show' is supported",
         }
 
+    return handle_mcp
+
+
+def setup(agent: "BaseAgent", **_ignored) -> None:
+    """Set up the mcp capability.
+
+    The capability is pure presentation: it reads the registry from disk and
+    renders it into the system prompt. Decompression of init.json's addons:
+    field happens in the Agent initializer via decompress_addons() before
+    setup is called.
+    """
+    _reconcile(agent)
+
     agent.add_tool(
         "mcp",
         schema=get_schema(),
-        handler=handle_mcp,
+        handler=make_handler(agent),
         description=get_description(),
     )
