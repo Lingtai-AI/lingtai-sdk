@@ -751,6 +751,164 @@ def test_wrapper_guard_wiring_import_does_not_invert_into_kernel():
     assert "OK" in r.stdout
 
 
+# --- Stage 22: end-to-end native Agent / SDK integration --------------------
+#
+# Stages 17-21 each verified one seam in isolation: the SDK bridge builds a guard
+# from a manifest (17), the wrapper installs it onto the Stage-16 seam (18), the
+# guard threads to the ToolExecutor (18) and is reset/provenance-safe (19), the
+# default core manifests are collected (20), and the kernel ToolExecutor inlines
+# a source-labeled ``guard_advisory`` on ``tool_call_approved`` (21). But the
+# Stage-21 source-labeled-log proof (``test_tool_executor.py``) drives a
+# *hand-built* guard + fake dispatch/logger, and the live-Agent proofs above call
+# ``guard.evaluate`` directly or never dispatch a tool. No single test proves the
+# whole chain through the real seams: a real wrapper ``Agent`` whose default core
+# manifests were wired by ``wire_agent_guard`` → a real ToolExecutor built the way
+# the turn loop builds it → a real intrinsic dispatch → a ``tool_call_approved``
+# lifecycle event whose ``guard_advisory`` is attributed to the declaring bundle.
+#
+# This test closes that E2E confidence gap. Only the LLM service is a mock (the
+# standard kernel test seam — it removes the network, nothing in the guard path);
+# the agent, its installed guard, the executor, the logger, the dispatch, and the
+# ``system`` intrinsic are all real.
+
+
+def _log_index(logs, event_type, *, trace_id=None):
+    """Index of the first captured ``event_type`` log (optionally by trace id)."""
+    for index, (event, fields) in enumerate(logs):
+        if event != event_type:
+            continue
+        if trace_id is not None and fields.get("tool_trace_id") != trace_id:
+            continue
+        return index
+    raise AssertionError(f"missing log event {event_type!r} for trace {trace_id!r}")
+
+
+def _real_turn_loop_executor(agent, logs):
+    """Build a ToolExecutor exactly as ``base_agent.turn._handle_request`` does.
+
+    Mirrors the construction at ``turn.py`` (``dispatch_fn=agent._dispatch_tool``,
+    ``known_tools`` = intrinsics + tool handlers, real ``_tool_call_guard`` seam),
+    but wraps ``agent._log`` so emitted lifecycle events are captured for
+    assertion while still flowing through the agent's real logging path. Returns
+    the live executor.
+    """
+    from lingtai_kernel.loop_guard import LoopGuard
+    from lingtai_kernel.tool_executor import ToolExecutor
+
+    real_log = agent._log
+
+    def _capturing_log(event_type, **fields):
+        logs.append((event_type, fields))
+        return real_log(event_type, **fields)
+
+    return ToolExecutor(
+        dispatch_fn=agent._dispatch_tool,
+        make_tool_result_fn=lambda name, result, **kw: agent.service.make_tool_result(
+            name, result, provider=agent._config.provider, **kw
+        ),
+        guard=LoopGuard(max_total_calls=50),
+        known_tools=set(agent._intrinsics) | set(agent._tool_handlers),
+        parallel_safe_tools=agent._PARALLEL_SAFE_TOOLS,
+        logger_fn=_capturing_log,
+        working_dir=agent._working_dir,
+        tool_call_guard=getattr(agent, "_tool_call_guard", None),
+    )
+
+
+def test_e2e_default_core_manifest_becomes_source_labeled_lifecycle_advisory(tmp_path):
+    """End-to-end: a real default ``Agent`` turns its declared ``system`` core
+    bundle into a source-labeled ``tool_call_approved.guard_advisory`` when a real
+    ``system`` tool call flows through a real ToolExecutor — and the call is still
+    allowed (advisory-first: warn, never block).
+
+    Proves the full Stage 17→21 chain in one path through real seams:
+    ``wire_agent_guard`` (real installed core guard) → ``ToolExecutor.evaluate``
+    (real Stage-16 seam) → ``_log_guard_approval`` → ``advisory_summary`` (Stage 21).
+    """
+    from lingtai_kernel.llm.base import ToolCall
+    from lingtai.agent import Agent
+
+    agent = Agent(
+        service=_make_mock_service(),
+        agent_name="e2e",
+        working_dir=tmp_path / "agent",
+        capabilities=["psyche"],
+    )
+
+    # The default-wired guard is real and advisory for the core ``system`` bundle.
+    installed = agent._tool_call_guard
+    assert isinstance(installed, ToolCallGuard)
+    assert installed.evaluate(_proposal("system")).action == "warn"
+
+    logs: list[tuple[str, dict]] = []
+    executor = _real_turn_loop_executor(agent, logs)
+    # The executor consumes the very guard the wrapper installed — not a copy.
+    assert executor._tool_call_guard is installed
+
+    # Dispatch a REAL ``system`` intrinsic call. ``action=notification`` is a
+    # pure, read-only, no-side-effect, no-network handler that returns a
+    # placeholder dict, so the executor exercises the real dispatch + intrinsic
+    # without lifecycle teardown or external state.
+    calls = [ToolCall(name="system", args={"action": "notification"}, id="e2e-sys")]
+    results, intercepted, _text = executor.execute(calls)
+
+    # Advisory-first: the destructive-declared core tool ran (was never blocked).
+    assert not intercepted
+    assert len(results) == 1
+    approved_idx = _log_index(logs, "tool_call_approved", trace_id="e2e-sys")
+    denied = [e for e, _ in logs if e == "tool_call_denied"]
+    assert not denied, "advisory core bundle must never deny a tool call"
+
+    # The approval log carries the Stage-21 flat, source-labeled summary,
+    # attributing the advisory to the bundle that declared the danger posture.
+    approved = logs[approved_idx][1]
+    summary = approved["guard_advisory"]
+    assert summary["allowed"] is True
+    assert summary["action"] == "warn"
+    assert summary["bundle"] == "system"
+    assert summary["danger"] == "destructive"
+    assert summary["source"] == "bundle:system:destructive"
+
+
+def test_e2e_unmanifested_tool_emits_no_guard_advisory(tmp_path):
+    """End-to-end fail-open: a real ``add_tool`` tool (unknown to every bundle)
+    flows through the same real Agent + executor cleanly — its
+    ``tool_call_approved`` event carries NO ``guard_advisory`` because the default
+    core guard never matches an undeclared surface. This is the advisory-first
+    safety invariant: the slice only ever *adds* advisories for declared core
+    tools and never gates an unmanifested one."""
+    from lingtai_kernel.llm.base import ToolCall
+    from lingtai.agent import Agent
+
+    agent = Agent(
+        service=_make_mock_service(),
+        agent_name="e2e2",
+        working_dir=tmp_path / "agent",
+        capabilities=["psyche"],
+    )
+
+    # Register a real, benign tool the bridge has never heard of.
+    agent.add_tool(
+        "echo_probe",
+        schema={"type": "object", "properties": {}},
+        handler=lambda args: {"status": "ok", "echo": args},
+        description="test-only probe tool",
+    )
+
+    logs: list[tuple[str, dict]] = []
+    executor = _real_turn_loop_executor(agent, logs)
+
+    calls = [ToolCall(name="echo_probe", args={}, id="e2e-echo")]
+    results, intercepted, _text = executor.execute(calls)
+
+    assert not intercepted
+    assert len(results) == 1
+    approved_idx = _log_index(logs, "tool_call_approved", trace_id="e2e-echo")
+    approved = logs[approved_idx][1]
+    assert "guard_advisory" not in approved
+    assert approved["approval_mode"] == "pass_through"
+
+
 def test_kernel_guard_import_is_sdk_free_in_isolation():
     """Kernel ``tool_call_guard`` imported alone must not load the SDK."""
     code = (
