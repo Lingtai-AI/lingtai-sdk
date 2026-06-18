@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from importlib import resources
 
-from .capabilities import (
+from .bundles.contracts import (
     BackendReplaceability,
     BundleManifest,
     CapabilitySurfaces,
@@ -37,7 +37,7 @@ from .capabilities import (
     SecurityPolicy,
     TransportSpec,
 )
-from .capability_host import BundleHost
+from .bundles.host import BundleHost
 
 # The asset's package-relative location. ``importlib.resources`` resolves this
 # whether the SDK is run from a source checkout or an installed wheel.

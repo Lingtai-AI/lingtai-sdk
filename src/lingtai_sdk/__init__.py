@@ -22,8 +22,14 @@ package boundary: kernel names are eager, wrapper names are lazy.
 
 This package ships **contracts and the doorway**, not a live runtime. The
 runtime contract (:mod:`lingtai_sdk.runtime`) and capability-bundle manifest
-(:mod:`lingtai_sdk.capabilities`) are seed DTOs; live runtimes and core-bundle
-migrations land in later PRs. See ``docs/sdk/architecture-foundation.md``.
+(:mod:`lingtai_sdk.bundles.contracts`, legacy path :mod:`lingtai_sdk.capabilities`)
+are seed DTOs; live runtimes and core-bundle migrations land in later PRs. See
+``docs/sdk/architecture-foundation.md``.
+
+Directory shape: the SDK is organized into ``runtime`` / ``client`` / ``guard`` /
+``bundles`` subpackages. Every legacy flat top-level module path remains a thin
+re-export shim resolving to the same objects (``runtime`` and ``client`` are
+packages whose ``__init__`` IS the compat surface). See ``ANATOMY.md``.
 """
 from __future__ import annotations
 
@@ -70,8 +76,8 @@ _LAZY_WRAPPER_EXPORTS: dict[str, tuple[str, str]] = {
 # NOT import the ``lingtai`` wrapper. ``NativeRuntime`` only imports the wrapper
 # when a session is actually started.
 _LAZY_SDK_EXPORTS: dict[str, tuple[str, str]] = {
-    "NativeRuntime": (".native", "NativeRuntime"),
-    "NativeRuntimeSession": (".native", "NativeRuntimeSession"),
+    "NativeRuntime": (".bundles.native", "NativeRuntime"),
+    "NativeRuntimeSession": (".bundles.native", "NativeRuntimeSession"),
     "LingTaiClient": (".client", "LingTaiClient"),
     "LingTaiSession": (".client", "LingTaiSession"),
     "QueryResult": (".client", "QueryResult"),
@@ -85,10 +91,10 @@ _LAZY_SDK_EXPORTS: dict[str, tuple[str, str]] = {
     "RuntimeSession": (".runtime", "RuntimeSession"),
     "RuntimeState": (".runtime", "RuntimeState"),
     # Declared-bundle registry / dispatch-target seam (stage 3K; import-pure)
-    "BundleRegistry": (".bundle_registry", "BundleRegistry"),
-    "DispatchTarget": (".bundle_registry", "DispatchTarget"),
-    "all_bundle_manifests": (".bundle_registry", "all_bundle_manifests"),
-    "default_registry": (".bundle_registry", "default_registry"),
+    "BundleRegistry": (".bundles.registry", "BundleRegistry"),
+    "DispatchTarget": (".bundles.registry", "DispatchTarget"),
+    "all_bundle_manifests": (".bundles.registry", "all_bundle_manifests"),
+    "default_registry": (".bundles.registry", "default_registry"),
 }
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -100,7 +106,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
         SearchService,
         VisionService,
     )
-    from .native import NativeRuntime, NativeRuntimeSession  # noqa: F401
+    from .bundles.native import NativeRuntime, NativeRuntimeSession  # noqa: F401
     from .client import (  # noqa: F401
         LingTaiClient,
         LingTaiSession,
@@ -117,7 +123,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
         RuntimeSession,
         RuntimeState,
     )
-    from .bundle_registry import (  # noqa: F401
+    from .bundles.registry import (  # noqa: F401
         BundleRegistry,
         DispatchTarget,
         all_bundle_manifests,

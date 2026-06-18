@@ -41,9 +41,9 @@ from __future__ import annotations
 from typing import Any, Callable, Iterable
 
 from lingtai_kernel.tool_call_guard import ToolCallGuard
-from lingtai_sdk.bundle_registry import default_registry
-from lingtai_sdk.capabilities import BundleManifest
-from lingtai_sdk.guard_bridge import (
+from lingtai_sdk.bundles.registry import default_registry
+from lingtai_sdk.bundles.contracts import BundleManifest
+from lingtai_sdk.guard.bridge import (
     GuardPolicyMode,
     tool_call_guard_from_manifests,
 )

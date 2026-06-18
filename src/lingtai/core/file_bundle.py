@@ -43,7 +43,7 @@ from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     from lingtai_kernel.base_agent import BaseAgent
-    from lingtai_sdk.capability_host import BundleHost
+    from lingtai_sdk.bundles.host import BundleHost
 
 # The wrapper's real handler factories — the single source of truth for each
 # file tool's behavior, shared with the capability ``setup()`` path.
@@ -114,7 +114,7 @@ def file_tool_bundle_hosts(agent: "BaseAgent") -> dict[str, "BundleHost"]:
     declared manifest, proving the bundle-execution pattern against actual
     behavior. This does not alter the agent's live tool registration.
     """
-    from lingtai_sdk.file_tools import file_tool_hosts
+    from lingtai_sdk.bundles.file_tools import file_tool_hosts
 
     return file_tool_hosts(file_tool_handlers(agent))
 
@@ -151,7 +151,7 @@ def file_mutation_tool_bundle_hosts(agent: "BaseAgent") -> dict[str, "BundleHost
     unconditionally; gating is the stage-17 guard bridge's job, not installed
     here.
     """
-    from lingtai_sdk.file_mutation_tools import file_mutation_tool_hosts
+    from lingtai_sdk.bundles.file_mutation_tools import file_mutation_tool_hosts
 
     return file_mutation_tool_hosts(file_mutation_tool_handlers(agent))
 

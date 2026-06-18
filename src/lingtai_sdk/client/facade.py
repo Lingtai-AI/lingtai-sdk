@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from .runtime import (
+from ..runtime import (
     EventKind,
     Runtime,
     RuntimeEvent,
@@ -43,7 +43,7 @@ class QueryResult:
 def _default_runtime() -> Runtime:
     """Build the default native runtime lazily."""
 
-    from .native import NativeRuntime
+    from ..bundles.native import NativeRuntime
 
     return NativeRuntime()
 

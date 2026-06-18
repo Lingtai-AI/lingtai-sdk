@@ -53,7 +53,7 @@ from typing import TYPE_CHECKING, Any, Callable
 if TYPE_CHECKING:
     from lingtai_kernel.base_agent import BaseAgent
 
-    from lingtai_sdk.capability_host import BundleHost, NativeBundleHost
+    from lingtai_sdk.bundles.host import BundleHost, NativeBundleHost
 
 # The single source of truth for ``email`` behavior — the kernel intrinsic the
 # live ``_wire_intrinsics`` path also dispatches. Imported at wrapper module load
@@ -137,7 +137,7 @@ def email_comm_bundle_host(agent: "BaseAgent") -> "NativeBundleHost":
     logic through the declared manifest without altering the agent's live
     intrinsic registration.
     """
-    from lingtai_sdk.communication_tools import email_comm_host
+    from lingtai_sdk.bundles.communication_tools import email_comm_host
 
     return email_comm_host(email_comm_handler(agent))
 
@@ -153,7 +153,7 @@ def daemon_exec_bundle_host(agent: "BaseAgent") -> "BundleHost":
     altering the agent's live capability registration — and constructing the host
     spawns / kills nothing.
     """
-    from lingtai_sdk.communication_tools import daemon_exec_host
+    from lingtai_sdk.bundles.communication_tools import daemon_exec_host
 
     return daemon_exec_host(daemon_exec_handler(agent))
 
@@ -171,7 +171,7 @@ def communication_bundle_hosts(
     per-declared-surface contract. ``email`` is hosted natively and ``daemon``
     in-process, each matching its live carrier.
     """
-    from lingtai_sdk.communication_tools import (
+    from lingtai_sdk.bundles.communication_tools import (
         DAEMON_TOOL_NAME,
         EMAIL_TOOL_NAME,
         communication_tool_hosts,

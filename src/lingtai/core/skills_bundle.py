@@ -58,7 +58,7 @@ from typing import TYPE_CHECKING, Any, Callable
 if TYPE_CHECKING:
     from lingtai_kernel.base_agent import BaseAgent
 
-    from lingtai_sdk.capability_host import BundleHost
+    from lingtai_sdk.bundles.host import BundleHost
 
 # The wrapper's real skills handler factory — the single source of truth shared
 # with the capability ``setup()`` path (``skills.make_handler``). Imported at
@@ -114,7 +114,7 @@ def skills_catalog_bundle_host(
     real catalog logic through the declared manifest without altering the agent's
     live capability registration — and constructing the host writes nothing.
     """
-    from lingtai_sdk.skill_tools import skills_catalog_host
+    from lingtai_sdk.bundles.skill_tools import skills_catalog_host
 
     return skills_catalog_host(skills_catalog_handler(agent, paths))
 
@@ -132,7 +132,7 @@ def skills_catalog_bundle_hosts(
     ``skills_catalog_hosts`` mapping seam, which enforces the single-``skills``-
     handler contract.
     """
-    from lingtai_sdk.skill_tools import SKILLS_TOOL_NAME, skills_catalog_hosts
+    from lingtai_sdk.bundles.skill_tools import SKILLS_TOOL_NAME, skills_catalog_hosts
 
     return skills_catalog_hosts(
         {SKILLS_TOOL_NAME: skills_catalog_handler(agent, paths)}

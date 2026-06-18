@@ -52,7 +52,7 @@ from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     from lingtai_kernel.base_agent import BaseAgent
-    from lingtai_sdk.capability_host import NativeBundleHost
+    from lingtai_sdk.bundles.host import NativeBundleHost
 
 # The single source of truth for ``system`` behavior — the kernel intrinsic the
 # live ``_wire_intrinsics`` path also dispatches. Imported at wrapper module load
@@ -112,7 +112,7 @@ def system_lifecycle_bundle_host(agent: "BaseAgent") -> "NativeBundleHost":
     danger-based gating is the stage-17 guard bridge's job, neither installed
     here.
     """
-    from lingtai_sdk.lifecycle_tools import system_lifecycle_host
+    from lingtai_sdk.bundles.lifecycle_tools import system_lifecycle_host
 
     return system_lifecycle_host(system_lifecycle_handler(agent))
 
@@ -126,7 +126,7 @@ def system_lifecycle_bundle_hosts(agent: "BaseAgent") -> dict[str, "NativeBundle
     across all stages. Builds via the SDK ``system_lifecycle_hosts`` mapping seam,
     which enforces the single-``system``-handler contract.
     """
-    from lingtai_sdk.lifecycle_tools import SYSTEM_TOOL_NAME, system_lifecycle_hosts
+    from lingtai_sdk.bundles.lifecycle_tools import SYSTEM_TOOL_NAME, system_lifecycle_hosts
 
     return system_lifecycle_hosts(
         {SYSTEM_TOOL_NAME: system_lifecycle_handler(agent)}

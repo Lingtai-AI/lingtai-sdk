@@ -17,7 +17,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-from lingtai_sdk import native
+# Canonical home of the native runtime adapter (legacy ``lingtai_sdk.native`` is a
+# thin re-export shim; private translation helpers live on the canonical module).
+from lingtai_sdk.bundles import native
 from lingtai_sdk import runtime as rt
 
 REPO_ROOT = Path(__file__).resolve().parents[1]

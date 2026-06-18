@@ -50,7 +50,7 @@ from typing import TYPE_CHECKING, Any, Callable
 if TYPE_CHECKING:
     from lingtai_kernel.base_agent import BaseAgent
 
-    from lingtai_sdk.capability_host import BundleHost
+    from lingtai_sdk.bundles.host import BundleHost
 
 # The wrapper's real knowledge handler factory — the single source of truth shared
 # with the capability ``setup()`` path (``knowledge.make_handler``). Imported at
@@ -99,7 +99,7 @@ def knowledge_catalog_bundle_host(agent: "BaseAgent") -> "BundleHost":
     logic through the declared manifest without altering the agent's live
     capability registration — and constructing the host writes nothing.
     """
-    from lingtai_sdk.knowledge_tools import knowledge_catalog_host
+    from lingtai_sdk.bundles.knowledge_tools import knowledge_catalog_host
 
     return knowledge_catalog_host(knowledge_catalog_handler(agent))
 
@@ -114,7 +114,7 @@ def knowledge_catalog_bundle_hosts(agent: "BaseAgent") -> dict[str, "BundleHost"
     ``knowledge_catalog_hosts`` mapping seam, which enforces the single-
     ``knowledge``-handler contract.
     """
-    from lingtai_sdk.knowledge_tools import (
+    from lingtai_sdk.bundles.knowledge_tools import (
         KNOWLEDGE_TOOL_NAME,
         knowledge_catalog_hosts,
     )
