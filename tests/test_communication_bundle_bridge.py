@@ -34,6 +34,7 @@ from lingtai_kernel.base_agent import BaseAgent
 from lingtai_kernel.intrinsics import email as emailintr
 from lingtai.core import communication_bundle
 from lingtai.core import daemon as daemonmod
+from lingtai_sdk import communication_tools as ct
 
 
 def make_mock_service():
@@ -80,6 +81,24 @@ def test_bridge_builds_hosts_mapping(agent):
     assert set(hosts) == {"email", "daemon"}
     assert hosts["email"].tools == ("email",)
     assert hosts["daemon"].tools == ("daemon",)
+
+
+def _schema_actions(schema: dict) -> set[str]:
+    return set(schema["properties"]["action"]["enum"])
+
+
+def test_email_manifest_actions_match_live_schema():
+    """Pin the SDK email declaration to the live intrinsic schema action enum."""
+    declared = set(ct.email_comm_manifest().metadata["actions"])
+    live = _schema_actions(emailintr.schema.get_schema())
+    assert declared == live
+
+
+def test_daemon_manifest_actions_match_live_schema():
+    """Pin the SDK daemon declaration to the live wrapper schema action enum."""
+    declared = set(ct.daemon_exec_manifest().metadata["actions"])
+    live = _schema_actions(daemonmod.get_schema())
+    assert declared == live
 
 
 # --- email parity: the bundle path runs the real intrinsic, byte-identical ---

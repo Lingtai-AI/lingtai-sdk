@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SDK Stage 3E — Communication Schema Drift Guard</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background: #f8fafc; color: #111827; }
+    main { max-width: 920px; margin: 0 auto; padding: 40px 24px; }
+    .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 16px; padding: 24px; margin: 18px 0; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+    h1 { margin: 0 0 8px; font-size: 30px; }
+    h2 { margin-top: 0; font-size: 20px; }
+    code { background: #f3f4f6; padding: 2px 5px; border-radius: 5px; }
+    pre { background: #111827; color: #f9fafb; padding: 14px; border-radius: 10px; overflow-x: auto; }
+    .ok { display: inline-block; color: #065f46; background: #d1fae5; padding: 3px 8px; border-radius: 999px; font-weight: 600; }
+    ul { line-height: 1.55; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>SDK Stage 3E — Communication Schema Drift Guard</h1>
+  <p><span class="ok">Conclusion: test-only follow-up</span></p>
+  <div class="card">
+    <h2>TL;DR</h2>
+    <p>This follow-up closes the only substantive nonblocking note from Stage 3D review: the SDK-declared <code>email</code> and <code>daemon</code> action sets were manually checked against live schemas, but not automatically pinned. Stage 3E adds two bridge-layer tests that fail if the SDK manifests drift from the live tool schemas.</p>
+  </div>
+  <div class="card">
+    <h2>What changed</h2>
+    <ul>
+      <li>Imports <code>lingtai_sdk.communication_tools</code> in <code>tests/test_communication_bundle_bridge.py</code>.</li>
+      <li>Adds <code>test_email_manifest_actions_match_live_schema</code>: SDK <code>email_comm_manifest().metadata["actions"]</code> must equal <code>lingtai_kernel.intrinsics.email.schema.get_schema()["properties"]["action"]["enum"]</code>.</li>
+      <li>Adds <code>test_daemon_manifest_actions_match_live_schema</code>: SDK <code>daemon_exec_manifest().metadata["actions"]</code> must equal <code>lingtai.core.daemon.get_schema()["properties"]["action"]["enum"]</code>.</li>
+      <li>No runtime code, live dispatch, guard, email, daemon manager, or side-effect path changes.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h2>Validation</h2>
+    <pre>PYTHONPATH=src python -m pytest tests/test_communication_bundle_bridge.py tests/test_sdk_communication_tools.py -q
+# 37 passed</pre>
+    <pre>python -m ruff check tests/test_communication_bundle_bridge.py
+# All checks passed</pre>
+    <pre>git diff --check origin/sdk/stage3d-highstate-communication-bundles-20260617...HEAD
+# clean</pre>
+  </div>
+  <div class="card">
+    <h2>Risk</h2>
+    <p>Low. This PR only adds read-only schema comparison tests in the bridge suite. The tests import the live schema providers but invoke no email action and no daemon action.</p>
+  </div>
+  <div class="card">
+    <h2>Source index</h2>
+    <ul>
+      <li><code>tests/test_communication_bundle_bridge.py</code> — new cross-schema drift guard tests.</li>
+      <li>Stage 3D PR #356 review — identified the missing automated drift guard as nonblocking follow-up.</li>
+    </ul>
+  </div>
+</main>
+</body>
+</html>
