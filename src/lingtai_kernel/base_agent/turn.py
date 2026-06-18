@@ -906,6 +906,7 @@ def _handle_request(agent, msg: Message) -> None:
         logger_fn=agent._log,
         meta_fn=lambda: build_meta(agent),
         working_dir=agent._working_dir,
+        tool_call_guard=getattr(agent, "_tool_call_guard", None),
     )
     content = agent._pre_request(msg)
     meta = build_meta(agent)
@@ -992,6 +993,7 @@ def _handle_tc_wake(agent, msg: Message) -> None:
         logger_fn=agent._log,
         meta_fn=lambda: build_meta(agent),
         working_dir=agent._working_dir,
+        tool_call_guard=getattr(agent, "_tool_call_guard", None),
     )
 
     # Legacy tc_inbox path — drained items get spliced and driven the

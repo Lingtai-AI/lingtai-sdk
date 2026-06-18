@@ -36,6 +36,7 @@ from ..meta_block import build_meta, build_notification_payload
 from ..session import SessionManager
 from ..tc_inbox import TCInbox
 from ..token_ledger import append_token_entry
+from ..tool_call_guard import ToolCallGuard
 from ..trace_redaction import redact_for_trajectory
 
 logger = get_logger()
@@ -417,6 +418,13 @@ class BaseAgent:
         # Non-intrinsic tool handlers (capabilities, MCP, add_tool)
         self._tool_handlers: dict[str, Callable[[dict], dict]] = {}
         self._tool_schemas: list[FunctionSchema] = []
+
+        # Composable pre-dispatch guard for proposed tool calls.  Built once and
+        # threaded into every ToolExecutor the turn loop constructs.  The default
+        # empty chain preserves the existing ``default_allow`` pass-through:
+        # hosts/capabilities replace this with a populated ``ToolCallGuard`` to
+        # add policy without touching the executor construction sites.
+        self._tool_call_guard: ToolCallGuard = ToolCallGuard()
 
         # --- Wire intrinsic tools ---
         self._intrinsics: dict[str, Callable[[dict], dict]] = {}
