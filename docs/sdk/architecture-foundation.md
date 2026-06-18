@@ -1313,3 +1313,113 @@ with a mock LLM service and asserts that invoking each tool through the bundle
 host actually creates/overwrites/edits real files, returns exactly what the
 agent's registered handler returns (parity), and preserves the overwrite,
 ambiguity-refusal, and error structures through the bundle path.
+
+## 25. Stage 3C — high-state `system` lifecycle tool bundle (stacked PR)
+
+Stage 3C is stacked on stage 3B (§24) and lifts the tool-bundle template from the
+*low-state* file tools to the first **high-state** surface: the privileged,
+native-only `system` lifecycle tool (refresh / sleep / karma actions / nirvana /
+notification / dismiss). It is the high-state mirror of the file-bundle bridge:
+declare the bundle (already done in §16 stage 8) + an injection seam, then bridge
+the *real* handler through it — without touching live dispatch.
+
+### What makes `system` different from the file tools
+
+Two structural differences drive the design:
+
+- **`system` is a kernel intrinsic, not a wrapper capability.** The file tools
+  (`read`/`write`/…) are wrapper capabilities with a `make_handler(agent)` factory
+  in `lingtai.core.{...}`. `system` is `lingtai_kernel.intrinsics.system.handle(agent, args)`,
+  wired live by `BaseAgent._wire_intrinsics` as
+  `self._intrinsics["system"] = lambda args: system.handle(self, args)`. There is
+  no wrapper `make_handler` to extract, and nothing in the kernel may be made to
+  import the SDK. So the bridge reuses that *same* intrinsic `handle` — the live
+  `_wire_intrinsics` path is left **completely untouched** (no kernel extraction),
+  and parity is guaranteed by sharing the one function.
+- **`system` is privileged / native-only.** Its manifest declares `native`
+  transport and `privileged`/`native_only` roles, so it is hosted by the
+  native-authority `NativeBundleHost`, not the non-native `BundleHost` the file
+  tools use.
+
+### What it adds
+
+- **`lingtai_sdk.lifecycle_tools`** (import-pure of the wrapper) — the high-state
+  declaration module. It does **not** redeclare the `system` manifest:
+  `lifecycle_system_manifest()` re-exports the existing
+  `core_bundles.system_bundle()` verbatim (one `system` manifest in the SDK). On
+  top of it, it adds a **per-action risk table** `SYSTEM_ACTION_RISK`
+  (`{action: SecurityDanger}`) with `KARMA_ACTIONS` / `NIRVANA_ACTIONS` /
+  `SELF_ACTIONS` partitions and an `action_risk(action)` helper, plus a
+  `system`-only native host seam `system_lifecycle_host(handler)` /
+  `system_lifecycle_hosts({"system": handler})` wrapping `native_core_host` (so a
+  host can adopt `system` without also supplying `psyche`/`soul`).
+- **`lingtai.core.system_bundle`** (wrapper-side bridge) — injects the real kernel
+  intrinsic `system.handle` (bound to the agent, adapted from `args: dict` to the
+  host's kwargs) into the SDK seam via `system_lifecycle_bundle_host(agent)` /
+  `system_lifecycle_bundle_hosts(agent)`. `host.invoke("system", action=..., ...)`
+  then runs the real lifecycle logic — including the real karma/nirvana authority
+  gate — through the declared manifest. The SDK is imported lazily inside the
+  bridge functions (wrapper → sdk edge); the kernel intrinsic is imported at
+  wrapper module load (wrapper → kernel, allowed).
+
+### The per-action risk grading (the heart of stage 3C)
+
+A single bundle-level `SecurityDanger` cannot faithfully grade `system`: `sleep`
+(self only, no authority) and `nirvana` (irreversible teardown of another agent's
+working directory) sit at opposite ends. But `system` is *one* public tool with an
+`action` discriminator, not one tool per action — so per-action danger cannot vary
+at the *manifest* level without forking the live tool registration, which this
+stage must not do. The conservative, faithful encoding is therefore:
+
+- **bundle-level posture stays `destructive`** — the strongest action's grade, and
+  exactly what the stage-17 guard bridge already derives (`system` denied in
+  `BLOCKING`, warned in `ADVISORY`);
+- **the graded action table ships as a declaration** (`SYSTEM_ACTION_RISK`):
+  self/normal lifecycle (`refresh`/`sleep` → `caution`, `presets`/`notification` →
+  `safe`, `dismiss` → `caution`), karma (`lull`/`suspend`/`cpr`/`interrupt`/`clear`
+  → `destructive`), nirvana (`nirvana` → `destructive`). An unknown action grades
+  conservatively `destructive`.
+
+The grading is a *declaration of* the authority the kernel intrinsic already
+enforces in code (`intrinsics.system.karma._KARMA_ACTIONS` / `_NIRVANA_ACTIONS`),
+pinned to never drift from it by `tests/test_sdk_lifecycle_tools.py`. It is **never
+a second runtime gate**: no guard is installed and the real karma/nirvana gate
+stays in the kernel intrinsic.
+
+### What it deliberately is NOT
+
+- It does **not** migrate, move, rewrite, import, or call the real `system` *from
+  the SDK*; the implementation stays in the kernel intrinsic, bound to agent state,
+  with its karma/nirvana authority and error structures intact.
+- It does **not** change the agent's live intrinsic registration or dispatch
+  (`_wire_intrinsics` is the untouched live path), and it does **not** install or
+  wire any guard, install a bundle host onto a running agent, or touch the turn
+  loop. The bundle host and the danger-posture declaration are additive,
+  observable seams.
+- It keeps scope to lifecycle/`system` only — `psyche`/`soul` keep their existing
+  generic `native_core_hosts` seam, and email/daemon/MCP belong to a later stage.
+
+### Import purity
+
+`lingtai_sdk.lifecycle_tools` imports only `.capabilities` / `.capability_host` /
+`.core_bundles` / `.errors`; a bare `import lingtai_sdk.lifecycle_tools` pulls in
+no `lingtai` wrapper module (asserted by
+`tests/test_sdk_lifecycle_tools.py::test_lifecycle_tools_import_is_pure_and_migrates_no_wrapper`).
+Like `core_bundles`, it transitively loads `lingtai_kernel.intrinsics.*` — *kernel*,
+not the forbidden wrapper. The wrapper bridge `lingtai.core.system_bundle` imports
+the SDK lazily inside its functions, so a bare import of the bridge leaves
+`lingtai_sdk` unloaded (asserted by
+`tests/test_system_bundle_bridge.py::test_bridge_does_not_import_sdk_at_wrapper_module_load`).
+
+### Tested without a model
+
+`tests/test_sdk_lifecycle_tools.py` exercises the SDK declaration + per-action risk
+table (incl. its parity with the kernel authority sets), the native host seam with
+dummy handlers, the guard-bridge invariant, and the purity subprocess (no API key,
+no agent). The *end-to-end* proof against the real behavior is in
+`tests/test_system_bundle_bridge.py`: it builds a `BaseAgent` with a mock LLM
+service and asserts that invoking `system` through the bundle host returns exactly
+what the kernel intrinsic returns (parity) for the pure `notification` placeholder,
+an unknown-action error, and — crucially — karma/nirvana actions *denied by missing
+authority*, proving the real authority gate flows through the bridge unchanged and
+*before* any side effect. No test sleeps, refreshes, or destroys an agent.
