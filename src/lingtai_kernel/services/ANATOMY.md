@@ -31,7 +31,7 @@ Kernel-side service ABCs and implementations. Services back cross-cutting kernel
 
 - **Parent:** `src/lingtai_kernel/` (see `ANATOMY.md`).
 - **Subfolders:** none.
-- **Sibling consumers:** `intrinsics/` owns mailbox tool behavior; `base_agent/` owns logging lifecycle; `src/lingtai/cli.py` exposes `lingtai-agent log {rebuild,doctor,query}` (`../lingtai/cli.py:294-305`).
+- **Sibling consumers:** `intrinsics/` owns mailbox tool behavior; `base_agent/` owns logging lifecycle; `src/lingtai_cli/host.py` exposes `lingtai-agent` / `lingtai-cli log {rebuild,doctor,query}` (`../lingtai_cli/host.py:301-341`); `src/lingtai/cli.py` remains a compatibility shim.
 
 ## State
 

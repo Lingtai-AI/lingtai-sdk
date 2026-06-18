@@ -49,7 +49,7 @@ def _make_mock_service():
     return svc
 
 
-@patch("lingtai.cli.LLMService")
+@patch("lingtai_cli.host.LLMService")
 def test_sleep_signal_triggers_asleep(mock_llm_cls, tmp_path):
     """Boot agent, touch .sleep, verify ASLEEP (sleep, not shutdown)."""
     _write_init(tmp_path)
@@ -76,7 +76,7 @@ def test_sleep_signal_triggers_asleep(mock_llm_cls, tmp_path):
     agent.stop()
 
 
-@patch("lingtai.cli.LLMService")
+@patch("lingtai_cli.host.LLMService")
 def test_suspend_triggers_shutdown(mock_llm_cls, tmp_path):
     """Boot agent, touch .suspend, verify SUSPENDED (full shutdown)."""
     _write_init(tmp_path)
@@ -100,7 +100,7 @@ def test_suspend_triggers_shutdown(mock_llm_cls, tmp_path):
     agent.stop()
 
 
-@patch("lingtai.cli.LLMService")
+@patch("lingtai_cli.host.LLMService")
 def test_load_init_and_build_agent(mock_llm_cls, tmp_path):
     """load_init + build_agent produce a valid Agent without crashing."""
     _write_init(tmp_path)
