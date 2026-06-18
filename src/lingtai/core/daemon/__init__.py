@@ -4937,14 +4937,49 @@ class DaemonManager:
             self._agent._log(event_type, **fields)
 
 
+def make_manager(agent: "Agent", max_emanations: int = 100,
+                 max_turns: int = DEFAULT_MAX_TURNS, timeout: float = 3600.0,
+                 notify_threshold: int = 20) -> DaemonManager:
+    """Build the ``DaemonManager`` bound to *agent* with the given limits.
+
+    Single source of truth for daemon-manager construction: both ``setup()`` (the
+    normal capability-registration path) and the SDK communication/execution
+    bundle bridge (``lingtai.core.communication_bundle``) build the manager
+    through this factory, so the bundle-hosted ``daemon`` tool runs against a
+    manager constructed byte-identically to the one ``setup()`` registers.
+    Constructing the manager neither spawns nor kills any process — only an
+    explicit ``emanate`` / ``ask`` / ``reclaim`` call does.
+    """
+    return DaemonManager(agent, max_emanations=max_emanations,
+                         max_turns=max_turns, timeout=timeout,
+                         notify_threshold=notify_threshold)
+
+
+def make_handler(agent: "Agent", max_emanations: int = 100,
+                 max_turns: int = DEFAULT_MAX_TURNS, timeout: float = 3600.0,
+                 notify_threshold: int = 20):
+    """Build the ``daemon`` tool handler bound to *agent*.
+
+    Returns the ``handle`` method of a freshly-built :class:`DaemonManager` (see
+    :func:`make_manager`). The handler is the same ``mgr.handle`` callable
+    ``setup()`` registers, so the SDK bundle bridge and the live capability path
+    share one behavior. The manager is otherwise unreferenced by callers that only
+    want the handler; use :func:`make_manager` directly when the manager object
+    itself is needed (as ``setup()`` does, to return it).
+    """
+    return make_manager(agent, max_emanations=max_emanations,
+                        max_turns=max_turns, timeout=timeout,
+                        notify_threshold=notify_threshold).handle
+
+
 def setup(agent: "Agent", max_emanations: int = 100,
           max_turns: int = DEFAULT_MAX_TURNS, timeout: float = 3600.0,
           notify_threshold: int = 20) -> DaemonManager:
     """Set up the daemon capability on an agent."""
     lang = agent._config.language
-    mgr = DaemonManager(agent, max_emanations=max_emanations,
-                        max_turns=max_turns, timeout=timeout,
-                        notify_threshold=notify_threshold)
+    mgr = make_manager(agent, max_emanations=max_emanations,
+                       max_turns=max_turns, timeout=timeout,
+                       notify_threshold=notify_threshold)
     schema = get_schema(lang)
     agent.add_tool("daemon", schema=schema, handler=mgr.handle,
                    description=get_description(lang))

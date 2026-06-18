@@ -1423,3 +1423,113 @@ what the kernel intrinsic returns (parity) for the pure `notification` placehold
 an unknown-action error, and — crucially — karma/nirvana actions *denied by missing
 authority*, proving the real authority gate flows through the bridge unchanged and
 *before* any side effect. No test sleeps, refreshes, or destroys an agent.
+
+## 26. Stage 3D — high-state communication/execution tool bundles (stacked PR)
+
+Stage 3D is stacked on stage 3C (§25) and continues the high-state migration to the
+two surfaces with **external or process side effects**: `email` (communication —
+can send to external SMTP/IMAP recipients) and `daemon` (execution — spawns / kills
+child processes and runs long child-agent executions). Same declare-and-inject
+pattern as 3C, applied to two surfaces that ride *different* live carriers.
+
+### Two surfaces, two carriers — matching the live wiring
+
+The key insight is that these two high-state surfaces are wired live by **different
+mechanisms**, and the bundle declaration must mirror each:
+
+- **`email` is a kernel intrinsic** (`lingtai_kernel.intrinsics.email.handle(agent,
+  args)`), wired by `BaseAgent._wire_intrinsics` exactly like `system`. It is
+  native-carried and privileged (it touches the agent's mailbox / notification
+  state and the configured mail service), but **not** `native_only` — a backend
+  could re-implement a mail surface — so its manifest declares `native` transport,
+  `privileged=True`, `native_only=False`, `backend_replaceability=AUGMENTABLE`, and
+  it is hosted by the native-authority `NativeBundleHost` (like `system`). The
+  bridge reuses that *same* intrinsic `handle`; `_wire_intrinsics` is left
+  **untouched**, and parity is guaranteed by sharing the one function.
+- **`daemon` is a wrapper capability** (`lingtai.core.daemon`), registered live by
+  its `setup()` through `agent.add_tool` — the *same non-native, in-process path the
+  file tools use*, not an intrinsic. So its manifest declares `in_process`
+  transport, `privileged=False`, and it is hosted by the non-native `BundleHost`
+  (like `write`/`edit`). To share one behavior between `setup()` and the bridge, a
+  behavior-preserving `make_manager(agent, …)` / `make_handler(agent, …)` factory
+  was extracted in `lingtai.core.daemon` (the same safe extraction `read`/`write`/…
+  already underwent); `setup()` now builds through it and is otherwise unchanged
+  (still returns the manager, registers `mgr.handle`, same defaults). Constructing
+  the manager neither spawns nor kills any process — only an explicit
+  `emanate`/`ask`/`reclaim` does.
+
+### What it adds
+
+- **`lingtai_sdk.communication_tools`** (import-pure of the wrapper) — declares the
+  two new manifests (`email_comm_manifest()` native/privileged; `daemon_exec_manifest()`
+  in-process/non-privileged), each with a **per-action risk table**
+  (`EMAIL_ACTION_RISK`, `DAEMON_ACTION_RISK`) plus `email_action_risk(action)` /
+  `daemon_action_risk(action)` helpers and the `EMAIL_SEND_ACTIONS` /
+  `DAEMON_PROCESS_ACTIONS` attention subsets, and a host seam per carrier
+  (`email_comm_host(handler)` → `NativeBundleHost`; `daemon_exec_host(handler)` →
+  `BundleHost`; plus the `communication_tool_hosts({...})` mapping seam).
+- **`lingtai.core.communication_bundle`** (wrapper-side bridge) — injects the real
+  kernel intrinsic `email.handle` and the real wrapper `daemon.make_handler(agent)`
+  (both adapted from `args: dict` to the host's kwargs) into the SDK seams via
+  `email_comm_bundle_host(agent)` / `daemon_exec_bundle_host(agent)` /
+  `communication_bundle_hosts(agent)`. The SDK is imported lazily inside the bridge
+  functions (wrapper → sdk edge); the kernel intrinsic and the wrapper capability
+  module are imported at wrapper module load (wrapper → kernel/wrapper, allowed).
+
+### The per-action risk grading
+
+As in 3C, each surface is one public tool with an `action` discriminator, so the
+bundle keeps a single **bundle-level danger at its strongest action** and ships a
+graded action table as metadata:
+
+- **`email`** — read-only inbox queries (`check`/`read`/`search`/`contacts`) →
+  `safe`; self-scoped mailbox/contact mutations (`dismiss`/`archive`/`add_contact`/
+  `remove_contact`/`edit_contact`) → `caution`; **outbound sends** that can reach an
+  external recipient (`send`/`reply`/`reply_all`) → `caution`; irreversible removal
+  (`delete`) → `destructive`. Bundle-level: `destructive` (the strongest action).
+- **`daemon`** — read-only status queries (`list`/`check`) → `safe`; process spawn /
+  drive / kill (`emanate`/`ask`/`reclaim`) → `destructive`. Bundle-level:
+  `destructive`. An unknown action grades conservatively `destructive` on both.
+
+These are *declarations*, never a second runtime gate: no guard is installed; the
+live internal/external mail routing stays in the kernel intrinsic and the live
+process spawn/kill stays in `DaemonManager`. The stage-17 guard bridge reads the
+bundle-level posture (both denied in `BLOCKING`, warned in `ADVISORY`).
+
+### What it deliberately is NOT
+
+- It does **not** migrate, move, rewrite, import, or call the real `email`/`daemon`
+  *from the SDK*; implementations stay in the kernel intrinsic and the wrapper
+  capability, bound to agent state.
+- It does **not** change the live registration/dispatch (`_wire_intrinsics` and
+  `daemon.setup()` remain the live paths; the daemon extraction is byte-identical),
+  and it does **not** install or wire any guard, mount a bundle host onto a running
+  agent, or touch the turn loop.
+- It **excludes `mcp`**: the `mcp` capability's live handler is an inline closure
+  built inside `lingtai.core.mcp.setup()` with no stable extractable seam, and its
+  one `show` action is read-only presentation (registry mutations happen via
+  `write`/`edit` on the registry file, not the tool surface) — so it is not a
+  high-state communication/execution surface worth bridging, and forcing an
+  extraction would change a third live `setup()` for no high-state gain. Declaring
+  it is deferred; see the stage-3D implementation report.
+
+### Import purity
+
+`lingtai_sdk.communication_tools` imports only `.capabilities` / `.capability_host`
+/ `.errors`; a bare import pulls in no `lingtai` wrapper module (asserted by
+`test_sdk_communication_tools.py::test_communication_tools_import_is_pure_and_migrates_no_wrapper`).
+The wrapper bridge `lingtai.core.communication_bundle` imports the SDK lazily inside
+its functions, so a bare import of the bridge leaves `lingtai_sdk` unloaded
+(asserted by
+`test_communication_bundle_bridge.py::test_bridge_does_not_import_sdk_at_wrapper_module_load`).
+
+### Tested without external side effects
+
+`tests/test_sdk_communication_tools.py` exercises the declarations, both per-action
+risk tables, the correct host carrier per surface (and the wrong host refusing),
+the guard-bridge invariant, and the purity subprocess — all with dummy handlers, no
+agent. `tests/test_communication_bundle_bridge.py` proves parity against the real
+handlers on a `BaseAgent` with a mock LLM service, using only side-effect-free
+actions: email `check`/`contacts` (empty mailbox), the reserved `unread` error, and
+unknown actions; daemon `list` (fresh run dir) and unknown actions. **No test sends
+real mail, sleeps, spawns, drives, or kills any process or subagent.**
