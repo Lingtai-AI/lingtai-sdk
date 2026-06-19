@@ -41,6 +41,7 @@ class ToolExecutor:
         working_dir: Path | str | None = None,
         max_result_chars: int = _DEFAULT_MAX_RESULT_CHARS,
         tool_call_guard: ToolCallGuard | None = None,
+        allow_terminal_async_dispatch: bool = False,
     ) -> None:
         self._dispatch_fn = dispatch_fn
         self._make_tool_result_fn = make_tool_result_fn
@@ -53,6 +54,7 @@ class ToolExecutor:
         self._working_dir = Path(working_dir) if working_dir is not None else None
         self._max_result_chars = max_result_chars
         self._tool_call_guard = tool_call_guard or ToolCallGuard()
+        self._allow_terminal_async_dispatch = allow_terminal_async_dispatch
         self._current_api_call_id: str | None = None
 
     def _tool_trace_id(self, tc: ToolCall) -> str:
@@ -518,6 +520,32 @@ class ToolExecutor:
     def guard(self, value: LoopGuard) -> None:
         self._guard = value
 
+    @staticmethod
+    def _is_terminal_async_daemon_dispatch(tc: ToolCall, result: Any) -> bool:
+        """Return True for the one result shape allowed to end the turn.
+
+        The parent model has already chosen bounded daemon delegation.  This
+        signal only skips the redundant post-dispatch continuation that would
+        acknowledge a successful async `daemon(action="emanate")` launch.
+        It must remain narrow: no arbitrary tool, daemon follow-up, check/list,
+        failed dispatch, or partial result may terminate the parent turn.
+        """
+        if tc.name != "daemon" or not isinstance(result, dict):
+            return False
+        args = getattr(tc, "args", {}) or {}
+        if args.get("action") != "emanate":
+            return False
+        if result.get("status") != "dispatched":
+            return False
+        if result.get("terminal_async_dispatch") is not True:
+            return False
+        ids = result.get("ids")
+        if not isinstance(ids, list) or not ids:
+            return False
+        if not result.get("group_id"):
+            return False
+        return True
+
     def _log(self, event_type: str, **fields) -> None:
         if self._current_api_call_id and "api_call_id" not in fields:
             fields["api_call_id"] = self._current_api_call_id
@@ -587,6 +615,7 @@ class ToolExecutor:
         collected_errors: list[str],
         *,
         on_result_hook: Callable | None = None,
+        terminal_async_allowed: bool = False,
     ) -> tuple[Any, bool, str]:
         tc_id = getattr(tc, "id", None)
         trace_id = self._tool_trace_id(tc)
@@ -721,6 +750,21 @@ class ToolExecutor:
                 status=status,
             )
 
+            if (
+                terminal_async_allowed
+                and self._allow_terminal_async_dispatch
+                and self._is_terminal_async_daemon_dispatch(tc, result)
+            ):
+                self._log_lifecycle(
+                    "tool_call_terminal_async_dispatch",
+                    tool_name=tc.name,
+                    tool_call_id=tc_id,
+                    tool_trace_id=trace_id,
+                    group_id=result.get("group_id"),
+                    ids=result.get("ids"),
+                )
+                return result_msg, True, ""
+
             if isinstance(result, dict) and result.get("status") == "error":
                 err_msg = result.get("message", "unknown error")
                 collected_errors.append(f"{tc.name}: {err_msg}")
@@ -789,7 +833,10 @@ class ToolExecutor:
             if cancel_event is not None and cancel_event.is_set():
                 return [], False, ""
             result_msg, intercepted, intercept_text = self._execute_single(
-                tc, collected_errors, on_result_hook=on_result_hook,
+                tc,
+                collected_errors,
+                on_result_hook=on_result_hook,
+                terminal_async_allowed=len(tool_calls) == 1,
             )
             if result_msg is not None:
                 tool_results.append(result_msg)

@@ -421,6 +421,7 @@ def test_cli_backend_serializes_task_mcp_context(tmp_path, monkeypatch):
     })
 
     assert result["status"] == "dispatched"
+    assert result["terminal_async_dispatch"] is True
     future = mgr._emanations[result["ids"][0]]["future"]
     future.result(timeout=5)
     assert "## Parent-provided MCP registrations" in captured["task"]
@@ -894,6 +895,23 @@ def test_handle_emanate_dispatches_and_returns_ids(tmp_path):
     assert {e["source"] for e in events} == {"daemon"}
     assert {e["ref_id"] for e in events} == {"em-1", "em-2"}
     assert all("[daemon:em-" not in e["body"] for e in events)
+
+
+
+def test_handle_emanate_marks_successful_dispatch_terminal_async(tmp_path, monkeypatch):
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+
+    monkeypatch.setattr(mgr, "_run_emanation", lambda *args, **kwargs: "done")
+
+    result = mgr._handle_emanate([
+        {"task": "scan", "tools": ["file"]},
+    ])
+
+    assert result["status"] == "dispatched"
+    assert result["ids"]
+    assert result["group_id"]
+    assert result["terminal_async_dispatch"] is True
 
 
 def test_handle_emanate_persists_task_capsule(tmp_path, monkeypatch):

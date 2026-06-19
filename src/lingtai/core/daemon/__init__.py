@@ -2327,8 +2327,17 @@ class DaemonManager:
         self._log("daemon_emanate", ids=ids, group_id=group_id, count=len(tasks),
                   tasks=[{"task": s["task"][:80], "tools": s["tools"]} for s in tasks])
 
-        return {"status": "dispatched", "count": len(tasks), "ids": ids,
-                "group_id": group_id}
+        return {
+            "status": "dispatched",
+            "count": len(tasks),
+            "ids": ids,
+            "group_id": group_id,
+            # The daemon workers now run out-of-band.  The parent turn loop may
+            # commit this paired tool result and skip the redundant LLM
+            # continuation that would only acknowledge dispatch; completion still
+            # returns through the daemon notification/review path.
+            "terminal_async_dispatch": True,
+        }
 
     def _handle_emanate_cli(
         self,
@@ -2524,8 +2533,18 @@ class DaemonManager:
                   tasks=[{"task": s["task"][:80], "tools": s.get("tools", [])}
                          for s in tasks])
 
-        return {"status": "dispatched", "count": len(tasks), "ids": ids,
-                "group_id": group_id, "backend": backend}
+        return {
+            "status": "dispatched",
+            "count": len(tasks),
+            "ids": ids,
+            "group_id": group_id,
+            "backend": backend,
+            # External CLI daemons also run out-of-band after successful spawn.
+            # Completion/failure remains visible through the existing daemon
+            # notification path; this flag only suppresses the immediate
+            # post-dispatch parent continuation.
+            "terminal_async_dispatch": True,
+        }
 
     @staticmethod
     def _truncate_list_string(value: object, limit: int = 500) -> object:

@@ -13,7 +13,7 @@ task-scoped MCP tools by the LingTai backend. Parent MCP tools are not auto-inhe
 calls still pass through the kernel `ToolExecutor`/`ToolCallGuard` path before
 any handler runs. Each `daemon.emanate` batch gets a stable `group_id` shared by
 every run in that batch, while each daemon still keeps its own `run_id`. Results are
-persisted in per-run daemon folders; terminal completion/failure is surfaced as
+persisted in per-run daemon folders; successful `daemon.emanate` dispatches return a short `terminal_async_dispatch` acknowledgement (`daemon/__init__.py:2339`, `daemon/__init__.py:2546`) so the parent turn loop may skip a redundant launch-continuation, while terminal completion/failure is surfaced as
 a compact `.notification/system.json` event instead of ordinary parent request
 text.
 

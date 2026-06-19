@@ -21,6 +21,7 @@ def make_executor(
     max_result_chars=50_000,
     guard=None,
     tool_call_guard=None,
+    allow_terminal_async_dispatch=False,
 ):
     if dispatch_fn is None:
 
@@ -39,6 +40,7 @@ def make_executor(
         working_dir=working_dir,
         max_result_chars=max_result_chars,
         tool_call_guard=tool_call_guard,
+        allow_terminal_async_dispatch=allow_terminal_async_dispatch,
     )
 
 
@@ -786,6 +788,139 @@ def test_parallel_future_exception_stays_enriched_for_model(monkeypatch):
     log_payload = logs[_log_index(logs, "tool_result", trace_id="trace-a")][1]["result"]
     assert log_payload == payload
 
+
+
+def test_terminal_async_daemon_dispatch_intercepts_after_paired_result():
+    logs = []
+    dispatch_calls = []
+
+    def dispatch(tc):
+        dispatch_calls.append((tc.name, tc.args, tc.id))
+        return {
+            "status": "dispatched",
+            "ids": ["em-1"],
+            "group_id": "dg-1",
+            "terminal_async_dispatch": True,
+        }
+
+    executor = make_executor(
+        dispatch_fn=dispatch,
+        known_tools={"daemon"},
+        logger_fn=lambda event_type, **fields: logs.append((event_type, fields)),
+        allow_terminal_async_dispatch=True,
+    )
+
+    results, intercepted, text = executor.execute([
+        ToolCall(
+            name="daemon",
+            args={"action": "emanate", "tasks": [{"task": "scan", "tools": ["file"]}]},
+            id="daemon-call",
+        ),
+    ])
+
+    assert intercepted is True
+    assert text == ""
+    assert dispatch_calls == [(
+        "daemon",
+        {"action": "emanate", "tasks": [{"task": "scan", "tools": ["file"]}]},
+        "daemon-call",
+    )]
+    assert len(results) == 1
+    assert results[0]["name"] == "daemon"
+    payload = results[0]["result"]
+    assert payload["status"] == "dispatched"
+    assert payload["ids"] == ["em-1"]
+    assert payload["group_id"] == "dg-1"
+    assert payload["terminal_async_dispatch"] is True
+    terminal_logs = [
+        fields for event, fields in logs
+        if event == "tool_call_terminal_async_dispatch"
+    ]
+    assert terminal_logs == [{
+        "tool_name": "daemon",
+        "tool_call_id": "daemon-call",
+        "tool_trace_id": "daemon-call",
+        "group_id": "dg-1",
+        "ids": ["em-1"],
+    }]
+    assert "tool_call_dispatch_start" in _trace_events(logs, "daemon-call")
+    assert "tool_result_model_visible" in _trace_events(logs, "daemon-call")
+
+
+def test_terminal_async_daemon_dispatch_is_opt_in_on_executor():
+    executor = make_executor(
+        dispatch_fn=lambda tc: {
+            "status": "dispatched",
+            "ids": ["em-1"],
+            "group_id": "dg-1",
+            "terminal_async_dispatch": True,
+        },
+        known_tools={"daemon"},
+    )
+
+    results, intercepted, text = executor.execute([
+        ToolCall(name="daemon", args={"action": "emanate", "tasks": []}, id="daemon-call"),
+    ])
+
+    assert intercepted is False
+    assert text == ""
+    assert results[0]["result"]["status"] == "dispatched"
+
+
+
+def test_terminal_async_daemon_dispatch_requires_single_emanate_call():
+    def dispatch(tc):
+        if tc.name == "daemon":
+            return {
+                "status": "dispatched",
+                "ids": ["em-1"],
+                "group_id": "dg-1",
+                "terminal_async_dispatch": True,
+            }
+        return {"status": "ok"}
+
+    executor = make_executor(
+        dispatch_fn=dispatch,
+        known_tools={"daemon", "read"},
+        allow_terminal_async_dispatch=True,
+    )
+
+    results, intercepted, text = executor.execute([
+        ToolCall(name="daemon", args={"action": "emanate", "tasks": []}, id="daemon-call"),
+        ToolCall(name="read", args={"file_path": "x"}, id="read-call"),
+    ])
+
+    assert intercepted is False
+    assert text == ""
+    assert [r["name"] for r in results] == ["daemon", "read"]
+
+
+def test_terminal_async_daemon_dispatch_rejects_non_emanate_or_invalid_shape():
+    cases = [
+        (ToolCall(name="daemon", args={"action": "check"}, id="check-call"),
+         {"status": "dispatched", "ids": ["em-1"], "group_id": "dg-1", "terminal_async_dispatch": True}),
+        (ToolCall(name="daemon", args={"action": "emanate"}, id="failed-call"),
+         {"status": "error", "message": "bad", "terminal_async_dispatch": True}),
+        (ToolCall(name="bash", args={}, id="bash-call"),
+         {"status": "dispatched", "ids": ["em-1"], "group_id": "dg-1", "terminal_async_dispatch": True}),
+        (ToolCall(name="daemon", args={"action": "emanate"}, id="empty-ids"),
+         {"status": "dispatched", "ids": [], "group_id": "dg-1", "terminal_async_dispatch": True}),
+        (ToolCall(name="daemon", args={"action": "emanate"}, id="missing-group"),
+         {"status": "dispatched", "ids": ["em-1"], "terminal_async_dispatch": True}),
+        (ToolCall(name="daemon", args={"action": "emanate"}, id="truthy-string"),
+         {"status": "dispatched", "ids": ["em-1"], "group_id": "dg-1", "terminal_async_dispatch": "true"}),
+    ]
+
+    for call, payload in cases:
+        executor = make_executor(
+            dispatch_fn=lambda tc, payload=payload: dict(payload),
+            known_tools={"daemon", "bash"},
+            allow_terminal_async_dispatch=True,
+        )
+        results, intercepted, text = executor.execute([call])
+        assert intercepted is False
+        assert text == ""
+        assert len(results) == 1
 
 def test_intercept_hook():
     executor = make_executor()
