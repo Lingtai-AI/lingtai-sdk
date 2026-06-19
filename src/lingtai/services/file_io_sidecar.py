@@ -22,7 +22,7 @@ uses the first one that points at an executable file:
    PoC. Still honored so older deployments keep working.
 4. **Packaged binary** at ``lingtai/bin/lingtai-search-sidecar[.exe]``
    — present in platform-specific wheels built by ``setup.py``.
-5. **Dev-tree binary** at ``experimental/lingtai-search-sidecar/target/
+5. **Dev-tree binary** at ``crates/lingtai-search-sidecar/target/
    {release,debug}/lingtai-search-sidecar[.exe]`` — picked up
    automatically when running out of an editable / source checkout.
 
@@ -70,7 +70,7 @@ from .file_io import (
 
 #: Environment variables that point at the sidecar binary. The first one is
 #: the canonical name; the second one is kept for backwards compatibility
-#: with the original PoC under ``experimental/lingtai-search-sidecar``.
+#: with the original PoC under ``crates/lingtai-search-sidecar``.
 SIDECAR_ENV_VARS: tuple[str, ...] = (
     "LINGTAI_FILE_IO_SIDECAR",
     "LINGTAI_SEARCH_SIDECAR",
@@ -295,13 +295,13 @@ def _dev_tree_binary() -> str | None:
     """Locate the Rust binary inside a source / editable checkout.
 
     Walks upward from this file looking for
-    ``experimental/lingtai-search-sidecar/target/release/<bin>`` (or the
+    ``crates/lingtai-search-sidecar/target/release/<bin>`` (or the
     ``debug`` build). This is the path that developers hitting ``pip
     install -e .`` get for free once they've run ``cargo build`` once.
     """
     here = Path(__file__).resolve()
     for parent in (here.parent, *here.parents):
-        crate_root = parent / "experimental" / "lingtai-search-sidecar"
+        crate_root = parent / "crates" / "lingtai-search-sidecar"
         if not crate_root.is_dir():
             continue
         for profile in ("release", "debug"):

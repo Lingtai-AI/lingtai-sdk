@@ -44,7 +44,7 @@ any cargo failure abort the build instead of fallback.
 ## Build manually
 
 ```bash
-cd experimental/lingtai-search-sidecar
+cd crates/lingtai-search-sidecar
 cargo build --release
 export LINGTAI_FILE_IO_SIDECAR="$(pwd)/target/release/lingtai-search-sidecar"
 ```
@@ -82,7 +82,7 @@ first match:
 3. **`LINGTAI_SEARCH_SIDECAR`** env var (legacy alias).
 4. **Packaged binary** at `lingtai/bin/lingtai-search-sidecar[.exe]`
    — present in platform-specific wheels.
-5. **Dev-tree binary** at `experimental/lingtai-search-sidecar/target/
+5. **Dev-tree binary** at `crates/lingtai-search-sidecar/target/
    {release,debug}/lingtai-search-sidecar[.exe]` — found automatically
    from editable installs after `cargo build`.
 

@@ -503,7 +503,7 @@ def test_default_local_file_io_service_does_not_touch_sidecar(tmp_path: Path) ->
 
 @pytest.mark.skipif(shutil.which("cargo") is None, reason="Rust toolchain is optional")
 def test_rust_sidecar_integration_grep_and_glob(tmp_path: Path) -> None:
-    crate = Path(__file__).resolve().parents[1] / "experimental" / "lingtai-search-sidecar"
+    crate = Path(__file__).resolve().parents[1] / "crates" / "lingtai-search-sidecar"
     subprocess.run(["cargo", "build", "--quiet"], cwd=crate, check=True, timeout=300)
     binary = crate / "target" / "debug" / (
         "lingtai-search-sidecar.exe" if os.name == "nt" else "lingtai-search-sidecar"
