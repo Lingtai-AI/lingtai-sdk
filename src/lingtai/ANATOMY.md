@@ -2,13 +2,16 @@
 
 PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset materialization, CLI, and public re-exports. The public SDK doorway `lingtai_sdk` may lazily import wrapper symbols such as `Agent`; the wrapper must not depend on the SDK.
 
+**Naming principle.** `lingtai` is the Python **import root** for the whole distribution. The repo / PyPI distribution may be named `lingtai-sdk`; the SDK is the entire package, not a `lingtai.sdk` subpackage. The root `__init__.py` is a thin **namespace / fuse** (a re-export surface), not a business layer — it owns no runtime logic. (Internal components are slated to reorganize as kernel/assets/addons/cli/backends in a later PR; that file-tree move is deliberately out of scope here.)
+
 > **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues.
 
 ## Components
 
 | File | Role |
 |---|---|
-| `__init__.py` | Public API facade — re-exports `Agent`, `BaseAgent`, `Message`, services from kernel+wrapper |
+| `__init__.py` | Public API facade / import fuse — re-exports `Agent`, `BaseAgent`, `Message`, services from kernel+wrapper. **Import-light:** kernel-backed names (`BaseAgent`/`Message`/`AgentConfig`/`EmailManager`/mail+logging services) are eager (dependency-light); wrapper-backed names (`Agent`/`setup_capability`/managers/FileIO+vision+search services) resolve lazily via PEP 562 `__getattr__` and cache in module globals. A bare `import lingtai` loads neither `lingtai.agent`/capabilities/services nor any heavy provider SDK — see `tests/test_lingtai_import_purity.py` |
+| `_version.py` | Best-effort `__version__` via `importlib.metadata.version("lingtai")`; falls back to `0+unknown` in a bare source checkout rather than raising at import time (mirrors `../lingtai_sdk/_version.py`) |
 | `__main__.py` | `python -m lingtai` → `cli.main()` |
 | `agent.py` | **THE key file.** `Agent(BaseAgent)` — layer-2 agent with capability composition, preset swap, MCP, init.json refresh |
 | `cli.py` | Compatibility shim — re-exports the host surface (`load_init`/`build_agent`/`run`/`main`, plus the patchable `LLMService`/`Agent`/`FilesystemMailService` names) from `lingtai_cli.host`. The `lingtai-agent` console script still points here. CLI host behaviour moved to the `lingtai_cli` package |
