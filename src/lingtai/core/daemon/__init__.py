@@ -934,6 +934,53 @@ class DaemonManager:
             f"{task}"
         )
 
+    @staticmethod
+    def _daemon_codex_session_anchor(run_dir) -> str:
+        """Return the per-run Codex cache-affinity anchor for a daemon."""
+        return str((run_dir.path / "daemon.json").resolve())
+
+    def _daemon_provider_defaults(
+        self,
+        provider: str,
+        base_defaults: dict | None,
+        run_dir,
+    ) -> dict | None:
+        """Return provider defaults for a daemon-scoped LLM service.
+
+        Daemon-scoped services preserve the parent/preset provider defaults for
+        every provider, so a non-Codex daemon keeps the same adapter behavior as
+        its parent. Codex is the one exception: the normal Codex agent path uses
+        the agent's resolved ``init.json`` path as its cache-affinity anchor, but
+        a LingTai daemon is a disposable run, so Codex daemon calls need a per-run
+        anchor rather than the parent agent's anchor; otherwise parent and child
+        traffic collide in one REST cache slot.
+        """
+        provider_key = str(provider).lower()
+        bucket = dict(base_defaults or {})
+        if provider_key == "codex":
+            # A manifest-level fixed id is an agent-level override; daemon traffic
+            # must still use the daemon run identity so it gets its own cache slot.
+            bucket.pop("codex_session_id", None)
+            bucket["codex_session_anchor"] = self._daemon_codex_session_anchor(run_dir)
+        if not bucket:
+            return None
+        return {provider_key: bucket}
+
+    @staticmethod
+    def _llm_defaults_from_manifest(llm: dict) -> dict:
+        """Extract adapter-consulted defaults from a preset ``manifest.llm``."""
+        keys = (
+            "api_compat",
+            "base_url",
+            "codex_session_id",
+            "codex_session_anchor",
+            "codex_thread_salt",
+            "compact_threshold",
+            "default_headers",
+            "max_rpm",
+        )
+        return {key: llm[key] for key in keys if key in llm}
+
     def _build_tool_surface(
         self,
         requested: list[str],
@@ -1234,11 +1281,44 @@ class DaemonManager:
                 model=preset_llm["model"],
                 api_key=api_key,
                 base_url=preset_llm.get("base_url"),
+                provider_defaults=self._daemon_provider_defaults(
+                    preset_llm["provider"],
+                    self._llm_defaults_from_manifest(preset_llm),
+                    run_dir,
+                ),
             )
             effective_model = preset_llm["model"]
         else:
-            service = self._agent.service
-            effective_model = self._default_model
+            # No preset: build a fresh daemon-scoped service mirroring the parent
+            # service rather than reusing ``self._agent.service``. Every provider
+            # keeps the parent's provider defaults; Codex additionally gets a
+            # per-run cache anchor (and drops any fixed session id) so this run
+            # gets its own session-id/thread-id/prompt_cache_key triple instead
+            # of colliding with the parent agent's cache slot.
+            from lingtai.llm.service import LLMService
+            parent_service = self._agent.service
+            parent_provider = str(getattr(parent_service, "provider", "")).lower()
+            parent_defaults = getattr(parent_service, "_provider_defaults", {}) or {}
+            parent_key_resolver = getattr(parent_service, "_key_resolver", None)
+            parent_api_key = (
+                parent_key_resolver(parent_provider)
+                if callable(parent_key_resolver)
+                else None
+            )
+            service = LLMService(
+                provider=parent_service.provider,
+                model=parent_service.model,
+                api_key=parent_api_key,
+                base_url=getattr(parent_service, "_base_url", None),
+                key_resolver=parent_key_resolver,
+                provider_defaults=self._daemon_provider_defaults(
+                    parent_provider,
+                    parent_defaults.get(parent_provider, {}),
+                    run_dir,
+                ),
+                context_window=getattr(parent_service, "_context_window", 1_000_000),
+            )
+            effective_model = parent_service.model
 
         session = service.create_session(
             system_prompt=run_dir.prompt_path.read_text(encoding="utf-8"),
