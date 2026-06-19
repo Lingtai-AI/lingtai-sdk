@@ -630,7 +630,7 @@ def test_materialize_missing_active_falls_back_to_default(tmp_path, monkeypatch)
     env_file.write_text("")
     data = _build_init_with_active_and_default(active_missing, default_present, env_file)
 
-    from lingtai.presets import materialize_active_preset
+    from lingtai_kernel.presets import materialize_active_preset
     materialize_active_preset(data, tmp_path)
 
     assert data["manifest"]["preset"]["active"] == default_present
@@ -652,7 +652,7 @@ def test_materialize_missing_active_and_missing_default_raises(tmp_path):
         env_file=env_file,
     )
 
-    from lingtai.presets import materialize_active_preset
+    from lingtai_kernel.presets import materialize_active_preset
     with pytest.raises(KeyError):
         materialize_active_preset(data, tmp_path)
 
@@ -670,7 +670,7 @@ def test_materialize_missing_active_with_same_default_raises(tmp_path):
         active_path=same_missing, default_path=same_missing, env_file=env_file,
     )
 
-    from lingtai.presets import materialize_active_preset
+    from lingtai_kernel.presets import materialize_active_preset
     with pytest.raises(KeyError):
         materialize_active_preset(data, tmp_path)
 
@@ -703,7 +703,7 @@ def test_materialize_malformed_active_does_not_fall_back(tmp_path):
         active_path=str(bad_active), default_path=str(good_default), env_file=env_file,
     )
 
-    from lingtai.presets import materialize_active_preset
+    from lingtai_kernel.presets import materialize_active_preset
     with pytest.raises(ValueError):
         materialize_active_preset(data, tmp_path)
     # active was NOT silently rewritten

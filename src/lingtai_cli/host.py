@@ -41,7 +41,7 @@ def load_init(working_dir: Path) -> dict:
     This mirrors ``Agent._read_init`` so boot and live-refresh agree.
     """
     from lingtai_kernel.config_resolve import resolve_paths
-    from lingtai.presets import materialize_active_preset
+    from lingtai_kernel.presets import materialize_active_preset
     from lingtai.capabilities import CORE_DEFAULTS
 
     from lingtai_kernel.migrate import run_agent_migrations

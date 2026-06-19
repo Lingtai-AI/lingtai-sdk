@@ -8,7 +8,7 @@ Domains:
 - Preset library migrations target a directory of preset `*.json`/`*.jsonc`
   files (typically `~/.lingtai-tui/presets/`, or a directory referenced by an
   agent's `manifest.preset.allowed`). The version number is tracked in
-  `<presets_dir>/_kernel_meta.json`. `lingtai.presets.discover_presets_in_dirs`
+  `<presets_dir>/_kernel_meta.json`. `lingtai_kernel.presets.discover_presets_in_dirs`
   invokes `run_migrations(presets_path)` before listing files, and
   `load_preset` runs them on the file's parent directory before reading.
 - Agent workdir migrations target one agent working directory and include

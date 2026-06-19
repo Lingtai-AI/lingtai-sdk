@@ -996,7 +996,6 @@ class DaemonManager:
             # Build merged schemas + dispatch — preset tools first, MCP fills in
             schemas: list[FunctionSchema] = []
             dispatch: dict = {}
-            parent_schema_map = {s.name: s for s in self._agent._tool_schemas}
             for n in sorted(tool_names):
                 if n in preset_schemas:
                     schemas.append(preset_schemas[n])
@@ -1085,7 +1084,7 @@ class DaemonManager:
         a tool-level error and refuses the whole batch.
         """
         from ...capabilities import setup_capability, _GROUPS, _BUILTIN
-        from ...presets import expand_inherit
+        from lingtai_kernel.presets import expand_inherit
 
         # Resolve provider:"inherit" sentinels against the preset's LLM
         # (not the parent's). expand_inherit mutates in place — work on a
@@ -2092,7 +2091,7 @@ class DaemonManager:
         # Pre-flight: resolve any per-task presets BEFORE scheduling.
         # If any preset is invalid, refuse the whole batch. Presets are
         # identified by path (~/foo.json, ./foo.json, or absolute).
-        from lingtai.presets import load_preset
+        from lingtai_kernel.presets import load_preset
         from lingtai_kernel.preset_connectivity import check_connectivity
 
         resolved_presets: list[dict | None] = []  # one entry per task — None means inherit
@@ -3663,7 +3662,6 @@ class DaemonManager:
         session_id_captured: str | None = None
         text_chunks: list[str] = []
         final_text: str | None = None
-        final_is_error = False
         any_event = False
 
         def _store_session_id(sid: str) -> None:
@@ -4096,7 +4094,6 @@ class DaemonManager:
 
         text_chunks: list[str] = []
         final_text: str | None = None
-        final_is_error = False
         any_event = False
         timed_out = False
 

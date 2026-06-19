@@ -110,7 +110,7 @@ daemon/run_dir.py
 - `lingtai_kernel.token_ledger` — `append_token_entry` for token accounting
 - `lingtai.i18n` — `t()` for localized strings
 - `lingtai.capabilities` — `setup_capability`, `_GROUPS` for preset sandbox instantiation
-- `lingtai.presets` — `load_preset`, `expand_inherit` for per-emanation preset resolution
+- `lingtai_kernel.presets` — `load_preset`, `expand_inherit` for per-emanation preset resolution
 - `lingtai_kernel.preset_connectivity` — `check_connectivity` for LLM reachability pre-flight
 - `lingtai_kernel.config_resolve` — `resolve_env` for API key resolution
 - `lingtai.llm.service` — `LLMService` for dedicated preset LLM services

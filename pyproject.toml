@@ -54,14 +54,6 @@ lingtai-cloud-mail = "lingtai.mcp_servers.cloud_mail.__main__:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["lingtai*", "lingtai_kernel*", "lingtai_cli*"]
-exclude = [
-    "lingtai_imap*",
-    "lingtai_telegram*",
-    "lingtai_feishu*",
-    "lingtai_wechat*",
-    "lingtai_whatsapp*",
-    "lingtai.addons*",
-]
 
 [tool.setuptools.package-data]
 lingtai_kernel = ["i18n/*.json"]

@@ -924,7 +924,7 @@ class Agent(BaseAgent):
         from .init_schema import strip_deprecated, validate_init
         from lingtai_kernel.config_resolve import resolve_paths
         from lingtai_kernel.migrate import run_agent_migrations
-        from .presets import expand_inherit, materialize_active_preset
+        from lingtai_kernel.presets import expand_inherit, materialize_active_preset
         from .capabilities import CORE_DEFAULTS
 
         run_agent_migrations(self._working_dir)
@@ -1009,7 +1009,7 @@ class Agent(BaseAgent):
         """
         import json
         import os
-        from .presets import load_preset
+        from lingtai_kernel.presets import load_preset
 
         init_path = self._working_dir / "init.json"
         data = json.loads(init_path.read_text(encoding="utf-8"))

@@ -8,7 +8,7 @@ manages.
 Two domains currently share this runner:
 
 - **Preset library migrations** run once per preset directory, triggered
-  lazily from `lingtai.presets.discover_presets` / `load_preset`. Their
+  lazily from `lingtai_kernel.presets.discover_presets` / `load_preset`. Their
   version counter lives in `<presets_dir>/_kernel_meta.json`.
 - **Agent workdir migrations** run once per agent working directory before
   `init.json` validation/refresh. Their version counter lives in

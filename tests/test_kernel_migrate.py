@@ -682,7 +682,7 @@ def test_run_agent_migrations_rewrites_legacy_curated_mcp_launch_args(tmp_path):
 
 def test_discover_presets_triggers_migration(tmp_path):
     """discover_presets() with old-layout files migrates them automatically."""
-    from lingtai.presets import discover_presets
+    from lingtai_kernel.presets import discover_presets
     plib = tmp_path / "presets"
     plib.mkdir()
     p = _write_preset(plib, "x", {
@@ -705,7 +705,7 @@ def test_discover_presets_triggers_migration(tmp_path):
 
 def test_discover_presets_excludes_kernel_meta_file(tmp_path):
     """The internal _kernel_meta.json is not surfaced as a preset."""
-    from lingtai.presets import discover_presets
+    from lingtai_kernel.presets import discover_presets
     plib = tmp_path / "presets"
     plib.mkdir()
     _write_preset(plib, "real", {
