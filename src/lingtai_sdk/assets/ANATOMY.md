@@ -11,22 +11,24 @@ The SDK's committed, **read-only resource package** — the `lingtai_sdk.assets`
 - `__init__.py` — package marker only (no code, no runtime). Its sole purpose is to make `lingtai_sdk.assets` an addressable resource package so `importlib.resources.files("lingtai_sdk.assets")` can traverse into the asset trees. `__all__` is empty.
 - `lingtai-sdk-skill/` — the committed **`lingtai-sdk-skill`** asset, the top-level SDK *observation entry* (`docs/sdk/architecture-foundation.md` §7).
   - `SKILL.md` — a read-only, skill-shaped description of the SDK boundary: the SDK/kernel/wrapper split and one-way dependency rule, the runtime contract (`lingtai_sdk.runtime`), the CapabilityBundle contract (`lingtai_sdk.capabilities` + `capability_host`), and the privileged-core deferral (why `system`/`psyche`/`soul` are NOT here). It has YAML frontmatter (`name`/`description`) like every other skill in the tree. Read by `lingtai_sdk.sdk_skill.load_sdk_skill()`.
+  - `scripts/` — SDK-oriented verification helpers that belong with the skill-shaped SDK observation asset instead of the repository root. `sdk_shape_import_smoke.py` is the quick manual/agent import-shape smoke; `smoke_wheel_sidecar.py` is the dependency-free installed-wheel sidecar smoke invoked by `.github/workflows/wheels.yml`.
 
 ## Connections
 
 - **Inbound — `lingtai_sdk.sdk_skill`.** `load_sdk_skill()` reads `lingtai-sdk-skill/SKILL.md` through `importlib.resources.files("lingtai_sdk.assets")`. The `sdk_skill` bundle's `manual` pointer records the package-relative path `lingtai-sdk-skill/SKILL.md`.
 - **Inbound — packaging.** `pyproject.toml` packages this tree via the `lingtai_sdk = ["assets/**/*"]` `package-data` glob, so new files under a skill directory are included without editing the list.
+- **Inbound — wheel CI.** `.github/workflows/wheels.yml` runs `lingtai-sdk-skill/scripts/smoke_wheel_sidecar.py` from the source tree as cibuildwheel's installed-wheel smoke test.
 - **Outbound — none.** This package imports nothing. It is a leaf data directory; reading it pulls in no wrapper and no provider SDK (verified by `tests/test_sdk_skill_bundle.py::test_sdk_skill_import_is_pure`).
 
 ## Composition
 
 - **Parent:** `src/lingtai_sdk/` (see `ANATOMY.md`).
 - **Siblings:** `sdk_skill.py` is the sole consumer; `bundles/contracts.py`/`bundles/host.py` (legacy paths `capabilities.py`/`capability_host.py`) define the bundle/host contract the asset is adopted through.
-- **Subfolders:** `lingtai-sdk-skill/` — one skill-shaped asset tree. Future SDK assets land as additional sibling trees here.
+- **Subfolders:** `lingtai-sdk-skill/` — one skill-shaped asset tree with its own `SKILL.md` and `scripts/` helpers. Future SDK assets land as additional sibling trees here.
 
 ## State
 
-- **On-disk:** the asset files (`lingtai-sdk-skill/SKILL.md`) — read-only at runtime, the source of truth for the SDK skill text. Edited by developers; never mutated by the agent or the SDK.
+- **On-disk:** the asset files (`lingtai-sdk-skill/SKILL.md` plus `lingtai-sdk-skill/scripts/*`) — read-only at runtime, the source of truth for the SDK skill text and its small verification helpers. Edited by developers; never mutated by the agent or the SDK.
 - **In-memory:** none. There is no cache; `load_sdk_skill()` re-reads the resource each call (deterministic, network-free).
 
 ## Notes

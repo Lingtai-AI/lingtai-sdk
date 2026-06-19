@@ -136,6 +136,15 @@ This skill, the SDK skill bundle, and the host boundary prove the *asset and
 adoption boundary* end to end against one harmless, real capability — without
 migrating any privileged behavior or changing the kernel turn loop.
 
+## SDK skill scripts
+
+The `scripts/` directory beside this `SKILL.md` contains small, SDK-oriented
+verification helpers that are useful to coding agents but should not live at the
+repository root:
+
+- `scripts/sdk_shape_import_smoke.py` — a quick import-compatibility and import-purity smoke test for the public `lingtai_sdk` directory shape. Pytest coverage lives in `tests/test_sdk_directory_shape.py`; this script is the fast manual/agent entry point.
+- `scripts/smoke_wheel_sidecar.py` — cibuildwheel's installed-wheel smoke test for the packaged Rust file-I/O sidecar. It remains wired from `.github/workflows/wheels.yml` and must stay dependency-free.
+
 ## See also
 
 - `docs/sdk/architecture-foundation.md` — the staged roadmap and rationale.

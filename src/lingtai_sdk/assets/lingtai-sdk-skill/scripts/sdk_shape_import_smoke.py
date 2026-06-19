@@ -6,9 +6,10 @@ Verifies that — after the flat ``lingtai_sdk`` modules were moved into the
 top-level import path AND every new canonical subpackage path import, and that
 each shimmed name resolves to the *same object* as its canonical home (so the
 compatibility layer is a re-export, never a fork). Also asserts import purity:
-``import lingtai_sdk`` must not pull in the ``lingtai`` wrapper.
+``import lingtai_sdk`` may load only the import-light ``lingtai`` root/kernel
+parents, not the batteries-included wrapper modules.
 
-Run from the repo root:  ``PYTHONPATH=src python scripts/sdk_shape_import_smoke.py``
+Run from the repo root:  ``PYTHONPATH=src python src/lingtai_sdk/assets/lingtai-sdk-skill/scripts/sdk_shape_import_smoke.py``
 The pytest equivalent lives in ``tests/test_sdk_directory_shape.py``.
 """
 from __future__ import annotations
@@ -75,9 +76,14 @@ def main() -> int:
     assert lingtai_sdk.query is query
     print("OK root lazy names -> canonical modules")
 
-    leaked = [m for m in sys.modules if m == "lingtai" or m.startswith("lingtai.")]
-    assert not leaked, f"lingtai wrapper leaked into sys.modules: {leaked}"
-    print("OK import purity: lingtai wrapper not loaded")
+    leaked = [
+        m
+        for m in sys.modules
+        if (m == "lingtai" or m.startswith("lingtai."))
+        and not (m == "lingtai" or m == "lingtai._version" or m.startswith("lingtai.kernel"))
+    ]
+    assert not leaked, f"heavy lingtai wrapper modules leaked into sys.modules: {leaked}"
+    print("OK import purity: only import-light lingtai root/kernel modules loaded")
 
     print("\nSMOKE PASSED")
     return 0

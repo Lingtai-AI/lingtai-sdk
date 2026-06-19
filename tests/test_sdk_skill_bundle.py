@@ -49,6 +49,14 @@ def test_skill_asset_exists_via_importlib_resources():
     assert "name: lingtai-sdk-skill" in text
 
 
+def test_sdk_skill_scripts_exist_via_importlib_resources():
+    scripts = resources.files("lingtai_sdk.assets").joinpath(
+        "lingtai-sdk-skill", "scripts"
+    )
+    assert scripts.joinpath("sdk_shape_import_smoke.py").is_file()
+    assert scripts.joinpath("smoke_wheel_sidecar.py").is_file()
+
+
 def test_load_sdk_skill_reads_committed_text():
     text = sdk_skill.load_sdk_skill()
     assert "lingtai-sdk-skill" in text
