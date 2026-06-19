@@ -66,10 +66,13 @@ def register_all_adapters() -> None:
         kw.pop("base_url", None)  # we set our own
         # Per-agent Codex REST cache-affinity header config (issue #378). The
         # host wiring (service.build_provider_defaults_from_manifest_llm) passes
-        # down the agent path + last ledgered main LLM API call id by default via these keys, so a
-        # normal Codex agent sends stable per-agent session/thread headers. The
-        # adapter has no per-agent identity of its own; absent these keys (e.g. a
-        # bare service built in a test) it sends no session/thread headers.
+        # down the agent path as ``codex_session_anchor`` by default; the adapter
+        # hashes it to one 8-char value used byte-identically for session-id,
+        # thread-id, and prompt_cache_key, so a normal Codex agent sends stable
+        # per-agent headers. ``codex_thread_salt`` is forwarded only as a legacy
+        # pass-through (it no longer derives a separate thread). The adapter has
+        # no per-agent identity of its own; absent these keys (e.g. a bare
+        # service built in a test) it sends no session/thread headers.
         d = defaults or {}
         codex_id_kw: dict = {}
         for cfg_key in ("codex_session_id", "codex_session_anchor", "codex_thread_salt"):

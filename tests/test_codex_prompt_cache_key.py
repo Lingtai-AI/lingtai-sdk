@@ -215,23 +215,28 @@ def test_codex_bare_adapter_omits_session_thread_headers():
 
 
 def test_codex_sends_stable_headers_from_session_anchor():
+    anchor = "/agents/alice/init.json"
     session = _create_codex_session_cfg(
         [_completed(), _completed()],
         model="gpt-5.5",
-        codex_session_anchor="/agents/alice/init.json",
+        codex_session_anchor=anchor,
     )
 
     session.send("first")
     session.send("second")
 
-    h0 = session._client.responses.kwargs[0]["extra_headers"]
-    h1 = session._client.responses.kwargs[1]["extra_headers"]
-    # Present, UUID-shaped, and stable across requests of the same session.
-    assert h0["session-id"] and h0["thread-id"]
-    assert _is_uuid(h0["session-id"]) and _is_uuid(h0["thread-id"])
+    s0 = session._client.responses.kwargs[0]
+    s1 = session._client.responses.kwargs[1]
+    h0 = s0["extra_headers"]
+    h1 = s1["extra_headers"]
+    expected = _expected_codex_hash(anchor)
+    # Root/main path: session-id == thread-id == prompt_cache_key == 8-char hash.
+    assert h0["session-id"] == expected
+    assert h0["thread-id"] == expected
+    assert s0["prompt_cache_key"] == expected
+    # Stable across multiple ordinary sends of the same session.
     assert h0 == h1
-    # prompt_cache_key still rides alongside (not broken by the headers).
-    assert session._client.responses.kwargs[0]["prompt_cache_key"] == "lingtai-codex:gpt-5.5:v1"
+    assert s1["prompt_cache_key"] == expected
 
 
 def test_codex_headers_differ_for_different_agents():
@@ -249,58 +254,63 @@ def test_codex_headers_differ_for_different_agents():
     hb = b._client.responses.kwargs[0]["extra_headers"]
     assert ha["session-id"] != hb["session-id"]
     assert ha["thread-id"] != hb["thread-id"]
+    # Each agent's three values are internally identical (the agent-path hash).
+    assert ha["session-id"] == ha["thread-id"]
+    assert hb["session-id"] == hb["thread-id"]
 
 
-def test_codex_thread_id_varies_by_thread_salt_session_id_stable():
-    """Same agent, different thread salt (last API call id) -> same session, new thread.
+def test_codex_thread_salt_does_not_split_thread_from_session():
+    """A legacy ``codex_thread_salt`` no longer derives a separate thread.
 
-    The adapter is salt-source-agnostic: it varies thread-id by whatever salt
-    string it receives, while session-id stays anchored to the agent path.
+    The salt is accepted as a manifest pass-through for backward compatibility,
+    but the root/main thread tracks the session id exactly, so two different
+    salts on the same anchor still produce byte-identical session/thread/key.
     """
+    anchor = "/agents/alice/init.json"
     salt0 = _create_codex_session_cfg(
         [_completed()],
-        codex_session_anchor="/agents/alice/init.json",
+        codex_session_anchor=anchor,
         codex_thread_salt="api_1000aaaa",
     )
     salt1 = _create_codex_session_cfg(
         [_completed()],
-        codex_session_anchor="/agents/alice/init.json",
+        codex_session_anchor=anchor,
         codex_thread_salt="api_2000bbbb",
     )
 
     salt0.send("x")
     salt1.send("x")
 
+    expected = _expected_codex_hash(anchor)
     h0 = salt0._client.responses.kwargs[0]["extra_headers"]
     h1 = salt1._client.responses.kwargs[0]["extra_headers"]
-    assert h0["session-id"] == h1["session-id"]  # session stable across salts
-    assert h0["thread-id"] != h1["thread-id"]  # thread changes per salt
+    assert h0["session-id"] == h0["thread-id"] == expected
+    assert h1["session-id"] == h1["thread-id"] == expected  # salt is irrelevant
+    assert salt0._client.responses.kwargs[0]["prompt_cache_key"] == expected
+    assert salt1._client.responses.kwargs[0]["prompt_cache_key"] == expected
 
 
-def test_codex_rest_omits_previous_response_id_with_call_id_thread():
-    """Codex REST stays stateless: no previous_response_id even with headers on.
-
-    The thread-id is derived from a last-call-id-shaped salt; that must not pull
-    in any server-side response chaining.
-    """
+def test_codex_rest_omits_previous_response_id_with_anchored_thread():
+    """Codex REST stays stateless: no previous_response_id even with headers on."""
+    anchor = "/agents/alice/init.json"
     session = _create_codex_session_cfg(
         [_completed()],
         model="gpt-5.5",
-        codex_session_anchor="/agents/alice/init.json",
-        codex_thread_salt="api_2000bbbb",
+        codex_session_anchor=anchor,
     )
 
     session.send("please answer via tool")
 
     sent = session._client.responses.kwargs[0]
+    expected = _expected_codex_hash(anchor)
     assert "previous_response_id" not in sent
     assert sent.get("store") is False
-    assert sent["extra_headers"]["thread-id"]  # call-id-derived thread still sent
-    # prompt_cache_key behavior preserved alongside the stateless REST contract.
-    assert sent["prompt_cache_key"] == "lingtai-codex:gpt-5.5:v1"
+    assert sent["extra_headers"]["thread-id"] == expected  # anchored thread still sent
+    # prompt_cache_key matches the same hash alongside the stateless REST contract.
+    assert sent["prompt_cache_key"] == expected
 
 
-def test_codex_explicit_session_id_used_verbatim():
+def test_codex_explicit_session_id_used_verbatim_for_all_three():
     explicit = "11111111-2222-3333-4444-555555555555"
     session = _create_codex_session_cfg(
         [_completed()], codex_session_id=explicit
@@ -308,9 +318,12 @@ def test_codex_explicit_session_id_used_verbatim():
 
     session.send("x")
 
-    headers = session._client.responses.kwargs[0]["extra_headers"]
+    sent = session._client.responses.kwargs[0]
+    headers = sent["extra_headers"]
+    # Explicit id is used byte-identically for session, thread, and cache key.
     assert headers["session-id"] == explicit
-    assert _is_uuid(headers["thread-id"])
+    assert headers["thread-id"] == explicit
+    assert sent["prompt_cache_key"] == explicit
 
 
 def test_codex_explicit_session_id_wins_over_anchor():
@@ -368,7 +381,7 @@ def test_codex_bare_session_omits_headers():
 # ---------------------------------------------------------------------------
 # Manifest config seam — per-agent identity flows factory -> adapter (#378).
 # This is the internal override / testing escape hatch; the default path
-# (agent path + last ledgered API call id) is covered in the section after this one.
+# (agent path hash only) is covered in the section after this one.
 # ---------------------------------------------------------------------------
 
 
@@ -386,6 +399,7 @@ def test_manifest_config_keys_pass_through_to_provider_defaults():
         max_rpm=0,
     )
     assert d["codex"]["codex_session_anchor"] == "/agents/alice/init.json"
+    # The salt remains a legacy pass-through key (no longer drives a thread id).
     assert d["codex"]["codex_thread_salt"] == "explicit-salt"
 
     # No codex config and no working_dir -> nothing leaks (historical None).
@@ -393,12 +407,14 @@ def test_manifest_config_keys_pass_through_to_provider_defaults():
 
 
 def test_codex_factory_builds_adapter_with_per_agent_ids():
-    """The registered codex factory wires manifest config into resolved ids."""
+    """The registered codex factory wires the anchor into one shared hash id."""
     from unittest import mock
 
     import lingtai  # noqa: F401
+    from lingtai.llm.openai.adapter import _codex_session_id
     from lingtai.llm.service import LLMService
 
+    anchor = "/agents/alice/init.json"
     with mock.patch("lingtai.auth.codex.CodexTokenManager") as mgr_cls:
         mgr_cls.return_value.get_access_token.return_value = "fake-token"
 
@@ -407,13 +423,16 @@ def test_codex_factory_builds_adapter_with_per_agent_ids():
             model="gpt-5.5",
             provider_defaults={
                 "codex": {
-                    "codex_session_anchor": "/agents/alice/init.json",
+                    "codex_session_anchor": anchor,
+                    # Legacy salt is ignored for thread derivation now.
                     "codex_thread_salt": "2026-06-03T00:00:00Z",
                 }
             },
         )
         sid, tid = svc.get_adapter("codex")._resolve_codex_ids("gpt-5.5")
-        assert _is_uuid(sid) and _is_uuid(tid) and sid != tid
+        # session-id == thread-id == the 8-char agent-path hash.
+        assert sid == tid == _codex_session_id(anchor)
+        assert sid == _expected_codex_hash(anchor)
 
         # No config -> the safe default: no per-agent identity, no headers.
         svc2 = LLMService(provider="codex", model="gpt-5.5")
@@ -421,68 +440,12 @@ def test_codex_factory_builds_adapter_with_per_agent_ids():
 
 
 # ---------------------------------------------------------------------------
-# Default wiring — agent path + last ledgered API call id passed down automatically (#378,
-# thread salt switched from last molt time to last ledgered API call id per Jason's #392
-# follow-up). The legacy _latest_molt_time helper still exists and is unit-
-# tested below, but it no longer feeds the Codex thread salt.
+# Default wiring — only the agent path is passed down automatically (#378).
+# The adapter hashes it to one stable 8-char value used byte-identically for
+# session-id, thread-id, and prompt_cache_key. The default path no longer reads
+# the token ledger / last API call id or molt time, so the same working_dir
+# always yields the same defaults regardless of ledger contents.
 # ---------------------------------------------------------------------------
-
-
-def _write_molt_summary(working_dir, *, count, ts, created_at):
-    """Write a system/summaries/molt_<count>_<ts>.md like the molt machinery.
-
-    ``count`` only shapes the on-disk filename/frontmatter (the real format
-    written by _snapshots._write_molt_summary); the thread salt is the
-    ``created_at`` last-molt time, never the count.
-    """
-    summaries = working_dir / "system" / "summaries"
-    summaries.mkdir(parents=True, exist_ok=True)
-    (summaries / f"molt_{count}_{ts}.md").write_text(
-        f"---\nmolt_count: {count}\ncreated_at: {created_at}\n---\n\nbody",
-        encoding="utf-8",
-    )
-
-
-def test_latest_molt_time_reads_created_at_from_newest_summary(tmp_path):
-    from lingtai.llm.service import _latest_molt_time
-
-    _write_molt_summary(tmp_path, count=1, ts=1000, created_at="2026-01-01T00:00:00Z")
-    _write_molt_summary(tmp_path, count=2, ts=2000, created_at="2026-06-01T12:00:00Z")
-
-    # Newest by filename ts wins, and we read its frontmatter created_at.
-    assert _latest_molt_time(tmp_path) == "2026-06-01T12:00:00Z"
-
-
-def test_latest_molt_time_falls_back_to_filename_ts(tmp_path):
-    from datetime import datetime, timezone
-
-    from lingtai.llm.service import _latest_molt_time
-
-    summaries = tmp_path / "system" / "summaries"
-    summaries.mkdir(parents=True, exist_ok=True)
-    # No frontmatter created_at -> fall back to the filename unix ts.
-    (summaries / "molt_3_1750000000.md").write_text("no frontmatter", encoding="utf-8")
-
-    expected = datetime.fromtimestamp(1750000000, tz=timezone.utc).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
-    )
-    assert _latest_molt_time(tmp_path) == expected
-
-
-def test_latest_molt_time_falls_back_to_agent_json_created_at(tmp_path):
-    from lingtai.llm.service import _latest_molt_time
-
-    # No molt summaries yet -> use .agent.json created_at (birth-stable thread).
-    (tmp_path / ".agent.json").write_text(
-        json.dumps({"created_at": "2026-05-05T05:05:05Z"}), encoding="utf-8"
-    )
-    assert _latest_molt_time(tmp_path) == "2026-05-05T05:05:05Z"
-
-
-def test_latest_molt_time_none_when_no_source(tmp_path):
-    from lingtai.llm.service import _latest_molt_time
-
-    assert _latest_molt_time(tmp_path) is None
 
 
 def _write_token_ledger(working_dir, entries):
@@ -507,29 +470,43 @@ def _ledger_entry(api_call_id=None, *, source="main", cached=0):
     return entry
 
 
-def test_default_wiring_injects_agent_path_and_last_call_salt(tmp_path):
-    """Codex defaults: session anchor = resolved init.json path; salt = last API call id."""
+def test_default_wiring_injects_only_agent_path_anchor(tmp_path):
+    """Codex defaults: session anchor = resolved init.json path; no salt injected."""
     import lingtai  # noqa: F401
     from lingtai.llm.service import build_provider_defaults_from_manifest_llm
-
-    _write_token_ledger(tmp_path, [_ledger_entry("api_1000aaaa")])
 
     d = build_provider_defaults_from_manifest_llm(
         {"provider": "codex"}, max_rpm=0, working_dir=tmp_path
     )
     assert d["codex"]["codex_session_anchor"] == str((tmp_path / "init.json").resolve())
-    assert d["codex"]["codex_thread_salt"] == "api_1000aaaa"
+    # The default path no longer injects a thread salt at all.
+    assert "codex_thread_salt" not in d["codex"]
 
 
-def test_default_wiring_uses_birth_salt_before_first_call(tmp_path):
+def test_default_wiring_is_independent_of_token_ledger(tmp_path):
+    """Same working_dir yields the same defaults regardless of ledger contents."""
     import lingtai  # noqa: F401
     from lingtai.llm.service import build_provider_defaults_from_manifest_llm
 
-    # No token ledger yet -> stable "birth" salt.
-    d = build_provider_defaults_from_manifest_llm(
+    # No ledger.
+    d_none = build_provider_defaults_from_manifest_llm(
         {"provider": "codex"}, max_rpm=0, working_dir=tmp_path
-    )
-    assert d["codex"]["codex_thread_salt"] == "birth"
+    )["codex"]
+
+    # A ledger with a fresh API call id appears — must not change anything.
+    _write_token_ledger(tmp_path, [_ledger_entry("api_1000aaaa")])
+    d_first = build_provider_defaults_from_manifest_llm(
+        {"provider": "codex"}, max_rpm=0, working_dir=tmp_path
+    )["codex"]
+
+    # A newer call id rotates in — still no effect.
+    _write_token_ledger(tmp_path, [_ledger_entry("api_9000zzzz")])
+    d_second = build_provider_defaults_from_manifest_llm(
+        {"provider": "codex"}, max_rpm=0, working_dir=tmp_path
+    )["codex"]
+
+    assert d_none == d_first == d_second
+    assert "codex_thread_salt" not in d_none
 
 
 def test_default_wiring_only_applies_to_codex(tmp_path):
@@ -543,18 +520,16 @@ def test_default_wiring_only_applies_to_codex(tmp_path):
     assert d is None
 
 
-def test_manifest_salt_overrides_default_last_call_id(tmp_path):
+def test_manifest_anchor_overrides_default(tmp_path):
     """Explicit manifest config wins (internal override / testing escape hatch)."""
     import lingtai  # noqa: F401
     from lingtai.llm.service import build_provider_defaults_from_manifest_llm
-
-    _write_token_ledger(tmp_path, [_ledger_entry("api_1000aaaa")])
 
     d = build_provider_defaults_from_manifest_llm(
         {
             "provider": "codex",
             "codex_session_anchor": "/custom/anchor",
-            "codex_thread_salt": "override-salt",
+            "codex_thread_salt": "override-salt",  # legacy pass-through, still survives
         },
         max_rpm=0,
         working_dir=tmp_path,
@@ -564,7 +539,7 @@ def test_manifest_salt_overrides_default_last_call_id(tmp_path):
 
 
 def test_default_wiring_session_anchor_differs_by_agent_path(tmp_path):
-    """Different agent working dirs get different session anchors."""
+    """Different agent working dirs get different anchors and thus different hashes."""
     import lingtai  # noqa: F401
     from lingtai.llm.openai.adapter import _codex_session_id
     from lingtai.llm.service import build_provider_defaults_from_manifest_llm
@@ -573,8 +548,6 @@ def test_default_wiring_session_anchor_differs_by_agent_path(tmp_path):
     bob = tmp_path / "bob"
     alice.mkdir()
     bob.mkdir()
-    _write_token_ledger(alice, [_ledger_entry("api_2000bbbb")])
-    _write_token_ledger(bob, [_ledger_entry("api_2000bbbb")])
 
     da = build_provider_defaults_from_manifest_llm(
         {"provider": "codex"}, max_rpm=0, working_dir=alice
@@ -589,105 +562,13 @@ def test_default_wiring_session_anchor_differs_by_agent_path(tmp_path):
     )
 
 
-def test_latest_call_id_reads_newest_main_api_call_id(tmp_path):
-    from lingtai.llm.service import _latest_call_id
-
-    _write_token_ledger(
-        tmp_path,
-        [
-            _ledger_entry("api_1000aaaa", source="main"),
-            _ledger_entry("api_2000bbbb", source="main"),
-        ],
-    )
-
-    assert _latest_call_id(tmp_path) == "api_2000bbbb"
-
-
-def test_latest_call_id_prefers_newest_main_over_newer_non_main(tmp_path):
-    from lingtai.llm.service import _latest_call_id
-
-    _write_token_ledger(
-        tmp_path,
-        [
-            _ledger_entry("api_main", source="main"),
-            _ledger_entry("api_tc_wake", source="tc_wake"),
-            _ledger_entry("api_soul", source="soul"),
-        ],
-    )
-
-    assert _latest_call_id(tmp_path) == "api_main"
-
-
-def test_latest_call_id_falls_back_to_newest_any_api_call_id(tmp_path):
-    from lingtai.llm.service import _latest_call_id
-
-    _write_token_ledger(
-        tmp_path,
-        [
-            _ledger_entry("api_daemon", source="daemon"),
-            {**_ledger_entry("api_untagged"), "source": None},
-        ],
-    )
-
-    assert _latest_call_id(tmp_path) == "api_untagged"
-
-
-def test_latest_call_id_none_when_no_ledger(tmp_path):
-    from lingtai.llm.service import _latest_call_id
-
-    assert _latest_call_id(tmp_path) is None
-
-
-def test_latest_call_id_none_when_no_api_call_id_present(tmp_path):
-    from lingtai.llm.service import _latest_call_id
-
-    _write_token_ledger(tmp_path, [_ledger_entry(None), _ledger_entry(None, source="tc_wake")])
-    assert _latest_call_id(tmp_path) is None
-
-
-def test_default_wiring_thread_salt_is_last_call_id_not_molt_time(tmp_path):
-    """Codex defaults: thread salt is the last API call id; molt time is irrelevant."""
+def test_default_wiring_session_id_stable_across_rebuilds(tmp_path):
+    """Same agent path -> same 8-char hash on repeated builds (no rotation)."""
     import lingtai  # noqa: F401
+    from lingtai.llm.openai.adapter import _codex_session_id
     from lingtai.llm.service import build_provider_defaults_from_manifest_llm
 
-    # A molt summary exists, but it must NOT be the thread salt anymore.
-    _write_molt_summary(tmp_path, count=1, ts=1000, created_at="2026-06-01T12:00:00Z")
-    _write_token_ledger(tmp_path, [_ledger_entry("api_2000bbbb")])
-
-    d = build_provider_defaults_from_manifest_llm(
-        {"provider": "codex"}, max_rpm=0, working_dir=tmp_path
-    )
-    assert d["codex"]["codex_session_anchor"] == str((tmp_path / "init.json").resolve())
-    assert d["codex"]["codex_thread_salt"] == "api_2000bbbb"
-    assert d["codex"]["codex_thread_salt"] != "2026-06-01T12:00:00Z"
-
-
-def test_default_wiring_no_molt_time_dependency_for_salt(tmp_path):
-    """Changing only the molt time (call id fixed) must not change the salt."""
-    import lingtai  # noqa: F401
-    from lingtai.llm.service import build_provider_defaults_from_manifest_llm
-
-    _write_token_ledger(tmp_path, [_ledger_entry("api_5000eeee")])
-
-    _write_molt_summary(tmp_path, count=1, ts=1000, created_at="2026-06-01T00:00:00Z")
-    salt0 = build_provider_defaults_from_manifest_llm(
-        {"provider": "codex"}, max_rpm=0, working_dir=tmp_path
-    )["codex"]["codex_thread_salt"]
-
-    _write_molt_summary(tmp_path, count=2, ts=2000, created_at="2026-07-01T00:00:00Z")
-    salt1 = build_provider_defaults_from_manifest_llm(
-        {"provider": "codex"}, max_rpm=0, working_dir=tmp_path
-    )["codex"]["codex_thread_salt"]
-
-    assert salt0 == salt1 == "api_5000eeee"
-
-
-def test_default_wiring_last_call_id_affects_thread_id_session_id_stable(tmp_path):
-    """Same agent path, two different last API call ids -> same session, new thread."""
-    import lingtai  # noqa: F401
-    from lingtai.llm.openai.adapter import _codex_session_id, _codex_thread_id
-    from lingtai.llm.service import build_provider_defaults_from_manifest_llm
-
+    # A ledgered call id exists and changes between builds; the hash must not.
     _write_token_ledger(tmp_path, [_ledger_entry("api_1000aaaa")])
     d0 = build_provider_defaults_from_manifest_llm(
         {"provider": "codex"}, max_rpm=0, working_dir=tmp_path
@@ -698,24 +579,25 @@ def test_default_wiring_last_call_id_affects_thread_id_session_id_stable(tmp_pat
         {"provider": "codex"}, max_rpm=0, working_dir=tmp_path
     )["codex"]
 
-    sid0 = _codex_session_id(d0["codex_session_anchor"])
-    sid1 = _codex_session_id(d1["codex_session_anchor"])
-    assert sid0 == sid1  # session-id stable across calls (same agent path)
-
-    tid0 = _codex_thread_id(sid0, d0["codex_thread_salt"])
-    tid1 = _codex_thread_id(sid1, d1["codex_thread_salt"])
-    assert tid0 != tid1  # thread-id rotates with the last API call id
-
-
-def test_default_wiring_uses_birth_salt_when_no_calls_yet(tmp_path):
-    """No token ledger yet -> stable birth salt so the thread is constant."""
-    import lingtai  # noqa: F401
-    from lingtai.llm.service import build_provider_defaults_from_manifest_llm
-
-    d = build_provider_defaults_from_manifest_llm(
-        {"provider": "codex"}, max_rpm=0, working_dir=tmp_path
+    assert d0["codex_session_anchor"] == d1["codex_session_anchor"]
+    assert _codex_session_id(d0["codex_session_anchor"]) == _codex_session_id(
+        d1["codex_session_anchor"]
     )
-    assert d["codex"]["codex_thread_salt"] == "birth"
+
+
+def test_codex_session_id_is_8_char_lowercase_hex_sha256_prefix():
+    """The shared id is sha256(anchor).hexdigest()[:8], lowercase hex."""
+    import hashlib
+
+    from lingtai.llm.openai.adapter import _codex_session_id
+
+    anchor = "/agents/alice/init.json"
+    expected = hashlib.sha256(anchor.encode("utf-8")).hexdigest()[:8]
+    got = _codex_session_id(anchor)
+    assert got == expected
+    assert len(got) == 8
+    assert got == got.lower()
+    assert all(c in "0123456789abcdef" for c in got)
 
 
 # ---------------------------------------------------------------------------
@@ -812,11 +694,12 @@ def test_token_ledger_entry_merges_usage_extra(tmp_path):
     assert entry["input"] == 10 and entry["cached"] == 8
 
 
-def _is_uuid(value: str) -> bool:
-    import uuid as _uuid
+def _expected_codex_hash(anchor: str) -> str:
+    """The expected root/main Codex id: 8-char lowercase-hex sha256 prefix.
 
-    try:
-        _uuid.UUID(str(value))
-        return True
-    except (ValueError, AttributeError, TypeError):
-        return False
+    Used for ``session-id``, ``thread-id``, and the default ``prompt_cache_key``,
+    which are byte-identical on the normal/root path.
+    """
+    import hashlib
+
+    return hashlib.sha256(anchor.encode("utf-8")).hexdigest()[:8]

@@ -51,54 +51,51 @@ _AUTO_PROMPT_CACHE_KEY = object()
 
 
 # Codex REST cache-affinity headers (issue #378). The official Codex client
-# sends UUID-shaped ``session-id`` / ``thread-id`` headers on its
+# sends ``session-id`` / ``thread-id`` headers on its
 # ``/backend-api/codex/responses`` calls; a probe showed they materially
 # improve prompt-cache affinity for repeated full-history replays. The REST
 # endpoint does NOT accept ``previous_response_id`` (``Unsupported
 # parameter``), so stable headers — not delta chaining — are the near-term
-# cache-affinity lever. We derive UUID-shaped values deterministically so the
-# same logical session/thread always sends the same identifiers.
+# cache-affinity lever.
 #
-# IMPORTANT — these identifiers MUST be per-agent. The ``session-id`` anchors
-# on the agent's durable identity: the resolved ``init.json`` path (the agent
-# path). It must NOT be derived from a global, model-only anchor (e.g.
+# For the normal/root main Codex session, the three cache-affinity values are
+# byte-identical and stable for the lifetime of the agent's durable identity:
+#
+#     session-id == thread-id == prompt_cache_key == <8-char agent-path hash>
+#
+# The shared value is a deterministic 8-character lowercase-hex digest of the
+# agent's durable identity anchor (the resolved ``init.json`` / agent path).
+# Ordinary LLM calls, ``api_call_id`` rotation, refresh/rebuild, molt, and
+# clear (same agent path) all leave it unchanged — only a different agent path
+# changes it. We do NOT use the latest ``api_call_id``, molt time, or generated
+# UUIDs for these defaults.
+#
+# IMPORTANT — these identifiers MUST be per-agent. The value anchors on the
+# agent's durable identity (the resolved ``init.json`` path). It must NOT be
+# derived from a global, model-only anchor (e.g.
 # ``prompt_cache_key=lingtai-codex:{model}:v1``): every agent on the same model
-# shares that string, which would collapse all of them onto one session/thread
-# and is exactly the wrong behavior.
+# shares that string, which would collapse all of them onto one
+# session/thread and is exactly the wrong behavior.
 #
 # The adapter layer has no per-agent identity of its own, so the host wiring
 # (``lingtai/llm/service.py:build_provider_defaults_from_manifest_llm``) passes
-# down the agent path + last molt time by default: a normal Codex agent gets a
-# stable per-agent ``session-id`` (agent path) and a ``thread-id`` salted by its
-# last molt time. The constructor kwargs below are the seam those defaults flow
-# through (and an internal override / testing escape hatch).
-#
-# Fixed namespace UUID for LingTai's Codex session/thread identifiers. Random
-# bytes generated once and frozen here; changing it rotates every derived id.
-_LINGTAI_CODEX_NAMESPACE = uuid.UUID("8c6f5b2e-2f4a-5d3e-9b1a-7c0d4e6f8a21")
+# the agent path down by default as ``codex_session_anchor``: a normal Codex
+# agent gets a stable per-agent hash used identically for all three values. The
+# constructor kwargs below are the seam those defaults flow through (and an
+# internal override / testing escape hatch).
 
 
 def _codex_session_id(anchor: str) -> str:
-    """Derive a stable, UUID-shaped Codex ``session-id`` from ``anchor``.
+    """Derive the stable 8-char Codex cache-affinity id from ``anchor``.
 
     ``anchor`` MUST be a per-agent identity string (e.g. the agent's resolved
-    ``init.json`` / agent-dir path), NOT a global model-only key. The same
-    anchor always yields the same UUID; distinct anchors differ.
+    ``init.json`` / agent-dir path), NOT a global model-only key. The result is
+    a deterministic 8-character lowercase-hex sha256 prefix: the same anchor
+    always yields the same id; distinct anchors differ. The same value is used
+    byte-identically for ``session-id``, ``thread-id``, and the default
+    ``prompt_cache_key`` on the normal/root path.
     """
-    return str(uuid.uuid5(_LINGTAI_CODEX_NAMESPACE, f"session:{anchor}"))
-
-
-def _codex_thread_id(session_id: str, thread_salt: str) -> str:
-    """Derive a stable, UUID-shaped Codex ``thread-id``.
-
-    Threads are namespaced under their ``session_id`` and varied by
-    ``thread_salt`` — the agent's last LLM API call id — so a new
-    continuous-context thread starts whenever the token ledger records a new
-    main LLM call, while the session id stays stable. The adapter is
-    salt-source-agnostic; the host wiring chooses the salt (see
-    ``build_provider_defaults_from_manifest_llm``).
-    """
-    return str(uuid.uuid5(uuid.UUID(session_id), f"thread:{thread_salt}"))
+    return hashlib.sha256(anchor.encode("utf-8")).hexdigest()[:8]
 
 
 def _base_url_namespace(base_url: str | None) -> str:
@@ -1595,10 +1592,11 @@ class CodexResponsesSession(OpenAIResponsesSession):
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-        # Stable Codex REST cache-affinity headers. The adapter normally
-        # supplies derived UUID-shaped values (from the agent path + last LLM
-        # API call id); ``None`` for either means "don't send that header", so a bare
-        # directly-constructed session (e.g. in a unit test) sends neither.
+        # Stable Codex REST cache-affinity headers. On the normal/root path the
+        # adapter supplies the same 8-char agent-path hash for both (so
+        # session-id == thread-id); ``None`` for either means "don't send that
+        # header", so a bare directly-constructed session (e.g. a unit test)
+        # sends neither.
         self._session_id = session_id
         self._thread_id = thread_id
 
@@ -1816,50 +1814,54 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-        # Codex REST cache-affinity headers (issue #378). These headers MUST be
-        # per-agent (see the module note above). The adapter has no per-agent
-        # identity of its own; the host wiring passes it down by default via
-        # these kwargs (also usable as an internal override / testing escape
-        # hatch):
+        # Codex REST cache-affinity identity (issue #378). The single per-agent
+        # value below is used byte-identically for ``session-id``, ``thread-id``,
+        # and the default ``prompt_cache_key`` (see the module note above). The
+        # adapter has no per-agent identity of its own; the host wiring passes it
+        # down by default via these kwargs (also usable as an internal override /
+        # testing escape hatch):
         #
-        #   codex_session_id=str     -> use this exact UUID-shaped session-id
-        #   codex_session_anchor=str -> derive a stable UUID session-id from this
-        #                               per-agent anchor (the resolved init.json
-        #                               path — the agent path / durable identity)
+        #   codex_session_id=str     -> use this exact string for all three
+        #   codex_session_anchor=str -> derive the stable 8-char agent-path hash
+        #                               from this per-agent anchor (the resolved
+        #                               init.json path — the agent's durable
+        #                               identity) and use it for all three
         #   (neither set)            -> no session-id/thread-id (bare/test path)
         #
-        # ``codex_thread_salt`` varies the derived thread-id within a session —
-        # the agent's last LLM API call id, so a fresh continuous-context thread
-        # starts whenever the token ledger records a new main LLM call; ``None`` uses a stable default
-        # salt so a single continuous thread keeps one thread-id.
+        # ``codex_thread_salt`` is accepted only as a legacy manifest
+        # pass-through; it is intentionally NOT used to derive a separate thread
+        # id. The root/main thread tracks the session id exactly so the three
+        # values stay byte-identical and stable across api_call_id rotation,
+        # refresh/rebuild, molt, and clear (same agent path).
         if codex_session_id:
-            self._codex_session_id: str | None = str(codex_session_id)
+            self._codex_id: str | None = str(codex_session_id)
         elif codex_session_anchor:
-            self._codex_session_id = _codex_session_id(str(codex_session_anchor))
+            self._codex_id = _codex_session_id(str(codex_session_anchor))
         else:
-            self._codex_session_id = None  # no per-agent identity -> no headers
-        self._codex_thread_salt = codex_thread_salt or "default"
+            self._codex_id = None  # no per-agent identity -> no headers
+        self._codex_thread_salt = codex_thread_salt  # legacy pass-through; unused
 
     def _resolve_codex_ids(self, model: str) -> tuple[str | None, str | None]:
         """Resolve the (session-id, thread-id) headers for ``model``.
 
         Returns ``(None, None)`` only when no per-agent identity was passed in
         (e.g. a bare adapter built directly in a test). In the normal host path
-        the agent path is always supplied, so a session-id is present and the
-        thread-id is derived from it plus the last-call-id thread salt.
+        the agent path is always supplied, so both ids are the same stable
+        8-char agent-path hash — the thread id tracks the session id exactly.
         """
-        if not self._codex_session_id:
-            return None, None
-        thread_id = _codex_thread_id(self._codex_session_id, self._codex_thread_salt)
-        return self._codex_session_id, thread_id
+        return self._codex_id, self._codex_id
 
     def _default_prompt_cache_key(self, model: str) -> str:
-        # Stable, conservative default so successive Codex turns hit the
-        # backend prompt cache. Keyed by model so distinct models don't share
-        # a cache namespace; `:v1` lets us bump it if the stable prefix ever
-        # changes shape. Never paired with `prompt_cache_retention` (Codex
-        # rejects that parameter). This intentionally ignores the codex
-        # base_url host — the namespace is the fixed ``lingtai-codex`` prefix.
+        # On the normal/root path the cache key is the SAME per-agent value as
+        # session-id / thread-id — byte-identical, so all three cache-affinity
+        # levers point at one stable slot for the agent's durable identity.
+        # Never paired with `prompt_cache_retention` (Codex rejects it).
+        #
+        # The model-keyed ``lingtai-codex:{model}:v1`` form survives only for the
+        # truly bare/no-anchor path (e.g. a standalone unit test), where the
+        # adapter has no per-agent identity to hash.
+        if self._codex_id:
+            return self._codex_id
         return f"lingtai-codex:{model}:v1"
 
     def _create_responses_session(
@@ -1909,13 +1911,15 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             previous_response_id=None,
             compact_threshold=None,
             interface=interface,
-            # Resolves to ``lingtai-codex:{model}:v1`` by default (see
-            # ``_default_prompt_cache_key``), but honors an explicit override
-            # or a ``prompt_cache_key=False`` disable passed to the adapter.
+            # On the normal/root path this resolves to the same 8-char
+            # agent-path hash as session-id / thread-id (see
+            # ``_default_prompt_cache_key``); it honors an explicit override or
+            # a ``prompt_cache_key=False`` disable passed to the adapter. Only
+            # the bare/no-anchor path falls back to ``lingtai-codex:{model}:v1``.
             prompt_cache_key=self._resolve_prompt_cache_key(model),
-            # Stable REST cache-affinity headers (issue #378). Derived from the
-            # agent path (session-id) + last LLM API call id (thread-id) passed down
-            # by the host; ``(None, None)`` only for a bare/test adapter.
+            # Stable REST cache-affinity headers (issue #378): both the 8-char
+            # agent-path hash, byte-identical, passed down by the host;
+            # ``(None, None)`` only for a bare/test adapter.
             session_id=session_id,
             thread_id=thread_id,
         )

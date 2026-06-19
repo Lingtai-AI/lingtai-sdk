@@ -1126,30 +1126,29 @@ class Agent(BaseAgent):
         # 60 RPM cap by default. Set to 0 in init.json to disable gating.
         new_max_rpm = m.get("max_rpm", 60)
         # Pass working_dir so a Codex agent's per-agent session/thread identity
-        # (agent path + last ledgered main LLM API call id) is re-resolved on
-        # every refresh — a refresh picks up the latest call id as a fresh
-        # thread salt.
+        # (the agent path) is resolved into the provider defaults. The identity
+        # is the agent path alone, so it is stable across refresh/rebuild — a
+        # refresh never rotates session-id / thread-id / prompt_cache_key.
         new_provider_defaults = build_provider_defaults_from_manifest_llm(
             llm, max_rpm=new_max_rpm, working_dir=self._working_dir
         )
 
+        new_provider_defaults_bucket = (new_provider_defaults or {}).get(
+            new_provider.lower(), {}
+        )
         cur_provider_defaults_bucket = getattr(
             self.service, "_provider_defaults", {}
         ).get(new_provider.lower(), {})
-        # Compare the resolved Codex thread salt (last ledgered main LLM API
-        # call id) so a refresh that picks up a new call id rebuilds the
-        # service onto the new thread-id
-        # while the session-id (agent path) stays stable.
-        new_codex_salt = (new_provider_defaults or {}).get(
-            new_provider.lower(), {}
-        ).get("codex_thread_salt")
+        # Codex cache-affinity identity is anchored on the agent path only, so
+        # token-ledger / molt-time churn does not rotate it. Still compare the
+        # resolved provider-defaults bucket as a whole so explicit init.json
+        # changes (codex_session_id/anchor, default_headers, compact_threshold,
+        # max_rpm, api_compat, etc.) rebuild the service coherently.
         if (
             new_provider != self.service.provider
             or new_model != self.service.model
             or new_base_url != getattr(self.service, "_base_url", None)
-            or new_max_rpm != cur_provider_defaults_bucket.get("max_rpm", 0)
-            or llm.get("api_compat") != cur_provider_defaults_bucket.get("api_compat")
-            or new_codex_salt != cur_provider_defaults_bucket.get("codex_thread_salt")
+            or new_provider_defaults_bucket != cur_provider_defaults_bucket
         ):
             self.service = LLMService(
                 provider=new_provider, model=new_model,
