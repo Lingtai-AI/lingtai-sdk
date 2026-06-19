@@ -8,7 +8,7 @@ batch. Reclaim-all (agent stop / explicit reclaim) may still kill everything.
 import threading
 from unittest.mock import MagicMock
 
-from lingtai.kernel.config import AgentConfig
+from lingtai_kernel.config import AgentConfig
 
 
 class _FakeProc:

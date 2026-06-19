@@ -13,7 +13,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from lingtai.kernel.logging import get_logger
+from lingtai_kernel.logging import get_logger
 
 logger = get_logger()
 

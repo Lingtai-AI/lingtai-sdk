@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 from ...i18n import t
 
 if TYPE_CHECKING:
-    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai_kernel.base_agent import BaseAgent
 
 
 def get_description(lang: str = "en") -> str:
@@ -29,14 +29,9 @@ def get_schema(lang: str = "en") -> dict:
 
 
 
-def make_handler(agent: "BaseAgent"):
-    """Build the ``glob`` tool handler bound to *agent*.
-
-    Single source of truth for the glob behavior: both ``setup()`` and the SDK
-    file-tool bundle bridge (``lingtai.core.file_bundle``) wire this same
-    closure, so the bundle-hosted tool runs byte-identical logic to the
-    registered tool.
-    """
+def setup(agent: "BaseAgent") -> None:
+    """Set up the glob capability on an agent."""
+    lang = agent._config.language
 
     def handle_glob(args: dict) -> dict:
         pattern = args.get("pattern", "")
@@ -64,15 +59,4 @@ def make_handler(agent: "BaseAgent"):
         except Exception as e:
             return {"status": "error", "message": f"Glob failed: {e}"}
 
-    return handle_glob
-
-
-def setup(agent: "BaseAgent") -> None:
-    """Set up the glob capability on an agent."""
-    lang = agent._config.language
-    agent.add_tool(
-        "glob",
-        schema=get_schema(lang),
-        handler=make_handler(agent),
-        description=get_description(lang),
-    )
+    agent.add_tool("glob", schema=get_schema(lang), handler=handle_glob, description=get_description(lang))

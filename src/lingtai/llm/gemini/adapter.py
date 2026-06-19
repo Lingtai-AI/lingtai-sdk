@@ -13,19 +13,19 @@ from typing import Any
 from google import genai
 from google.genai import errors as genai_errors, types
 
-from lingtai.kernel.logging import get_logger
+from lingtai_kernel.logging import get_logger
 
-from lingtai.kernel.llm.base import (
+from lingtai_kernel.llm.base import (
     ChatSession,
     FunctionSchema,
     LLMResponse,
     ToolCall,
     UsageMetadata,
 )
-from lingtai.kernel.llm.interface import ToolResultBlock
+from lingtai_kernel.llm.interface import ToolResultBlock
 from lingtai.llm.base import LLMAdapter
-from lingtai.kernel.llm.interface import ChatInterface
-from lingtai.kernel.llm.streaming import StreamingAccumulator
+from lingtai_kernel.llm.interface import ChatInterface
+from lingtai_kernel.llm.streaming import StreamingAccumulator
 
 logger = get_logger()
 

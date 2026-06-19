@@ -50,7 +50,7 @@ jobs:
           CIBW_ENVIRONMENT_LINUX: >-
             PATH="$HOME/.cargo/bin:$PATH"
             LINGTAI_REQUIRE_RUST_BUILD=1
-          CIBW_TEST_COMMAND: "python {project}/src/lingtai_sdk/assets/lingtai-sdk-skill/scripts/smoke_wheel_sidecar.py"
+          CIBW_TEST_COMMAND: "python {project}/scripts/smoke_wheel_sidecar.py"
 
       - name: Build source distribution
         if: runner.os == 'Linux'

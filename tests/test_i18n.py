@@ -1,5 +1,5 @@
-"""Tests for lingtai.kernel.i18n."""
-from lingtai.kernel.i18n import t
+"""Tests for lingtai_kernel.i18n."""
+from lingtai_kernel.i18n import t
 
 
 class TestT:

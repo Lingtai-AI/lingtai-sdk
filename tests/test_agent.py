@@ -5,12 +5,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lingtai.kernel.base_agent import BaseAgent
+from lingtai_kernel.base_agent import BaseAgent
 from lingtai.agent import Agent
-from lingtai.kernel.message import Message, _make_message, MSG_REQUEST, MSG_USER_INPUT, MSG_TC_WAKE
-from lingtai.kernel.state import AgentState
-from lingtai.kernel.types import UnknownToolError
-from lingtai.kernel.config import AgentConfig
+from lingtai_kernel.message import Message, _make_message, MSG_REQUEST, MSG_USER_INPUT, MSG_TC_WAKE
+from lingtai_kernel.state import AgentState
+from lingtai_kernel.types import UnknownToolError
+from lingtai_kernel.config import AgentConfig
 
 
 def make_mock_service():
@@ -121,7 +121,7 @@ def test_mail_without_service(tmp_path):
 
 def test_mail_with_service(tmp_path):
     import json
-    from lingtai.kernel.services.mail import FilesystemMailService
+    from lingtai_kernel.services.mail import FilesystemMailService
 
     # Set up receiver agent dir with manifest and heartbeat
     receiver_dir = tmp_path / "receiver"
@@ -163,7 +163,7 @@ def test_mail_with_service(tmp_path):
 
 
 def test_mail_to_bad_address(tmp_path):
-    from lingtai.kernel.services.mail import FilesystemMailService
+    from lingtai_kernel.services.mail import FilesystemMailService
     sender_dir = tmp_path / "sender"
     sender_dir.mkdir()
     sender_svc = FilesystemMailService(working_dir=sender_dir)
@@ -190,10 +190,10 @@ def test_mail_inbox_wiring(tmp_path):
     are now embodied by the filesystem itself: overwriting the file IS
     the coalesce + replace.
     """
-    from lingtai.kernel.notifications import collect_notifications
+    from lingtai_kernel.notifications import collect_notifications
 
     agent = BaseAgent(service=make_mock_service(), agent_name="receiver", working_dir=tmp_path / "test")
-    from lingtai.core.email.primitives import _persist_to_inbox
+    from lingtai_kernel.intrinsics.email.primitives import _persist_to_inbox
     msg_id = _persist_to_inbox(agent, {
         "from": "127.0.0.1:9999",
         "to": "127.0.0.1:8301",
@@ -219,7 +219,7 @@ def test_mail_inbox_wiring(tmp_path):
 def test_mail_start_wires_listener(tmp_path):
     """start() should call MailService.listen() when configured."""
     import json
-    from lingtai.kernel.services.mail import FilesystemMailService
+    from lingtai_kernel.services.mail import FilesystemMailService
 
     agent_dir = tmp_path / "test"
     agent_dir.mkdir()
@@ -277,10 +277,10 @@ def test_mail_read_no_ids_returns_error(tmp_path):
 def test_mail_received_full_content_in_notification(tmp_path):
     """_on_mail_received should include the message body and subject in
     the unread digest published to ``.notification/email.json``."""
-    from lingtai.kernel.notifications import collect_notifications
+    from lingtai_kernel.notifications import collect_notifications
 
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
-    from lingtai.core.email.primitives import _persist_to_inbox
+    from lingtai_kernel.intrinsics.email.primitives import _persist_to_inbox
     _persist_to_inbox(agent, {
         "from": "sender",
         "subject": "test subject",
@@ -337,7 +337,7 @@ def test_make_message():
 
 def test_execute_single_tool_intrinsic(tmp_path):
     """Intrinsic tools should be callable via _dispatch_tool."""
-    from lingtai.kernel.llm.base import ToolCall
+    from lingtai_kernel.llm.base import ToolCall
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
 
     # Replace the system intrinsic with a mock
@@ -350,7 +350,7 @@ def test_execute_single_tool_intrinsic(tmp_path):
 
 def test_execute_single_tool_mcp(tmp_path):
     """MCP tools should be callable via _dispatch_tool."""
-    from lingtai.kernel.llm.base import ToolCall
+    from lingtai_kernel.llm.base import ToolCall
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     agent.add_tool("my_tool", schema={}, handler=lambda args: {"status": "ok", "value": args.get("x")})
 
@@ -362,7 +362,7 @@ def test_execute_single_tool_mcp(tmp_path):
 
 def test_execute_single_tool_unknown(tmp_path):
     """Unknown tools should raise UnknownToolError."""
-    from lingtai.kernel.llm.base import ToolCall
+    from lingtai_kernel.llm.base import ToolCall
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
 
     tc = ToolCall(name="nonexistent_tool", args={})
@@ -696,7 +696,7 @@ def test_connect_mcp_is_on_agent_not_base(tmp_path):
 
 def test_agent_config_has_no_bash_policy_file():
     """AgentConfig should not have capability-specific fields."""
-    from lingtai.kernel.config import AgentConfig
+    from lingtai_kernel.config import AgentConfig
     assert 'bash_policy_file' not in AgentConfig.__dataclass_fields__
 
 
@@ -705,11 +705,11 @@ def test_agent_config_has_no_bash_policy_file():
 # ---------------------------------------------------------------------------
 
 def test_base_agent_has_no_non_kernel_imports():
-    """BaseAgent module (in lingtai.kernel) should not import from non-kernel lingtai modules."""
+    """BaseAgent module (in lingtai_kernel) should not import from non-kernel lingtai modules."""
     import ast
-    import lingtai.kernel
+    import lingtai_kernel
     from pathlib import Path
-    kernel_dir = Path(lingtai.kernel.__file__).parent
+    kernel_dir = Path(lingtai_kernel.__file__).parent
     # After the package refactor, base_agent is a directory (package).
     # Scan all .py files in the package.
     base_agent_dir = kernel_dir / "base_agent"

@@ -2,13 +2,13 @@
 # installs can rebuild the native backend via ``setup.py``. Wheels do
 # not need these files — they ship the pre-built binary under
 # ``src/lingtai/bin/`` via ``[tool.setuptools.package-data]``.
-graft src/lingtai/native/search_sidecar/src
-include src/lingtai/native/search_sidecar/Cargo.toml
-include src/lingtai/native/search_sidecar/Cargo.lock
-include src/lingtai/native/search_sidecar/README.md
+graft experimental/lingtai-search-sidecar/src
+include experimental/lingtai-search-sidecar/Cargo.toml
+include experimental/lingtai-search-sidecar/Cargo.lock
+include experimental/lingtai-search-sidecar/README.md
 
 # Exclude transient cargo build artifacts so they don't bloat the sdist.
-prune src/lingtai/native/search_sidecar/target
+prune experimental/lingtai-search-sidecar/target
 
 # The wheel-bundled binary at src/lingtai/bin/ is reproducible from the
 # crate sources above — keep it out of the sdist so source releases stay

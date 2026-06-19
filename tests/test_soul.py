@@ -1,4 +1,4 @@
-"""Tests for lingtai.core.soul.
+"""Tests for lingtai_kernel.intrinsics.soul.
 
 After the past-self-consultation refactor, this file covers only:
 - The agent-callable surface (``handle``): inquiry action, flow rejection,
@@ -19,8 +19,8 @@ import threading
 import time
 from unittest.mock import MagicMock
 
-from lingtai.kernel.config import AgentConfig
-from lingtai.core import soul
+from lingtai_kernel.config import AgentConfig
+from lingtai_kernel.intrinsics import soul
 
 
 def _make_mock_agent():
@@ -102,7 +102,7 @@ class TestSoulHandle:
             fire_called.set()
 
         monkeypatch.setattr(
-            "lingtai.core.soul.flow._run_consultation_fire",
+            "lingtai_kernel.intrinsics.soul.flow._run_consultation_fire",
             tracking_fire,
         )
 
@@ -131,7 +131,7 @@ class TestSoulHandle:
             fire_called.set()
 
         monkeypatch.setattr(
-            "lingtai.core.soul.flow._run_consultation_fire",
+            "lingtai_kernel.intrinsics.soul.flow._run_consultation_fire",
             tracking_fire,
         )
 
@@ -203,7 +203,7 @@ class TestSoulTimer:
 
     def test_soul_attributes_initialized_default(self, tmp_path):
         """BaseAgent with default config has soul_delay=99999."""
-        from lingtai.kernel import BaseAgent
+        from lingtai_kernel import BaseAgent
         agent = BaseAgent(
             service=_make_mock_service(),
             agent_name="test",
@@ -218,7 +218,7 @@ class TestSoulTimer:
         _set_state starts a soul timer when entering IDLE and cancels it
         when leaving IDLE (to ACTIVE, STUCK, etc.).
         """
-        from lingtai.kernel import AgentState, BaseAgent
+        from lingtai_kernel import AgentState, BaseAgent
         agent = BaseAgent(
             service=_make_mock_service(),
             agent_name="test",
@@ -241,7 +241,7 @@ class TestSoulTimer:
 
     def test_soul_timer_not_started_when_shutdown(self, tmp_path):
         """_start_soul_timer is a no-op when _shutdown is set."""
-        from lingtai.kernel import BaseAgent
+        from lingtai_kernel import BaseAgent
         agent = BaseAgent(
             service=_make_mock_service(),
             agent_name="test",
@@ -254,7 +254,7 @@ class TestSoulTimer:
 
     def test_soul_delay_from_config(self, tmp_path):
         """soul_delay in config sets initial _soul_delay."""
-        from lingtai.kernel import BaseAgent
+        from lingtai_kernel import BaseAgent
         agent = BaseAgent(
             service=_make_mock_service(),
             agent_name="test",
@@ -265,7 +265,7 @@ class TestSoulTimer:
 
     def test_soul_delay_clamped_to_min(self, tmp_path):
         """soul_delay below 1 is clamped to 1."""
-        from lingtai.kernel import BaseAgent
+        from lingtai_kernel import BaseAgent
         agent = BaseAgent(
             service=_make_mock_service(),
             agent_name="test",
@@ -275,7 +275,7 @@ class TestSoulTimer:
         assert agent._soul_delay == 1.0
 
     def test_stop_cancels_soul_timer(self, tmp_path):
-        from lingtai.kernel import BaseAgent
+        from lingtai_kernel import BaseAgent
         agent = BaseAgent(
             service=_make_mock_service(),
             agent_name="test",
@@ -292,15 +292,15 @@ class TestSoulFireAllowed:
     """_soul_fire_allowed compares by string value, not enum identity."""
 
     def test_allows_idle_state(self):
-        from lingtai.core.soul.flow import _soul_fire_allowed
-        from lingtai.kernel.state import AgentState
+        from lingtai_kernel.intrinsics.soul.flow import _soul_fire_allowed
+        from lingtai_kernel.state import AgentState
         agent = MagicMock()
         agent._state = AgentState.IDLE
         assert _soul_fire_allowed(agent) is True
 
     def test_rejects_active_state(self):
-        from lingtai.core.soul.flow import _soul_fire_allowed
-        from lingtai.kernel.state import AgentState
+        from lingtai_kernel.intrinsics.soul.flow import _soul_fire_allowed
+        from lingtai_kernel.state import AgentState
         agent = MagicMock()
         agent._state = AgentState.ACTIVE
         assert _soul_fire_allowed(agent) is False
@@ -309,7 +309,7 @@ class TestSoulFireAllowed:
         """Simulates stale-enum mismatch: a different Enum class whose
         .value is 'idle' should still be accepted."""
         import enum
-        from lingtai.core.soul.flow import _soul_fire_allowed
+        from lingtai_kernel.intrinsics.soul.flow import _soul_fire_allowed
 
         class ForeignState(enum.Enum):
             IDLE = "idle"
@@ -320,7 +320,7 @@ class TestSoulFireAllowed:
 
     def test_rejects_foreign_enum_with_active_value(self):
         import enum
-        from lingtai.core.soul.flow import _soul_fire_allowed
+        from lingtai_kernel.intrinsics.soul.flow import _soul_fire_allowed
 
         class ForeignState(enum.Enum):
             ACTIVE = "active"
@@ -338,9 +338,9 @@ def test_consultation_fire_discards_late_result_after_state_change(monkeypatch):
     transitions the agent to STUCK mid-flight — the post-batch state
     check must discard the result.
     """
-    from lingtai.core.soul import flow
-    from lingtai.kernel.llm.interface import TextBlock
-    from lingtai.kernel.state import AgentState
+    from lingtai_kernel.intrinsics.soul import flow
+    from lingtai_kernel.llm.interface import TextBlock
+    from lingtai_kernel.state import AgentState
 
     agent = MagicMock()
     agent._state = AgentState.IDLE  # Must start IDLE to pass the gate
@@ -358,15 +358,15 @@ def test_consultation_fire_discards_late_result_after_state_change(monkeypatch):
         return [{"source": "insights", "blocks": [TextBlock(text="late")]}]
 
     monkeypatch.setattr(
-        "lingtai.core.soul.consultation._render_current_diary",
+        "lingtai_kernel.intrinsics.soul.consultation._render_current_diary",
         lambda _agent: "diary",
     )
     monkeypatch.setattr(
-        "lingtai.core.soul.consultation._run_consultation_batch",
+        "lingtai_kernel.intrinsics.soul.consultation._run_consultation_batch",
         fake_batch,
     )
     monkeypatch.setattr(
-        "lingtai.core.soul.consultation.build_consultation_pair",
+        "lingtai_kernel.intrinsics.soul.consultation.build_consultation_pair",
         MagicMock(),
     )
 

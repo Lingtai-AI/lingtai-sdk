@@ -30,12 +30,12 @@ from typing import Any
 
 import pytest
 
-from lingtai.kernel.llm.interface import (
+from lingtai_kernel.llm.interface import (
     ChatInterface,
     ToolCallBlock,
     ToolResultBlock,
 )
-from lingtai.kernel.tc_inbox import InvoluntaryToolCall, TCInbox
+from lingtai_kernel.tc_inbox import InvoluntaryToolCall, TCInbox
 
 
 # ---------------------------------------------------------------------------

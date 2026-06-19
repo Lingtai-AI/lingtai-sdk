@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 import openai
 
 from lingtai.llm.openai.adapter import OpenAIChatSession
-from lingtai.kernel.llm.interface import (
+from lingtai_kernel.llm.interface import (
     ChatInterface,
     TextBlock,
     ToolCallBlock,

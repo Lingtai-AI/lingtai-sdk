@@ -2,7 +2,7 @@
 system-notification synthetic pairs."""
 from __future__ import annotations
 
-from lingtai.kernel.llm.interface import (
+from lingtai_kernel.llm.interface import (
     ChatInterface, ToolCallBlock, ToolResultBlock, TextBlock,
 )
 

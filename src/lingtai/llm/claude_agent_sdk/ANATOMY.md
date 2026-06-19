@@ -17,8 +17,8 @@ text upstream.
 
 ## Connections
 
-- **Kernel types** — `adapter.py` imports `ChatSession`, `FunctionSchema`, `LLMResponse`, `ToolCall`, `UsageMetadata` from `lingtai.kernel.llm.base`; `ChatInterface`, `TextBlock`, `ToolResultBlock` from `lingtai.kernel.llm.interface`.
-- **ABC** — `ClaudeAgentSDKAdapter` extends `lingtai.llm.base.LLMAdapter` (implements `create_chat`, `generate`, `make_tool_result_message`, `is_quota_error`); `ClaudeAgentSDKChatSession` extends `lingtai.kernel.llm.base.ChatSession`.
+- **Kernel types** — `adapter.py` imports `ChatSession`, `FunctionSchema`, `LLMResponse`, `ToolCall`, `UsageMetadata` from `lingtai_kernel.llm.base`; `ChatInterface`, `TextBlock`, `ToolResultBlock` from `lingtai_kernel.llm.interface`.
+- **ABC** — `ClaudeAgentSDKAdapter` extends `lingtai.llm.base.LLMAdapter` (implements `create_chat`, `generate`, `make_tool_result_message`, `is_quota_error`); `ClaudeAgentSDKChatSession` extends `lingtai_kernel.llm.base.ChatSession`.
 - **Registration** — `_register.py` registers `_claude_agent_sdk` factory under both `claude-agent-sdk` and `claude_agent_sdk` (`_register.py`, after `mimo`). The factory drops `api_key`/`base_url` (CLI-login auth) and lazy-imports the adapter.
 - **Optional SDK** — `claude_agent_sdk` is imported only inside `_import_sdk()` on the call path; never at module import. Absent package → `RuntimeError` with install/auth guidance.
 

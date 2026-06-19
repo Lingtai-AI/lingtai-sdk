@@ -32,7 +32,7 @@ Anthropic Claude adapter — Messages API with prompt caching, tool use, and ext
 
 ## Connections
 
-- **Imports from `lingtai.kernel`**: `ChatSession`, `FunctionSchema`, `LLMResponse`, `ToolCall`, `UsageMetadata`, `ToolResultBlock`, `ChatInterface`, `TextBlock`, `ThinkingBlock`, `ToolCallBlock`, `StreamingAccumulator`
+- **Imports from `lingtai_kernel`**: `ChatSession`, `FunctionSchema`, `LLMResponse`, `ToolCall`, `UsageMetadata`, `ToolResultBlock`, `ChatInterface`, `TextBlock`, `ThinkingBlock`, `ToolCallBlock`, `StreamingAccumulator`
 - **Imports from `lingtai`**: `LLMAdapter` (ABC in `llm/base.py`), `to_anthropic` converter (`llm/interface_converters.py`)
 - **External**: `anthropic` SDK, `httpx`
 - **Consumers**: `MiniMaxAdapter` inherits from `AnthropicAdapter`; `custom` factory delegates here for `api_compat="anthropic"`

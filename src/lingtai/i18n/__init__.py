@@ -43,7 +43,7 @@ def _load(lang: str) -> dict[str, str]:
 
 def _sync_to_kernel(lang: str) -> None:
     """Push kernel-level keys from our table into kernel's i18n cache."""
-    from lingtai.kernel.i18n import register_strings
+    from lingtai_kernel.i18n import register_strings
 
     table = _CACHE.get(lang, {})
     kernel_keys = {

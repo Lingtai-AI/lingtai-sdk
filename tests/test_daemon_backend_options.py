@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lingtai.kernel.config import AgentConfig
+from lingtai_kernel.config import AgentConfig
 from lingtai.core.daemon import (
     _backend_options_to_argv,
 )

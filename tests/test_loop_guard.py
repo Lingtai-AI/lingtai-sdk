@@ -1,4 +1,4 @@
-from lingtai.kernel.loop_guard import LoopGuard
+from lingtai_kernel.loop_guard import LoopGuard
 
 
 def test_loop_guard_no_loop():

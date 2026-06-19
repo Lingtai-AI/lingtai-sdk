@@ -1,0 +1,52 @@
+# intrinsics/psyche
+
+Agent identity, working notes, and context lifecycle — the "bare essentials of self." Provides the agent with tools to manage its own identity, working notes (pad), and conversation context (molt). The core shed-and-reload machinery that enables cross-session persistence.
+
+> **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues.
+
+## Components
+
+- `__init__.py` — Package surface. Re-exports all public API for backward compatibility. Contains:
+  - `get_description` / `get_schema` (`__init__.py:41-84`) — tool registration; schema intentionally avoids top-level JSON Schema combinators for strict-mode provider compatibility.
+  - `_VALID_ACTIONS` / `_DISPATCH` (`__init__.py:91-105`) — action→handler dispatch table replacing the former `globals().get()` pattern; preserves per-object action validation that is not encoded with schema combinators.
+  - `handle()` (`__init__.py:108-128`) — main dispatcher.
+  - `boot()` (`__init__.py:136-145`) — boot-time hook: loads lingtai + pad, registers post-molt reload callback.
+
+- `_snapshots.py` — Snapshot and summary persistence for the molt machinery.
+  - `SNAPSHOT_SCHEMA_VERSION` (`_snapshots.py:16`) — schema version tag for snapshots.
+  - `_write_molt_summary()` (`_snapshots.py:19-80`) — persist agent/system-authored molt summary to `system/summaries/` as YAML-frontmatter markdown.
+  - `_write_molt_snapshot()` (`_snapshots.py:83-148`) — serialize pre-molt `ChatInterface` to `history/snapshots/` as a discrete JSON file for past-self consultation.
+
+- `_pad.py` — Pad (working notes) management.
+  - Append-file management: `_APPEND_LIST_PATH` / `_APPEND_TOKEN_LIMIT` constants (`_pad.py:17-18`), `_append_list_file` (`_pad.py:21`), `_load_append_list` (`_pad.py:24-33`), `_save_append_list` (`_pad.py:36-39`), `_resolve_path` (`_pad.py:42-44`), `_read_append_content` (`_pad.py:47-55`), `_is_text_file` (`_pad.py:58-69`).
+  - `_pad_edit()` (`_pad.py:76-111`) — write content + optional file imports to `system/pad.md`.
+  - `_pad_load()` (`_pad.py:114-155`) — load `system/pad.md` + pinned append-files into the prompt.
+  - `_pad_append()` (`_pad.py:158-198`) — set/clear/query the list of files pinned as read-only pad reference.
+
+- `_lingtai.py` — Lingtai (identity/character) management.
+  - `_lingtai_update()` (`_lingtai.py:11-22`) — write content to `system/lingtai.md` then auto-load.
+  - `_lingtai_load()` (`_lingtai.py:25-54`) — the single canonical writer of the protected `character` prompt section, composed from `system/lingtai.md` alone. Empty/missing file deletes the section. Distinct from `covenant` (operator contract, owned by `Agent._reload_prompt_sections`) and from the mechanical `identity` section (written by BaseAgent).
+
+- `_molt.py` — Context molt core, name handlers, and system-initiated molt.
+  - `_context_molt()` (`_molt.py`) — agent-initiated molt: validates summary & keep_tool_calls, snapshots, archives history, wipes wire session, replays the molt's own ToolCallBlock + kept pairs into the fresh interface. The core of the psyche. Resets wire-level tracking (`_notification_block_id` plus any legacy `_pending_notification_*` attributes) and `_notification_fp` but preserves `.notification/` files — notifications are system state, not conversation memory. Still calls `agent._tc_inbox.drain()` defensively for pre-redesign items that survived a restart. After the wipe completes, calls `_publish_post_molt` to drop a `.notification/post-molt.json` reminder so the fresh agent reads what it was doing and how to dismiss.
+  - `_name_set()` (`_molt.py`) — set the agent's true (immutable) name.
+  - `_name_nickname()` (`_molt.py`) — set or clear the agent's mutable nickname.
+  - `context_forget()` (`_molt.py`) — system-initiated forced molt: synthesizes a complete ToolCallBlock+ToolResultBlock pair, wipes context, replays them into the fresh interface. Called by `base_agent` when the warning ladder is exhausted or an external `.forget` signal arrives. Same notification tracking reset as `_context_molt` (wire-level only; `.notification/` files survive). Also publishes a `post-molt` notification (`initiator: "system"`, `source` propagated) so the fresh agent has the same recall hook agent-initiated molts get.
+  - `_publish_post_molt()` (`_molt.py`) — internal helper. Writes `.notification/post-molt.json` via `publish_notification` (channel `post-molt`, icon 🌱, priority high). Payload carries `molt_id`, `molt_at`, `source_agent`, `initiator`, `source`, `molt_count`, `reminder`, `ack_options` (`["continue", "defer", "obsolete"]`), `reasoning` (agent molts only), `summary_path`, and `tokens_before/after`. The kernel does **not** excerpt or parse the summary — there is no `next_action` field (PR #190 removed the heuristic); the agent reconstructs context itself. Instructions tell the agent to reconstruct from pad / `summary_path` (latest summary) / recent human-channel messages, decide (never auto-execute stored text), then explicitly choose continue/defer/obsolete and dismiss via `system(action='dismiss', channel='post-molt', reason='<choice>: ...')` (a reason is required). The channel is intentionally separate from the pressure `molt` channel owned by `base_agent.turn._check_molt_pressure` so pressure-clear under threshold never sweeps the reminder.
+
+## Connections
+
+- **Inbound:** `handle()` is called by the tool dispatcher (via `base_agent._dispatch_tool`). `boot()` is called during agent construction in `base_agent/__init__.py:398`.
+- **Inbound (cross-module):** `context_forget` is called by `base_agent/lifecycle.py:235-236` (warning ladder), `base_agent/turn.py:341-342` (AED), and `base_agent/turn.py:353-354` (`.forget` signal).
+- **Inbound (cross-module):** `_write_molt_snapshot` is imported by `intrinsics/soul/consultation.py` for snapshot loading via `_load_snapshot_interface`.
+- **Outbound:** Depends on `..i18n` (translations), `..llm.interface` (`ToolCallBlock`, `ToolResultBlock`), `..token_counter` (token budget checks in `_pad_append`).
+- **Data flow:** All state lives in the filesystem under `system/` (`pad.md`, `lingtai.md`, `pad_append.json`, `summaries/`) and `history/` (`chat_history.jsonl`, `chat_history_archive.jsonl`, `snapshots/`). `_lingtai_load` reads `lingtai.md` alone (→ `character` section); `system/covenant.md` is owned by `Agent._reload_prompt_sections` (→ `covenant` section), not this package. The molt path also touches `.notification/` (deletes everything in it) and the agent's notification-tracking attributes.
+
+## Key invariants
+
+- `_context_molt` is the only path that archives `chat_history.jsonl`, increments `molt_count`, and replays the molt's own ToolCallBlock. `context_forget` is the only path that synthesizes both the call and result entries.
+- The `keep_tool_calls` list is validated BEFORE any state mutation — if any id is unmatched, the molt is refused and `molt_count` is not incremented.
+- `context_forget` always adds `_initiator: "system"` to the ToolCallBlock args so the agent can distinguish system-initiated from agent-initiated molts.
+- `boot()` registers a post-molt hook that reloads `character` (lingtai.md) + `pad` into the prompt via the canonical composers `_lingtai_load`/`_pad_load`. This hook runs BEFORE the fresh session is created during molt. On `Agent`, `_reload_prompt_sections` is *also* registered as a post-molt hook and routes through the same composers — so both hooks produce byte-identical `character`/`pad` content and the post-molt result is independent of hook order (the fix for the "lingtai folded into covenant, dropped after molt" race).
+- `handle()` uses an explicit dispatch table (`_DISPATCH`) rather than `globals().get()`, so it works correctly across sub-modules.
+- The post-molt notification channel name is the literal string `post-molt`, distinct from the pressure-warning `molt` channel owned by `base_agent.turn._check_molt_pressure`. Both can be live simultaneously; pressure-clear sweeps only its own channel. Agents dismiss the reminder with `system(action='dismiss', channel='post-molt', reason='<continue|defer|obsolete>: ...')` after explicitly deciding how to handle the continuation.

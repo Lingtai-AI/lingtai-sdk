@@ -82,7 +82,7 @@ def _read_artifact(wd: Path) -> dict:
 # ---------------------------------------------------------------------------
 
 def test_redact_secrets_drops_secret_keys_keeps_public():
-    from lingtai.kernel.workdir import _redact_secrets
+    from lingtai_kernel.workdir import _redact_secrets
 
     value = {
         "llm": {
@@ -239,7 +239,7 @@ def test_refresh_rewrites_artifact_after_preset_change(tmp_path, monkeypatch):
     manifest.preset.active to B and refreshing republishes with B's llm."""
     from unittest.mock import MagicMock
     from lingtai.agent import Agent
-    from lingtai.kernel.config import AgentConfig
+    from lingtai_kernel.config import AgentConfig
 
     plib = _make_preset_lib(tmp_path, {
         "fast": {

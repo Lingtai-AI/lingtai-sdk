@@ -7,7 +7,7 @@ a dangling assistant[tool_calls] followed by a plain-text user message.
 """
 from __future__ import annotations
 
-from lingtai.kernel.llm.interface import (
+from lingtai_kernel.llm.interface import (
     ChatInterface,
     TextBlock,
     ToolCallBlock,

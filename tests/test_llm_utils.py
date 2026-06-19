@@ -4,7 +4,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 
 import pytest
 
-from lingtai.kernel.llm_utils import (
+from lingtai_kernel.llm_utils import (
     WorkerStillRunningError,
     track_llm_usage,
     execute_tools_batch,
@@ -199,7 +199,7 @@ def test_send_with_timeout_waits_for_worker_to_settle_after_timeout():
 
 def test_wait_for_worker_settle_raises_when_future_still_running(monkeypatch):
     """A worker that survives settle grace is unsafe for AED retry."""
-    monkeypatch.setattr("lingtai.kernel.llm_utils._WORKER_SETTLE_GRACE", 0.01)
+    monkeypatch.setattr("lingtai_kernel.llm_utils._WORKER_SETTLE_GRACE", 0.01)
     future = Future()
 
     with pytest.raises(WorkerStillRunningError) as exc:
@@ -216,7 +216,7 @@ def test_send_with_timeout_raises_worker_still_running_when_worker_never_settles
     """
     import threading
 
-    monkeypatch.setattr("lingtai.kernel.llm_utils._WORKER_SETTLE_GRACE", 0.01)
+    monkeypatch.setattr("lingtai_kernel.llm_utils._WORKER_SETTLE_GRACE", 0.01)
     pool = ThreadPoolExecutor(max_workers=1)
     blocker = threading.Event()
     chat = _FakeChat(blocker, result=FakeLLMResponse())

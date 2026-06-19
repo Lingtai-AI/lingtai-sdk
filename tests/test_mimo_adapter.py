@@ -18,7 +18,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from lingtai.llm.mimo.adapter import MimoAdapter, MimoChatSession
-from lingtai.kernel.llm.interface import (
+from lingtai_kernel.llm.interface import (
     ChatInterface,
     TextBlock,
     ThinkingBlock,

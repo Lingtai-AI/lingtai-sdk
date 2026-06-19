@@ -5,7 +5,7 @@ import json
 import subprocess
 import sys
 
-from lingtai.core.registry import get_all_providers
+from lingtai.capabilities import get_all_providers
 
 
 def test_get_all_providers_returns_all_capabilities():
@@ -40,7 +40,7 @@ def test_provider_dependent_capabilities():
     assert "gemini" in result["vision"]["providers"]
     # "local" is intentionally NOT advertised in PROVIDERS yet — it works
     # via explicit opt-in (add_capability(..., provider="local")) but
-    # should not appear in check-caps output. See core/vision.py.
+    # should not appear in check-caps output. See capabilities/vision.py.
     assert "local" not in result["vision"]["providers"]
 
 

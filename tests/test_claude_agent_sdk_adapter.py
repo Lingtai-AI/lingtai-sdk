@@ -26,7 +26,7 @@ from lingtai.llm.claude_agent_sdk.adapter import (
     ClaudeAgentSDKChatSession,
     _build_prompt,
 )
-from lingtai.kernel.llm.interface import ChatInterface, TextBlock
+from lingtai_kernel.llm.interface import ChatInterface, TextBlock
 
 
 # ---------------------------------------------------------------------------

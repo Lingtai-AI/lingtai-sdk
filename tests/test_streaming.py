@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from lingtai.kernel.llm.streaming import StreamingAccumulator
-from lingtai.kernel.llm.base import ToolCall, UsageMetadata
+from lingtai_kernel.llm.streaming import StreamingAccumulator
+from lingtai_kernel.llm.base import ToolCall, UsageMetadata
 
 
 # -- Text accumulation ------------------------------------------------------

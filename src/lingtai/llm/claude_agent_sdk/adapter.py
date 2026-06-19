@@ -30,15 +30,15 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
-from lingtai.kernel.llm.base import (
+from lingtai_kernel.llm.base import (
     ChatSession,
     FunctionSchema,
     LLMResponse,
     ToolCall,
     UsageMetadata,
 )
-from lingtai.kernel.llm.interface import ChatInterface, TextBlock, ToolResultBlock
-from lingtai.kernel.logging import get_logger
+from lingtai_kernel.llm.interface import ChatInterface, TextBlock, ToolResultBlock
+from lingtai_kernel.logging import get_logger
 from lingtai.llm.base import LLMAdapter
 
 logger = get_logger()

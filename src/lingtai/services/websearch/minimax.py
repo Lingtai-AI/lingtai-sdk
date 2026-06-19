@@ -5,7 +5,7 @@ import atexit
 import os
 import shutil
 
-from lingtai.kernel.logging import get_logger
+from lingtai_kernel.logging import get_logger
 
 from . import SearchResult, SearchService
 

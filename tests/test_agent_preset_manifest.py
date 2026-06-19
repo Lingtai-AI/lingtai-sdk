@@ -14,8 +14,8 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from lingtai.agent import Agent
-from lingtai.kernel.base_agent import BaseAgent, _build_identity_section
-from lingtai.kernel.base_agent.identity import _build_manifest, _safe_llm_from_service
+from lingtai_kernel.base_agent import BaseAgent, _build_identity_section
+from lingtai_kernel.base_agent.identity import _build_manifest, _safe_llm_from_service
 
 
 def _mock_service(

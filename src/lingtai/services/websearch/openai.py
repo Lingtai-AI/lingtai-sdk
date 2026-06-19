@@ -1,7 +1,7 @@
 """OpenAI web search — uses OpenAI's native search API."""
 from __future__ import annotations
 
-from lingtai.kernel.logging import get_logger
+from lingtai_kernel.logging import get_logger
 
 from . import SearchResult, SearchService
 

@@ -8,7 +8,7 @@ import pytest
 
 def _make_test_agent(tmp_path):
     """BaseAgent with init.json that has a non-default active preset."""
-    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai_kernel.base_agent import BaseAgent
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
     svc.provider = "x"
@@ -55,7 +55,7 @@ def test_can_fallback_preset_false_when_active_equals_default(tmp_path):
 
 
 def test_can_fallback_preset_false_when_no_preset_block(tmp_path):
-    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai_kernel.base_agent import BaseAgent
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
     svc.provider = "x"

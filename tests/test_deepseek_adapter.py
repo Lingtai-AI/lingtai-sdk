@@ -22,7 +22,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from lingtai.llm.deepseek.adapter import DeepSeekAdapter, DeepSeekChatSession
-from lingtai.kernel.llm.interface import (
+from lingtai_kernel.llm.interface import (
     ChatInterface,
     TextBlock,
     ThinkingBlock,

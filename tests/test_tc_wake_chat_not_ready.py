@@ -21,14 +21,14 @@ from dataclasses import dataclass, field
 from typing import Any
 from unittest.mock import MagicMock
 
-from lingtai.kernel.base_agent.turn import _handle_tc_wake
-from lingtai.kernel.llm.interface import (
+from lingtai_kernel.base_agent.turn import _handle_tc_wake
+from lingtai_kernel.llm.interface import (
     ChatInterface,
     TextBlock,
     ToolCallBlock,
     ToolResultBlock,
 )
-from lingtai.kernel.tc_inbox import InvoluntaryToolCall, TCInbox
+from lingtai_kernel.tc_inbox import InvoluntaryToolCall, TCInbox
 
 
 # ---------------------------------------------------------------------------

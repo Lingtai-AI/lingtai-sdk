@@ -25,7 +25,7 @@ TOP_OPTIONAL: dict[str, type | tuple[type, ...]] = {
 # Top-level fields that were retired in past versions and still have simple
 # shape-only cleanup semantics. strip_deprecated() removes them from the data
 # dict (and optionally from disk) so they never reach validate_init(). Fields
-# that need archive/event/version tracking belong in lingtai.kernel.migrate
+# that need archive/event/version tracking belong in lingtai_kernel.migrate
 # agent-domain migrations instead.
 DEPRECATED_TOP_FIELDS: set[str] = {
     # "soul" / "soul_file" — retired in v0.7.6. The soul-flow voice is

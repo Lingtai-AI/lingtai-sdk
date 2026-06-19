@@ -15,12 +15,12 @@ Wrapper-side i18n loader — language-aware string tables for lingtai capabiliti
 **Key functions:**
 - `t(lang, key, **kwargs)` (L57) — main API. Returns localized string for dotted key; falls back to `en` then returns key itself. `format_map` with `defaultdict(str)` for safe template substitution.
 - `_load(lang)` (L31) — lazy-loads JSON file into `_CACHE`, triggers `_sync_to_kernel()`.
-- `_sync_to_kernel(lang)` (L44) — extracts keys matching `_KERNEL_PREFIXES` (`system.`, `soul.`, `mail.`, `eigen.`, `system_tool.`, `tool.`) and injects them into the kernel's i18n cache via `lingtai.kernel.i18n.register_strings()`.
+- `_sync_to_kernel(lang)` (L44) — extracts keys matching `_KERNEL_PREFIXES` (`system.`, `soul.`, `mail.`, `eigen.`, `system_tool.`, `tool.`) and injects them into the kernel's i18n cache via `lingtai_kernel.i18n.register_strings()`.
 
 ## Connections
 
-- **→ `lingtai.kernel.i18n`** (L46): `register_strings()` — pushes kernel-namespace keys from lingtai tables into kernel's cache. This is how lingtai ships `wen.json` translations for kernel-level strings.
-- **← `lingtai.core.vision`** (vision:21), **`lingtai.core.web_search`** (web_search:14): both import `t` for i18n of tool descriptions/schemas.
+- **→ `lingtai_kernel.i18n`** (L46): `register_strings()` — pushes kernel-namespace keys from lingtai tables into kernel's cache. This is how lingtai ships `wen.json` translations for kernel-level strings.
+- **← `lingtai.capabilities.vision`** (vision:21), **`lingtai.capabilities.web_search`** (web_search:14): both import `t` for i18n of tool descriptions/schemas.
 - **← `lingtai.services.vision.*`**, **`lingtai.services.websearch.*`**: capabilities use `t()` for user-facing strings.
 
 ## Composition

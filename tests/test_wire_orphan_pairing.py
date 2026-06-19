@@ -16,7 +16,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from lingtai.llm.openai.adapter import OpenAIChatSession
-from lingtai.kernel.llm.interface import ChatInterface
+from lingtai_kernel.llm.interface import ChatInterface
 
 
 _SYNTH_MARKER = "[synthesized placeholder"

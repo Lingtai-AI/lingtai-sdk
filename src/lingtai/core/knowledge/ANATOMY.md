@@ -11,26 +11,18 @@ the regular `read` tool.
 
 - `knowledge/__init__.py` — the capability implementation. `_parse_frontmatter`,
   `_scan`, `_build_catalog_yaml`, `_reconcile`, `get_description`, `get_schema`,
-  `make_handler`, and `setup` live here. `make_handler(agent)` is the stable
-  single-source-of-truth seam: `setup()` registers `make_handler(agent)` via
-  `add_tool`, and the SDK bundle bridge `lingtai.core.knowledge_bundle` hosts the
-  *same* factory's handler, so the bundle-hosted `knowledge` tool cannot drift
-  from the registered one.
+  and `setup` live here.
 - `knowledge/CONTRACT.md` — public behavior contract: tool surface, on-disk
   layout, prompt injection, knowledge/skill directionality, anchored claims,
   and verification matrix.
 
 ## Connections
 
-- `lingtai.core.registry` maps builtin capability name `knowledge` here. Former
+- `lingtai.capabilities` maps builtin capability name `knowledge` here. Former
   `library` and `codex` capability names are not registered.
 - `setup()` registers exactly one tool, `knowledge`, with a single `info`
   action. The historical `knowledge_limit` kwarg is accepted and ignored.
 - `_reconcile()` writes protected prompt section `knowledge`.
-- `lingtai.core.knowledge_bundle` (the wrapper-side SDK bundle bridge, stage 3G)
-  injects `make_handler(agent)` into the `lingtai_sdk.knowledge_tools` catalog
-  bundle host. Additive only — `setup()` remains the live registration path; the
-  bridge installs no guard and changes no dispatch.
 - `skills/` is the structurally isomorphic, physically separate sibling
   capability — it owns `<agent>/.library/{intrinsic,custom}/<name>/SKILL.md`,
   knowledge owns `<agent>/knowledge/<name>/KNOWLEDGE.md`. Two separate

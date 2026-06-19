@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from lingtai.kernel.base_agent import BaseAgent
+from lingtai_kernel.base_agent import BaseAgent
 
 
 def make_mock_service():

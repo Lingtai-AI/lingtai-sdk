@@ -18,8 +18,8 @@ LLM adapter layer — multi-provider support with adapter registry, base classes
 
 ## Connections
 
-- **Kernel types** — `__init__.py:3` imports `ChatSession`, `LLMResponse`, `ToolCall`, `FunctionSchema` from `lingtai.kernel.llm.base`; `ChatInterface` from `lingtai.kernel.llm.interface`.
-- **ABC chain** — `LLMAdapter` (`base.py:53`) → abstract `create_chat`, `generate`, `make_tool_result_message`, `is_quota_error`. `LLMService` (`service.py:98`) extends `lingtai.kernel.llm.service.LLMService` ABC.
+- **Kernel types** — `__init__.py:3` imports `ChatSession`, `LLMResponse`, `ToolCall`, `FunctionSchema` from `lingtai_kernel.llm.base`; `ChatInterface` from `lingtai_kernel.llm.interface`.
+- **ABC chain** — `LLMAdapter` (`base.py:53`) → abstract `create_chat`, `generate`, `make_tool_result_message`, `is_quota_error`. `LLMService` (`service.py:97`) extends `lingtai_kernel.llm.service.LLMService` ABC.
 - **Adapter registration** — `_register.py` registers 7 dedicated factories + 6 generic-routed providers (`grok`, `qwen`, `glm`, `zhipu`, `kimi`, `mimo`) via dedicated or `_custom` factories, plus the `claude-agent-sdk` / `claude_agent_sdk` aliases via `_claude_agent_sdk` (which drops `api_key`/`base_url` since the SDK uses CLI-login auth).
 - **Interface converters** — imported by adapter session modules (e.g. `openai.adapter` imports `to_openai`, `to_responses_input` from `interface_converters.py:120`).
 - **Rate gating** — `LLMAdapter._setup_gate(max_rpm)` creates `APICallGate`; `_wrap_with_gate()` returns `_GatedSession` proxy for sessions.
@@ -27,22 +27,22 @@ LLM adapter layer — multi-provider support with adapter registry, base classes
 ## Composition
 
 - **Factory pattern** — `LLMService._adapter_registry` (class-level dict) maps provider name → `Callable[..., LLMAdapter]`. Each factory receives `(model, defaults, **kw)` and lazy-imports the adapter module.
-- **Adapter caching** — `LLMService._adapters` keyed by `(provider, base_url)` tuple (`service.py:149`). Double-checked locking via `_adapter_lock` (`service.py:150`).
-- **Session tracking** — `LLMService._sessions` dict maps `st_<12-hex>` session IDs to `ChatSession` instances (`service.py:152`). Untracked sessions get `session_id=""`.
+- **Adapter caching** — `LLMService._adapters` keyed by `(provider, base_url)` tuple (`service.py:141`). Double-checked locking via `_adapter_lock` (`service.py:142`).
+- **Session tracking** — `LLMService._sessions` dict maps `st_<12-hex>` session IDs to `ChatSession` instances (`service.py:144`). Untracked sessions get `session_id=""`.
 - **Gated sessions** — `_GatedSession` (`base.py:19`) proxies `send()` and `send_stream()` through `APICallGate.submit()`. Attribute writes land on the proxy; reads fall through to inner session via `__getattr__`.
-- **Codex factory** — `_register.py:61` builds `CodexOpenAIAdapter`, forwards the resolved agent `init.json` path as `agent_init_path` for per-agent prompt-cache-key hashing, and monkey-patches `create_chat` and `generate` to refresh OAuth tokens before each call via `CodexTokenManager.get_access_token()`.
+- **Codex factory** — `_register.py:54` builds `CodexOpenAIAdapter`, monkey-patches `create_chat` and `generate` to refresh OAuth tokens before each call via `CodexTokenManager.get_access_token()`.
 
 ## State
 
 - **Class-level** — `LLMService._adapter_registry` (shared across all instances); `LLMAdapter._gate` (per-adapter instance).
 - **Instance-level** — `LLMService._adapters` cache; `LLMService._sessions` registry; `APICallGate._timestamps` deque for RPM window.
-- **Provider defaults** — `LLMService._provider_defaults` dict injected at construction (`service.py:148`). Drives model, base_url, max_rpm, api_compat, OpenAI Responses `compact_threshold`, and Codex-only `agent_init_path` settings. Build it from `manifest.llm` via `build_provider_defaults_from_manifest_llm()` (`service.py:67`) — opt-in safelists ensure adapter-consulted fields propagate: `_PROVIDER_DEFAULTS_PASS_THROUGH_KEYS` skips `None` values such as `api_compat`, while `_PROVIDER_DEFAULTS_PRESERVE_NONE_KEYS` preserves explicit `None` for settings like `compact_threshold` where `null` means “disable”. Both `lingtai_cli.host.build_agent` and `agent.py:_setup_from_init` use this helper to stay in sync.
-- **Key resolution** — `LLMService._key_resolver` callable (`service.py:147`); defaults to `os.environ.get(f"{PROVIDER}_API_KEY")`.
+- **Provider defaults** — `LLMService._provider_defaults` dict injected at construction (`service.py:140`). Drives model, base_url, max_rpm, api_compat, and OpenAI Responses `compact_threshold` settings. Build it from `manifest.llm` via `build_provider_defaults_from_manifest_llm()` (`service.py:66`) — opt-in safelists ensure adapter-consulted fields propagate: `_PROVIDER_DEFAULTS_PASS_THROUGH_KEYS` skips `None` values such as `api_compat`, while `_PROVIDER_DEFAULTS_PRESERVE_NONE_KEYS` preserves explicit `None` for settings like `compact_threshold` where `null` means “disable”. Both `cli.py:_load_init` and `agent.py:_setup_from_init` use this helper to stay in sync.
+- **Key resolution** — `LLMService._key_resolver` callable (`service.py:94`); defaults to `os.environ.get(f"{PROVIDER}_API_KEY")`.
 
 ## Notes
 
 - **Abstract methods** — `LLMAdapter` requires: `create_chat()` (line 86), `generate()` (line 119), `make_tool_result_message()` (line 136), `is_quota_error()` (line 148).
-- **Tool-call ID dual system** — Provider-issued wire IDs (e.g. Anthropic `tool_use_id`, OpenAI `tool_call_id`) flow through `tool_call_id` kwarg. LingTai issues its own `_tool_call_id` (`service.py:36`: `tc_<unix>_<4-hex>`) stamped onto every result dict for agent-level correlation.
+- **Tool-call ID dual system** — Provider-issued wire IDs (e.g. Anthropic `tool_use_id`, OpenAI `tool_call_id`) flow through `tool_call_id` kwarg. LingTai issues its own `_tool_call_id` (`service.py:35`: `tc_<unix>_<4-hex>`) stamped onto every result dict for agent-level correlation.
 - **Interface converters** — Four bidirectional pairs:
   - `to_anthropic`/`from_anthropic` — Anthropic Messages format (system excluded, ThinkingBlock with signature round-trip)
   - `to_openai` — Chat Completions format (tool results as `role=tool`, ThinkingBlocks emit as `reasoning_content` for DeepSeek and MiMo thinking-mode round-trip; other OpenAI-compat providers ignore the field). One-way only — OpenAI history rehydration goes through `content_block_from_dict` on the canonical interface, not a reverse converter.

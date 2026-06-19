@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lingtai.core.vision import VisionManager, setup
+from lingtai.capabilities.vision import VisionManager, setup
 from lingtai.services.vision import VisionService, create_vision_service
 
 
@@ -106,7 +106,7 @@ def test_vision_empty_response_is_error(tmp_path):
 
 def test_vision_setup_with_provider_and_key(tmp_path):
     """setup() should create a VisionService from provider + api_key."""
-    with patch("lingtai.core.vision.create_vision_service") as mock_factory:
+    with patch("lingtai.capabilities.vision.create_vision_service") as mock_factory:
         mock_svc = MagicMock(spec=VisionService)
         mock_factory.return_value = mock_svc
 
@@ -120,7 +120,7 @@ def test_vision_setup_with_provider_and_key(tmp_path):
 def test_vision_setup_resolves_api_key_env(tmp_path, monkeypatch):
     """setup() should resolve api_key_env before constructing provider services."""
     monkeypatch.setenv("VISION_TEST_API_KEY", "sk-from-env")
-    with patch("lingtai.core.vision.create_vision_service") as mock_factory:
+    with patch("lingtai.capabilities.vision.create_vision_service") as mock_factory:
         mock_svc = MagicMock(spec=VisionService)
         mock_factory.return_value = mock_svc
 
@@ -135,7 +135,7 @@ def test_vision_setup_resolves_api_key_env(tmp_path, monkeypatch):
 
 def test_vision_setup_with_codex_provider_without_api_key(tmp_path):
     """Codex vision uses ChatGPT OAuth, so setup should not require api_key."""
-    with patch("lingtai.core.vision.create_vision_service") as mock_factory:
+    with patch("lingtai.capabilities.vision.create_vision_service") as mock_factory:
         mock_svc = MagicMock(spec=VisionService)
         mock_factory.return_value = mock_svc
 
@@ -386,7 +386,7 @@ def test_minimax_vision_setup_filters_inherited_api_compat(tmp_path):
     api_compat, so setup must filter provider-specific kwargs before factory
     construction.
     """
-    with patch("lingtai.core.vision.create_vision_service") as mock_factory:
+    with patch("lingtai.capabilities.vision.create_vision_service") as mock_factory:
         mock_svc = MagicMock(spec=VisionService)
         mock_factory.return_value = mock_svc
 

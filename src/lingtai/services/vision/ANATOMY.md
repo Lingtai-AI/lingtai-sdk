@@ -24,7 +24,7 @@ Provider-specific image understanding — standalone services that own their own
 - **Factory** — `create_vision_service(provider, api_key=...)` at `__init__.py:63` dispatches by name with lazy imports. Supported: `anthropic`, `openai`, `gemini`, `minimax`, `zhipu`, `mimo`, `codex`, `local`.
 - **MCP dependency** — `minimax.py` and `zhipu.py` import `lingtai.services.mcp.MCPClient` for subprocess-based tool calls.
 - **External SDKs** — `anthropic` (Anthropic SDK), `openai` (OpenAI SDK; OpenAI/MiMo/Codex), `google.genai` (Gemini), `mlx_vlm` (local).
-- **Logging** — MCP providers use `lingtai.kernel.logging.get_logger`.
+- **Logging** — MCP providers use `lingtai_kernel.logging.get_logger`.
 
 ## Composition
 

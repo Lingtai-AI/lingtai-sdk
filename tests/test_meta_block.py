@@ -4,14 +4,14 @@ from __future__ import annotations
 import re
 from types import SimpleNamespace
 
-from lingtai.kernel.meta_block import (
+from lingtai_kernel.meta_block import (
     attach_active_notifications,
     build_meta,
     clear_active_notification_holder,
     render_meta,
     stamp_meta,
 )
-from lingtai.kernel.llm.interface import ToolResultBlock
+from lingtai_kernel.llm.interface import ToolResultBlock
 
 
 def _fake_agent(*, time_awareness: bool = True, timezone_awareness: bool = True):
@@ -406,7 +406,7 @@ def _write_email_notif(tmp_path):
 
 
 def test_attach_active_notifications_moves_to_latest_and_clears_prior(tmp_path):
-    from lingtai.kernel.notifications import notification_fingerprint
+    from lingtai_kernel.notifications import notification_fingerprint
 
     _write_email_notif(tmp_path)
     agent = _notif_agent(tmp_path)
@@ -676,7 +676,7 @@ def _write_post_molt_notif(tmp_path):
 
 def test_attach_active_notifications_can_stamp_post_molt_after_molt_batch(tmp_path):
     """Post-molt is not globally idle-only; later ACTIVE batches may consume it."""
-    from lingtai.kernel.notifications import notification_fingerprint
+    from lingtai_kernel.notifications import notification_fingerprint
 
     _write_post_molt_notif(tmp_path)
     agent = _notif_agent(tmp_path)
@@ -691,7 +691,7 @@ def test_attach_active_notifications_can_stamp_post_molt_after_molt_batch(tmp_pa
 
 def test_attach_active_notifications_stamps_post_molt_with_other_channels(tmp_path):
     """Mixed ordinary channels and post-molt stamp together on non-molt batches."""
-    from lingtai.kernel.notifications import notification_fingerprint
+    from lingtai_kernel.notifications import notification_fingerprint
 
     _write_email_notif(tmp_path)
     _write_post_molt_notif(tmp_path)

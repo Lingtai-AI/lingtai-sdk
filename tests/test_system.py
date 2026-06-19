@@ -7,15 +7,15 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lingtai.kernel.base_agent import BaseAgent
-from lingtai.kernel.builtin_tools import BUILTIN_TOOL_NAMES, get_builtin_tool_module
+from lingtai_kernel.base_agent import BaseAgent
+from lingtai_kernel.intrinsics import ALL_INTRINSICS
 
 
 @pytest.fixture(autouse=True)
 def _stub_preset_connectivity(monkeypatch):
     """Auto-mock network probes in test_system.py so _presets tests don't
     actually open sockets. Returns a fixed 42ms latency."""
-    from lingtai.kernel import preset_connectivity
+    from lingtai_kernel import preset_connectivity
     monkeypatch.setattr(preset_connectivity, "_probe_host",
                         lambda host, port, timeout: 42)
     yield
@@ -35,8 +35,10 @@ def make_mock_service():
 
 
 def test_system_in_all_intrinsics():
-    assert "system" in BUILTIN_TOOL_NAMES
-    mod = get_builtin_tool_module("system")
+    assert "system" in ALL_INTRINSICS
+    info = ALL_INTRINSICS["system"]
+    assert "module" in info
+    mod = info["module"]
     assert hasattr(mod, "get_schema")
     assert hasattr(mod, "get_description")
     assert hasattr(mod, "handle")
@@ -341,7 +343,7 @@ def test_preset_ref_in_normalizes_tilde_and_absolute(tmp_path, monkeypatch):
     path as the same preset, in both directions — otherwise the
     allowed-gate refuses legitimate swaps when path forms diverge."""
     from pathlib import Path
-    from lingtai.core.system import _preset_ref_in
+    from lingtai_kernel.intrinsics.system import _preset_ref_in
     # Path.expanduser() reads $HOME — point it at a tempdir we can resolve.
     home = tmp_path / "home"
     home.mkdir()
@@ -653,7 +655,7 @@ def test_refresh_revert_preset_when_no_preset_configured_errors(tmp_path, monkey
     init.json directly, finds no manifest.preset.default, and returns
     the error before any activation path runs."""
     # Build an agent without a preset block
-    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai_kernel.base_agent import BaseAgent
     from unittest.mock import MagicMock
     import json
     svc = MagicMock()
@@ -802,7 +804,7 @@ def test_presets_action_marks_unreachable_when_probe_fails(tmp_path, monkeypatch
         },
     }))
     monkeypatch.setenv("BROKEN_KEY", "sk-test")
-    from lingtai.kernel import preset_connectivity
+    from lingtai_kernel import preset_connectivity
     # Override the autouse fixture's stub for this test
     monkeypatch.setattr(preset_connectivity, "_probe_host",
                         lambda host, port, timeout: (_ for _ in ()).throw(OSError("DNS fail")))
@@ -823,7 +825,7 @@ def test_presets_action_marks_unreachable_when_probe_fails(tmp_path, monkeypatch
 
 def test_cpr_propagates_launch_failure_instead_of_resuscitated(tmp_path):
     """A failed CPR launch must not be reported as resuscitated."""
-    from lingtai.core.system.karma import _cpr
+    from lingtai_kernel.intrinsics.system.karma import _cpr
 
     target = tmp_path / "target"
     target.mkdir()

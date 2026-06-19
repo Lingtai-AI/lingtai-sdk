@@ -15,7 +15,7 @@ from lingtai.agent import Agent
 from lingtai.core.daemon import get_schema
 from lingtai.core.daemon.claude_interactive import ClaudeInteractiveError, run_claude_interactive
 from lingtai.core.daemon.run_dir import DaemonRunDir
-from lingtai.kernel.config import AgentConfig
+from lingtai_kernel.config import AgentConfig
 
 
 def _make_agent(tmp_path: Path) -> Agent:

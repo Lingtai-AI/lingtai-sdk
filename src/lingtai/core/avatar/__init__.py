@@ -28,6 +28,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -244,7 +245,7 @@ class AvatarManager:
                 }
 
         # Check if this peer already exists and is live
-        from lingtai.kernel.handshake import is_alive
+        from lingtai_kernel.handshake import is_alive
         for record in self._read_ledger():
             if record.get("name") == peer_name:
                 wd = record.get("working_dir", "")
@@ -723,7 +724,7 @@ class AvatarManager:
         against the *parent agent's parent directory* since avatars live as
         siblings in .lingtai/. Returns absolute Paths of live descendant dirs.
         """
-        from lingtai.kernel.handshake import resolve_address
+        from lingtai_kernel.handshake import resolve_address
 
         visited: set[str] = {str(Path(root))}
         queue: list[Path] = [Path(root)]
@@ -782,54 +783,10 @@ class AvatarManager:
         return distributed
 
 
-def make_manager(agent: "Agent") -> AvatarManager:
-    """Build the :class:`AvatarManager` bound to *agent*.
-
-    Single source of truth for avatar-manager construction: both ``setup()`` (the
-    normal capability-registration path) and the SDK avatar bundle bridge
-    (``lingtai.core.avatar_bundle``) build the manager through this factory, so the
-    bundle-hosted ``avatar_spawn`` / ``avatar_rules`` tools run against a manager
-    constructed identically to the one ``setup()`` registers — same parent
-    ``agent`` reference, same ``agent._working_dir`` network root. Constructing the
-    manager spawns no process and writes no file — only an explicit
-    ``handle_spawn`` / ``handle_rules`` call does.
-    """
-    return AvatarManager(agent)
-
-
-def make_spawn_handler(agent: "Agent"):
-    """Build the ``avatar_spawn`` tool handler bound to *agent*.
-
-    Returns the ``handle_spawn`` method of a freshly-built :class:`AvatarManager`
-    (see :func:`make_manager`). The handler is the same ``mgr.handle_spawn``
-    callable ``setup()`` registers, so the SDK bundle bridge and the live
-    capability path share one behavior. Use :func:`make_manager` directly when the
-    manager object itself is needed (as ``setup()`` does, to register both tools
-    from one manager).
-    """
-    return make_manager(agent).handle_spawn
-
-
-def make_rules_handler(agent: "Agent"):
-    """Build the ``avatar_rules`` tool handler bound to *agent*.
-
-    Returns the ``handle_rules`` method of a freshly-built :class:`AvatarManager`
-    (see :func:`make_manager`). The handler is the same ``mgr.handle_rules``
-    callable ``setup()`` registers, so the SDK bundle bridge and the live
-    capability path share one behavior.
-    """
-    return make_manager(agent).handle_rules
-
-
 def setup(agent: "Agent", **kwargs) -> AvatarManager:
-    """Set up the avatar capability on an agent.
-
-    Builds the manager via :func:`make_manager` (the single source of truth shared
-    with the SDK avatar bundle bridge) and registers both public tools —
-    ``avatar_spawn`` and ``avatar_rules`` — from that one manager.
-    """
+    """Set up the avatar capability on an agent."""
     lang = agent._config.language
-    mgr = make_manager(agent)
+    mgr = AvatarManager(agent)
     agent.add_tool(
         "avatar_spawn",
         schema=get_schema(lang),

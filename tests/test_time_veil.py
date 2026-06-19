@@ -1,7 +1,7 @@
 """Tests for time_veil helpers."""
 from types import SimpleNamespace
 
-from lingtai.kernel.time_veil import now_iso, veil, scrub_time_fields, TIME_KEYS
+from lingtai_kernel.time_veil import now_iso, veil, scrub_time_fields, TIME_KEYS
 
 
 def _mk_agent(time_awareness: bool):

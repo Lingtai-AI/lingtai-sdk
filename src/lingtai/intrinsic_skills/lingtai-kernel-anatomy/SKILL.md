@@ -4,7 +4,7 @@ description: >
   The canonical convention for `ANATOMY.md` files in the LingTai kernel — what
   an anatomy is, why it exists, how to read it, how to write one, and how to
   maintain it across refactors. The kernel itself is mapped by a tree of
-  `ANATOMY.md` files rooted at `src/lingtai/kernel/ANATOMY.md`. This skill is
+  `ANATOMY.md` files rooted at `src/lingtai_kernel/ANATOMY.md`. This skill is
   the convention; those files are the content.
 
   Reach for this skill when:
@@ -18,8 +18,8 @@ description: >
 
   How to use:
     1. Read this file once — you are learning the convention.
-    2. Open `src/lingtai/kernel/ANATOMY.md` — that is the kernel-root anatomy
-       (which itself is just-an-anatomy of `src/lingtai/kernel/`). Use its
+    2. Open `src/lingtai_kernel/ANATOMY.md` — that is the kernel-root anatomy
+       (which itself is just-an-anatomy of `src/lingtai_kernel/`). Use its
        Components and Composition sections to find the subfolder whose
        anatomy holds your question.
     3. Descend. At each layer the anatomy points either further down the
@@ -72,7 +72,7 @@ You are an agent. Reading 200 lines of code is one tool call; greping a symbol g
 | Structural | Descend the anatomy tree |
 | Enumeration | grep |
 
-The descent: start at `src/lingtai/kernel/ANATOMY.md`, read its Components and Composition, pick the subfolder whose territory contains your question, open its anatomy, repeat. At each layer the anatomy will tell you whether to descend further or read the cited code directly.
+The descent: start at `src/lingtai_kernel/ANATOMY.md`, read its Components and Composition, pick the subfolder whose territory contains your question, open its anatomy, repeat. At each layer the anatomy will tell you whether to descend further or read the cited code directly.
 
 ## Writing checklist
 
@@ -81,7 +81,7 @@ When you write or update an `ANATOMY.md`, every one of these must be true before
 - **Every named symbol in Components has a `file:line` citation.** "loads snapshots (`_load_snapshot_interface`)" is not enough; "loads snapshots (`consultation.py:147`)" is. Without citations, the next agent grepping for the symbol gains nothing from the anatomy.
 - **Citations are line ranges, not paragraphs.** Prefer `file.py:123-156` over a vague "see file.py". Prefer single-line citations only for one-line landmarks (constants, single-line helpers).
 - **Every citation has been verified.** Open the cited line. Confirm it still says what the anatomy claims. Citations rot fastest after refactors.
-- **Cross-references between anatomies use repo-root-relative paths.** `src/lingtai/core/soul/ANATOMY.md`, not `./ANATOMY.md` or `soul/ANATOMY.md`. The root is the only stable reference frame.
+- **Cross-references between anatomies use kernel-root-relative paths.** `src/lingtai_kernel/intrinsics/soul/ANATOMY.md`, not `./ANATOMY.md` or `intrinsics/soul/ANATOMY.md`. The root is the only stable reference frame.
 - **Cross-references are sparse and one-directional.** Cite parent and structural neighbors only — do not enumerate downstream callers (that's a grep question).
 - **No leaf stubs.** Empty placeholder anatomies are clutter. A missing `ANATOMY.md` is an honest signal that the folder hasn't been mapped yet.
 - **No paraphrase.** Anatomy adds shape and connections, not summary. If the code's good naming already says what you're about to write, don't write it.
@@ -126,7 +126,7 @@ The mechanical rule:
 
 Concretely, if a commit moves `intrinsics/soul.py` → `intrinsics/soul/{config,consultation,inquiry}.py`, then before completing the commit:
 
-1. `grep -rn "intrinsics/soul\.py:" src/lingtai/kernel/**/ANATOMY.md src/lingtai/kernel/ANATOMY.md`
+1. `grep -rn "intrinsics/soul\.py:" src/lingtai_kernel/**/ANATOMY.md src/lingtai_kernel/ANATOMY.md`
 2. Update every match to the new file location and verified line number.
 3. Repeat for any other file the refactor moved.
 
@@ -135,7 +135,7 @@ For cheap mechanical checking, scan anatomy citations before commit:
 ```bash
 python - <<'PY'
 import pathlib, re
-root = pathlib.Path("src/lingtai/kernel")
+root = pathlib.Path("src/lingtai_kernel")
 for anatomy in root.rglob("ANATOMY.md"):
     text = anatomy.read_text()
     for rel, line in re.findall(r"`?([A-Za-z0-9_./-]+\.py):(\d+)", text):
@@ -155,7 +155,7 @@ This is the discipline `discussions/soul-flow-tool-refusal-patch.md` and the sou
 
 ## The kernel-root anatomy is just an anatomy
 
-The kernel-root `ANATOMY.md` (at `src/lingtai/kernel/ANATOMY.md`) follows the same 6-section template as every other anatomy. It happens to enumerate every direct child of the kernel root in its Components and Composition sections — that's a property of being at the top of the tree, not a special role. There are no "doorways" or "entrances": there is the convention (this skill) and there is the tree of anatomies. The kernel-root anatomy is the top of the tree. That is all.
+The kernel-root `ANATOMY.md` (at `src/lingtai_kernel/ANATOMY.md`) follows the same 6-section template as every other anatomy. It happens to enumerate every direct child of the kernel root in its Components and Composition sections — that's a property of being at the top of the tree, not a special role. There are no "doorways" or "entrances": there is the convention (this skill) and there is the tree of anatomies. The kernel-root anatomy is the top of the tree. That is all.
 
 ## When the convention exposes structural pressure
 

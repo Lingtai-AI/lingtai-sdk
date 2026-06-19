@@ -42,7 +42,7 @@ def _make_mock_response():
 
 
 def _send_request(agent, content="do something"):
-    from lingtai.kernel.message import _make_message, MSG_REQUEST
+    from lingtai_kernel.message import _make_message, MSG_REQUEST
     msg = _make_message(MSG_REQUEST, sender="test", content=content)
     agent._handle_request(msg)
 
@@ -120,8 +120,8 @@ class TestNotificationPersistenceAgentMolt:
             mock_interface = _setup_mock_chat(agent)
 
             # Build a fake ToolCallBlock for the molt
-            from lingtai.core.psyche._molt import _context_molt
-            from lingtai.kernel.llm.interface import ToolCallBlock
+            from lingtai_kernel.intrinsics.psyche._molt import _context_molt
+            from lingtai_kernel.llm.interface import ToolCallBlock
             tc_id = "toolu_test_123"
             tc_block = ToolCallBlock(
                 id=tc_id, name="psyche",
@@ -179,8 +179,8 @@ class TestNotificationPersistenceAgentMolt:
             # Set up mock chat
             mock_interface = _setup_mock_chat(agent)
 
-            from lingtai.core.psyche._molt import _context_molt
-            from lingtai.kernel.llm.interface import ToolCallBlock
+            from lingtai_kernel.intrinsics.psyche._molt import _context_molt
+            from lingtai_kernel.llm.interface import ToolCallBlock
 
             tc_id = "toolu_test_456"
             tc_block = ToolCallBlock(
@@ -223,7 +223,7 @@ class TestNotificationPersistenceForceWipe:
             _setup_mock_chat(agent)
 
             # Perform system-initiated force molt
-            from lingtai.core.psyche._molt import context_forget
+            from lingtai_kernel.intrinsics.psyche._molt import context_forget
             result = context_forget(agent, source="warning_ladder")
 
             # Force molt should succeed
@@ -255,7 +255,7 @@ class TestNotificationPersistenceForceWipe:
 
             _setup_mock_chat(agent)
 
-            from lingtai.core.psyche._molt import context_forget
+            from lingtai_kernel.intrinsics.psyche._molt import context_forget
             result = context_forget(agent, source="aed", attempts=3)
 
             assert result.get("status") == "ok"
@@ -297,8 +297,8 @@ class TestNotificationTrackingStateAfterMolt:
             # Set up mock chat
             mock_interface = _setup_mock_chat(agent)
 
-            from lingtai.core.psyche._molt import _context_molt
-            from lingtai.kernel.llm.interface import ToolCallBlock
+            from lingtai_kernel.intrinsics.psyche._molt import _context_molt
+            from lingtai_kernel.llm.interface import ToolCallBlock
 
             tc_id = "toolu_test_789"
             tc_block = ToolCallBlock(
@@ -361,7 +361,7 @@ class TestNotificationTrackingStateAfterMolt:
             # Set up mock chat
             _setup_mock_chat(agent)
 
-            from lingtai.core.psyche._molt import context_forget
+            from lingtai_kernel.intrinsics.psyche._molt import context_forget
             result = context_forget(agent, source="warning_ladder")
 
             assert result.get("status") == "ok"

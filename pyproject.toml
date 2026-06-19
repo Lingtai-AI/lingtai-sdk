@@ -40,9 +40,6 @@ dependencies = [
 
 [project.scripts]
 lingtai-agent = "lingtai.cli:main"
-# Thin product-assembly / host package. Same CLI surface as lingtai-agent;
-# lingtai.cli is a compatibility shim re-exporting lingtai_cli.host.
-lingtai-cli = "lingtai_cli.cli:main"
 lingtai-imap = "lingtai.mcp_servers.imap.__main__:main"
 lingtai-telegram = "lingtai.mcp_servers.telegram.__main__:main"
 lingtai-feishu = "lingtai.mcp_servers.feishu.__main__:main"
@@ -53,19 +50,25 @@ lingtai-cloud-mail = "lingtai.mcp_servers.cloud_mail.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["lingtai*", "lingtai_cli*"]
+include = ["lingtai*", "lingtai_kernel*"]
+exclude = [
+    "lingtai_imap*",
+    "lingtai_telegram*",
+    "lingtai_feishu*",
+    "lingtai_wechat*",
+    "lingtai_whatsapp*",
+    "lingtai.addons*",
+]
 
 [tool.setuptools.package-data]
-"lingtai.kernel" = ["i18n/*.json"]
-# SDK assets: committed, read-only skill-shaped asset trees reachable via
-# importlib.resources (see src/lingtai_sdk/assets/). Globbed so new asset files
-# under a skill directory are packaged without editing this list.
-lingtai_sdk = ["assets/**/*"]
+lingtai_kernel = ["i18n/*.json"]
 lingtai = [
     "i18n/*.json",
     "mcp_catalog.json",
     "core/*/*.json",
     "core/*/manual/**/*",
+    "capabilities/*/*.json",
+    "capabilities/*/manual/**/*",
     "intrinsic_skills/*/**/*",
     "prompts/*.md",
     # Rust sidecar binary bundled at build time by setup.py — present in

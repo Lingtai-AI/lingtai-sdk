@@ -19,9 +19,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from lingtai.core import system as sys_intrinsic
-from lingtai.kernel.llm.interface import ChatInterface
-from lingtai.kernel.tc_inbox import TCInbox
+from lingtai_kernel.intrinsics import system as sys_intrinsic
+from lingtai_kernel.llm.interface import ChatInterface
+from lingtai_kernel.tc_inbox import TCInbox
 
 
 class _ProductionLikeChatSession:

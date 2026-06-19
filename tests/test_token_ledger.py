@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from lingtai.kernel.token_ledger import append_token_entry, sum_token_ledger
+from lingtai_kernel.token_ledger import append_token_entry, sum_token_ledger
 
 
 def test_sum_empty_ledger(tmp_path):

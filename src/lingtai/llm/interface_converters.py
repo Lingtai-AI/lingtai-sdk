@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from lingtai.kernel.llm.interface import (
+from lingtai_kernel.llm.interface import (
     ContentBlock,
     ChatInterface,
     TextBlock,

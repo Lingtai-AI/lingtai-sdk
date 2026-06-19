@@ -148,7 +148,7 @@ skill -> private knowledge.
 
 | Claim | Source | Test |
 |---|---|---|
-| `knowledge` is the only private durable memory capability in the builtin registry | `src/lingtai/core/registry.py` | `tests/test_check_caps.py::test_get_all_providers_includes_expected_capabilities` |
+| `knowledge` is the only private durable memory capability in the builtin registry | `src/lingtai/capabilities/__init__.py` | `tests/test_check_caps.py::test_get_all_providers_includes_expected_capabilities` |
 | `knowledge` setup registers only the `knowledge` tool | `src/lingtai/core/knowledge/__init__.py` | `tests/test_knowledge.py::test_knowledge_setup_registers_only_knowledge_tool` |
 | Legacy `knowledge/knowledge.json` and `codex/codex.json` entries migrate once into `KNOWLEDGE.md` folders; `supplementary` becomes `references/supplementary.md` | `src/lingtai/core/knowledge/__init__.py` | `tests/test_knowledge.py::test_legacy_knowledge_json_migrates_to_knowledge_md`, `tests/test_knowledge.py::test_legacy_codex_json_migrates_to_knowledge_md` |
 | Manager-style lookup is exact: `knowledge` resolves and former names do not | `src/lingtai/agent.py` | `tests/test_knowledge.py::test_former_alias_capabilities_do_not_register_knowledge` |

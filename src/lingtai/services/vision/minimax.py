@@ -5,7 +5,7 @@ import base64
 
 from . import VisionService, _read_image
 
-from lingtai.kernel.logging import get_logger
+from lingtai_kernel.logging import get_logger
 
 logger = get_logger()
 

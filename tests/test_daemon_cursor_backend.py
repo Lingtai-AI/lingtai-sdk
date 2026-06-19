@@ -14,7 +14,7 @@ import threading
 from concurrent.futures import Future
 from unittest.mock import MagicMock, patch
 
-from lingtai.kernel.config import AgentConfig
+from lingtai_kernel.config import AgentConfig
 from lingtai.core.daemon import DaemonManager
 from lingtai.core.daemon.run_dir import DaemonRunDir
 

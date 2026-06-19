@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 from ...i18n import t
 
 if TYPE_CHECKING:
-    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai_kernel.base_agent import BaseAgent
 
 PROVIDERS = {"providers": [], "default": "builtin"}
 
@@ -32,14 +32,9 @@ def get_schema(lang: str = "en") -> dict:
 
 
 
-def make_handler(agent: "BaseAgent"):
-    """Build the ``read`` tool handler bound to *agent*.
-
-    Single source of truth for the read behavior: both ``setup()`` (the normal
-    capability-registration path) and the SDK file-tool bundle bridge
-    (``lingtai.core.file_bundle``) wire this same closure, so the bundle-hosted
-    tool runs byte-identical logic to the registered tool.
-    """
+def setup(agent: "BaseAgent") -> None:
+    """Set up the read capability on an agent."""
+    lang = agent._config.language
 
     def handle_read(args: dict) -> dict:
         path = args.get("file_path", "")
@@ -61,15 +56,4 @@ def make_handler(agent: "BaseAgent"):
         numbered = "".join(f"{start + i + 1}\t{line}" for i, line in enumerate(selected))
         return {"content": numbered, "total_lines": len(lines), "lines_shown": len(selected)}
 
-    return handle_read
-
-
-def setup(agent: "BaseAgent") -> None:
-    """Set up the read capability on an agent."""
-    lang = agent._config.language
-    agent.add_tool(
-        "read",
-        schema=get_schema(lang),
-        handler=make_handler(agent),
-        description=get_description(lang),
-    )
+    agent.add_tool("read", schema=get_schema(lang), handler=handle_read, description=get_description(lang))

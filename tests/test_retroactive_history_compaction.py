@@ -19,13 +19,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lingtai.kernel.llm.interface import (
+from lingtai_kernel.llm.interface import (
     ChatInterface,
     TextBlock,
     ToolCallBlock,
     ToolResultBlock,
 )
-from lingtai.kernel.tool_result_artifacts import (
+from lingtai_kernel.tool_result_artifacts import (
     PREVENTIVE_MAX_CHARS,
     RETROACTIVE_MAX_CHARS,
     compact_oversized_history,
@@ -42,7 +42,7 @@ def test_constants_match_spec():
 
 
 def test_is_spill_manifest_detects_dict_shape():
-    from lingtai.kernel.tool_result_artifacts import ARTIFACT_MARKER
+    from lingtai_kernel.tool_result_artifacts import ARTIFACT_MARKER
 
     # Preferred shape: explicit namespaced artifact marker.
     manifest_with_marker = {
@@ -329,7 +329,7 @@ def test_compact_oversized_history_preserves_synthesized_flag(tmp_path):
 
 def test_compact_history_before_retry_invokes_helper(tmp_path):
     """The turn-engine helper threads agent state into the kernel module."""
-    from lingtai.kernel.base_agent.turn import _compact_history_before_retry
+    from lingtai_kernel.base_agent.turn import _compact_history_before_retry
 
     big = "A" * (RETROACTIVE_MAX_CHARS * 2)
     iface = _build_interface_with_pair(tool_id="tc-aed", result_content=big)
@@ -369,7 +369,7 @@ def test_compact_history_before_retry_invokes_helper(tmp_path):
 def test_compact_history_before_retry_does_not_save_on_noop(tmp_path):
     """When nothing is compacted, _save_chat_history must NOT be called —
     we don't want to churn the chat-history ledger on every AED firing."""
-    from lingtai.kernel.base_agent.turn import _compact_history_before_retry
+    from lingtai_kernel.base_agent.turn import _compact_history_before_retry
 
     iface = _build_interface_with_pair(tool_id="tc-tiny", result_content="tiny")
     agent = MagicMock()
@@ -393,7 +393,7 @@ def test_compact_history_before_retry_does_not_save_on_noop(tmp_path):
 
 def test_compact_history_before_retry_safe_when_chat_is_none(tmp_path):
     """If session.chat is None (boot interrupted), the helper must noop."""
-    from lingtai.kernel.base_agent.turn import _compact_history_before_retry
+    from lingtai_kernel.base_agent.turn import _compact_history_before_retry
 
     agent = MagicMock()
     agent._working_dir = tmp_path
@@ -407,7 +407,7 @@ def test_compact_history_before_retry_safe_when_chat_is_none(tmp_path):
 def test_compact_history_before_retry_swallows_helper_exception(tmp_path):
     """Any exception from the helper must be logged but never re-raised —
     AED recovery must never crash the recovery loop."""
-    from lingtai.kernel.base_agent.turn import _compact_history_before_retry
+    from lingtai_kernel.base_agent.turn import _compact_history_before_retry
 
     agent = MagicMock()
     agent._working_dir = tmp_path
@@ -440,8 +440,8 @@ def _make_run_loop_agent_with_oversized_history(tmp_path, big_payload):
     from dataclasses import dataclass, field
     from types import SimpleNamespace
 
-    from lingtai.kernel.message import _make_message, MSG_REQUEST
-    from lingtai.kernel.state import AgentState
+    from lingtai_kernel.message import _make_message, MSG_REQUEST
+    from lingtai_kernel.state import AgentState
 
     iface = _build_interface_with_pair(tool_id="tc-aed-int", result_content=big_payload)
     # Add close_pending_tool_calls / has_pending_tool_calls to satisfy turn.py.
@@ -497,7 +497,7 @@ def test_aed_deterministic_retry_compacts_history_before_rebuild(tmp_path, monke
     """When AED's deterministic branch fires, the oversized tool result in
     history must be compacted to a manifest BEFORE _rebuild_session is
     called — so the rebuilt session sees the smaller wire."""
-    from lingtai.kernel.base_agent import turn
+    from lingtai_kernel.base_agent import turn
 
     big = "D" * (RETROACTIVE_MAX_CHARS * 2)
     agent, iface = _make_run_loop_agent_with_oversized_history(tmp_path, big)
@@ -527,7 +527,7 @@ def test_aed_deterministic_retry_compacts_history_before_rebuild(tmp_path, monke
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
     monkeypatch.setattr(turn.time, "sleep", lambda _seconds: None)
-    import lingtai.core.soul as soul_flow
+    import lingtai_kernel.intrinsics.soul.flow as soul_flow
     monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: None)
 
     turn._run_loop(agent)
@@ -558,7 +558,7 @@ def test_aed_deterministic_retry_compacts_history_before_rebuild(tmp_path, monke
 
 def test_aed_transient_retry_compacts_history_before_backoff(tmp_path, monkeypatch):
     """The transient AED branch must also fire retroactive compaction."""
-    from lingtai.kernel.base_agent import turn
+    from lingtai_kernel.base_agent import turn
 
     big = "T" * (RETROACTIVE_MAX_CHARS * 2)
     agent, iface = _make_run_loop_agent_with_oversized_history(tmp_path, big)
@@ -584,7 +584,7 @@ def test_aed_transient_retry_compacts_history_before_backoff(tmp_path, monkeypat
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
     monkeypatch.setattr(turn.time, "sleep", watched_sleep)
-    import lingtai.core.soul as soul_flow
+    import lingtai_kernel.intrinsics.soul.flow as soul_flow
     monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: None)
 
     turn._run_loop(agent)
@@ -602,9 +602,9 @@ def test_aed_transient_retry_compacts_history_before_backoff(tmp_path, monkeypat
 def test_executor_preventive_spill_still_works_through_refactor(tmp_path):
     """Smoke test: the existing preventive cap path via ToolExecutor is
     unchanged after moving the spill logic into tool_result_artifacts."""
-    from lingtai.kernel.llm.base import ToolCall
-    from lingtai.kernel.loop_guard import LoopGuard
-    from lingtai.kernel.tool_executor import ToolExecutor
+    from lingtai_kernel.llm.base import ToolCall
+    from lingtai_kernel.loop_guard import LoopGuard
+    from lingtai_kernel.tool_executor import ToolExecutor
 
     big = "P" * (PREVENTIVE_MAX_CHARS * 2)
     captured = MagicMock(side_effect=lambda name, result, **kw: {"name": name, "result": result})
@@ -629,7 +629,7 @@ def test_executor_preventive_spill_still_works_through_refactor(tmp_path):
 def test_manifest_carries_namespaced_artifact_marker(tmp_path):
     """Every freshly produced manifest stamps the namespaced marker so
     consumers don't have to rely on the structural quadruple."""
-    from lingtai.kernel.tool_result_artifacts import ARTIFACT_MARKER
+    from lingtai_kernel.tool_result_artifacts import ARTIFACT_MARKER
 
     big = "A" * 20_000
     out = spill_oversized_result(
@@ -671,12 +671,12 @@ def test_is_spill_manifest_refuses_arbitrary_business_dict():
     "too many tokens",
 ])
 def test_is_over_window_error_matches_provider_phrasing(phrase):
-    from lingtai.kernel.base_agent.turn import _is_over_window_error
+    from lingtai_kernel.base_agent.turn import _is_over_window_error
     assert _is_over_window_error(RuntimeError(phrase))
 
 
 def test_is_over_window_error_does_not_match_unrelated_errors():
-    from lingtai.kernel.base_agent.turn import _is_over_window_error
+    from lingtai_kernel.base_agent.turn import _is_over_window_error
     assert not _is_over_window_error(RuntimeError("connection reset"))
     assert not _is_over_window_error(RuntimeError("rate limit hit"))
     assert not _is_over_window_error(RuntimeError("auth failed"))
@@ -692,7 +692,7 @@ def test_aed_over_window_takes_deterministic_branch_not_transient(tmp_path, monk
     This test crucially asserts: no ``aed_transient_retry`` events are
     logged, and the ``aed_over_window_detected`` event is.
     """
-    from lingtai.kernel.base_agent import turn
+    from lingtai_kernel.base_agent import turn
 
     big = "OW" * (RETROACTIVE_MAX_CHARS)
     agent, iface = _make_run_loop_agent_with_oversized_history(tmp_path, big)
@@ -709,7 +709,7 @@ def test_aed_over_window_takes_deterministic_branch_not_transient(tmp_path, monk
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
     monkeypatch.setattr(turn.time, "sleep", lambda _seconds: None)
-    import lingtai.core.soul as soul_flow
+    import lingtai_kernel.intrinsics.soul.flow as soul_flow
     monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: None)
 
     turn._run_loop(agent)
@@ -740,7 +740,7 @@ def test_aed_over_window_compacts_before_rebuild_session(tmp_path, monkeypatch):
     """Over-window recovery: history must already be shrunk by the time
     _rebuild_session sees the interface, otherwise the rebuilt session
     will replay the same too-big wire."""
-    from lingtai.kernel.base_agent import turn
+    from lingtai_kernel.base_agent import turn
 
     big = "W" * (RETROACTIVE_MAX_CHARS * 3)
     agent, iface = _make_run_loop_agent_with_oversized_history(tmp_path, big)
@@ -762,7 +762,7 @@ def test_aed_over_window_compacts_before_rebuild_session(tmp_path, monkeypatch):
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
     monkeypatch.setattr(turn.time, "sleep", lambda _seconds: None)
-    import lingtai.core.soul as soul_flow
+    import lingtai_kernel.intrinsics.soul.flow as soul_flow
     monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: None)
 
     turn._run_loop(agent)
@@ -778,8 +778,8 @@ def test_worker_still_running_does_not_invoke_compaction(tmp_path, monkeypatch):
     therefore without firing the retroactive compaction helper.  The
     worker future may still be mutating the interface from another
     thread; compaction would race."""
-    from lingtai.kernel.base_agent import turn
-    from lingtai.kernel.llm_utils import WorkerStillRunningError
+    from lingtai_kernel.base_agent import turn
+    from lingtai_kernel.llm_utils import WorkerStillRunningError
 
     big = "S" * (RETROACTIVE_MAX_CHARS * 2)
     agent, iface = _make_run_loop_agent_with_oversized_history(tmp_path, big)
@@ -789,7 +789,7 @@ def test_worker_still_running_does_not_invoke_compaction(tmp_path, monkeypatch):
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
     monkeypatch.setattr(turn.time, "sleep", lambda _seconds: None)
-    import lingtai.core.soul as soul_flow
+    import lingtai_kernel.intrinsics.soul.flow as soul_flow
     monkeypatch.setattr(soul_flow, "_cancel_soul_timer",
                         lambda _a: _a._shutdown.set())
 

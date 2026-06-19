@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lingtai.core.soul import (
+from lingtai_kernel.intrinsics.soul import (
     _DIARY_CUE_TOKEN_CAP,
     _fit_interface_to_window,
     _list_snapshot_paths,
@@ -23,7 +23,7 @@ from lingtai.core.soul import (
     _run_consultation_batch,
     build_consultation_pair,
 )
-from lingtai.kernel.llm.interface import (
+from lingtai_kernel.llm.interface import (
     ChatInterface,
     TextBlock,
     ThinkingBlock,
@@ -348,7 +348,7 @@ class TestVerbatimCurrentChatForInsights:
         ])
 
         captured = {}
-        with patch("lingtai.core.soul.consultation._run_consultation") as mock_run:
+        with patch("lingtai_kernel.intrinsics.soul.consultation._run_consultation") as mock_run:
             def fake_run(_agent, passed_iface, source):
                 captured["iface"] = passed_iface
                 return {"source": source, "blocks": [TextBlock(text="ok")]}
@@ -378,7 +378,7 @@ class TestRunConsultationBatch:
     def test_empty_pool_runs_only_insights(self, tmp_path):
         agent = _FakeAgent(tmp_path)
         with patch(
-            "lingtai.core.soul.consultation._run_consultation"
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation"
         ) as mock_run:
             mock_run.return_value = {
                 "source": "insights",
@@ -398,7 +398,7 @@ class TestRunConsultationBatch:
             _write_snapshot(tmp_path, molt_count=i + 1, unix_ts=1700000000 + i)
 
         with patch(
-            "lingtai.core.soul.consultation._run_consultation"
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation"
         ) as mock_run:
             def fake_run(_agent, _iface, source):
                 return {"source": source, "blocks": [TextBlock(text=f"v from {source}")]}
@@ -420,7 +420,7 @@ class TestRunConsultationBatch:
             _write_snapshot(tmp_path, molt_count=i + 1, unix_ts=1700000000 + i)
 
         with patch(
-            "lingtai.core.soul.consultation._run_consultation"
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation"
         ) as mock_run:
             mock_run.return_value = {"source": "insights", "blocks": [TextBlock(text="v")]}
             voices = _run_consultation_batch(agent)
@@ -435,7 +435,7 @@ class TestRunConsultationBatch:
             _write_snapshot(tmp_path, molt_count=i + 1, unix_ts=1700000000 + i)
 
         with patch(
-            "lingtai.core.soul.consultation._run_consultation"
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation"
         ) as mock_run:
             # First call (insights) succeeds, the snapshot calls fail.
             def maybe_fail(_agent, _iface, source):
@@ -454,7 +454,7 @@ class TestRunConsultationBatch:
             _write_snapshot(tmp_path, molt_count=i + 1, unix_ts=1700000000 + i)
 
         with patch(
-            "lingtai.core.soul.consultation._run_consultation"
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation"
         ) as mock_run:
             def maybe_raise(_agent, _iface, source):
                 if source == "insights":
@@ -483,7 +483,7 @@ class TestRunConsultationRedirectLoop:
             f.write(json.dumps({"type": "diary", "text": text, "ts": 1_700_000_000}) + "\n")
 
     def test_consultation_redirects_tool_calls(self, tmp_path):
-        from lingtai.kernel.llm.base import LLMResponse, ToolCall
+        from lingtai_kernel.llm.base import LLMResponse, ToolCall
 
         agent = _FakeAgent(tmp_path)
         self._seed_diary(tmp_path)
@@ -532,8 +532,8 @@ class TestRunConsultationRedirectLoop:
         assert isinstance(sent[1][0], ToolResultBlock)
 
     def test_consultation_max_rounds_exhausted(self, tmp_path):
-        from lingtai.kernel.llm.base import LLMResponse, ToolCall
-        from lingtai.core.soul import _CONSULTATION_MAX_ROUNDS
+        from lingtai_kernel.llm.base import LLMResponse, ToolCall
+        from lingtai_kernel.intrinsics.soul import _CONSULTATION_MAX_ROUNDS
 
         agent = _FakeAgent(tmp_path)
         self._seed_diary(tmp_path)
@@ -582,7 +582,7 @@ class TestRunConsultationRedirectLoop:
     def test_consultation_spark_is_raw_diary(self, tmp_path):
         """The spark sent to session.send() is the raw diary cue, not a
         wrapped/localized version from _build_consultation_cue."""
-        from lingtai.kernel.llm.base import LLMResponse
+        from lingtai_kernel.llm.base import LLMResponse
 
         agent = _FakeAgent(tmp_path)
         self._seed_diary(tmp_path, text="MEANINGFUL DIARY TEXT")
@@ -614,7 +614,7 @@ class TestRunConsultationRedirectLoop:
         """Flow consultations resolve their system prompt through the soul
         voice profile, so soul(action='voice', set='custom') affects flow.
         """
-        from lingtai.kernel.llm.base import LLMResponse
+        from lingtai_kernel.llm.base import LLMResponse
 
         agent = _FakeAgent(tmp_path)
         agent._config.soul_voice = "custom"
@@ -699,7 +699,7 @@ class TestRenderCurrentDiary:
         self._write_events(tmp_path, records)
         result = _render_current_diary(agent)
         assert result
-        from lingtai.kernel.token_counter import count_tokens
+        from lingtai_kernel.token_counter import count_tokens
         token_count = count_tokens(result)
         assert token_count <= _DIARY_CUE_TOKEN_CAP, (
             f"cue is {token_count} tokens, exceeds cap of {_DIARY_CUE_TOKEN_CAP}"
@@ -800,7 +800,7 @@ class TestBuildConsultationPair:
 class TestRunConsultationFire:
 
     def _make_real_agent(self, tmp_path):
-        from lingtai.kernel import BaseAgent
+        from lingtai_kernel import BaseAgent
         svc = MagicMock(); svc.model = "test-model"
         agent = BaseAgent(
             service=svc,
@@ -812,7 +812,7 @@ class TestRunConsultationFire:
     def test_empty_voices_is_noop(self, tmp_path):
         agent = self._make_real_agent(tmp_path)
         with patch(
-            "lingtai.core.soul.consultation._run_consultation_batch",
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation_batch",
             return_value=[],
         ):
             agent._run_consultation_fire()
@@ -825,11 +825,11 @@ class TestRunConsultationFire:
         file and injects the wire pair (single-slot replace, by
         construction of the filesystem write).
         """
-        from lingtai.kernel.notifications import collect_notifications
+        from lingtai_kernel.notifications import collect_notifications
 
         agent = self._make_real_agent(tmp_path)
         with patch(
-            "lingtai.core.soul.consultation._run_consultation_batch",
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation_batch",
             return_value=[{"source": "insights", "blocks": [TextBlock(text="hello")]}],
         ):
             agent._run_consultation_fire()
@@ -854,7 +854,7 @@ class TestRunConsultationFire:
         agent._log = capture_log
 
         with patch(
-            "lingtai.core.soul.consultation._run_consultation_batch",
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation_batch",
             side_effect=RuntimeError("boom"),
         ):
             agent._run_consultation_fire()  # should not raise
@@ -872,7 +872,7 @@ class TestSoulFlowPersistenceSchema:
     the on-disk records in logs/soul_flow.jsonl."""
 
     def _make_real_agent(self, tmp_path):
-        from lingtai.kernel import BaseAgent
+        from lingtai_kernel import BaseAgent
         svc = MagicMock(); svc.model = "test-model"
         agent = BaseAgent(
             service=svc,
@@ -913,7 +913,7 @@ class TestSoulFlowPersistenceSchema:
             ]},
         ]
         with patch(
-            "lingtai.core.soul.consultation._run_consultation_batch",
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation_batch",
             return_value=voices,
         ):
             agent._run_consultation_fire()
@@ -959,7 +959,7 @@ class TestSoulFlowPersistenceSchema:
         self._seed_diary(agent, "stuck thinking")
 
         with patch(
-            "lingtai.core.soul.consultation._run_consultation_batch",
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation_batch",
             return_value=[],
         ):
             agent._run_consultation_fire()
@@ -980,13 +980,13 @@ class TestSoulFlowPersistenceSchema:
         fire_id are the same string, so cross-referencing between the
         wire and the soul-flow log stays trivial under the
         .notification/ redesign."""
-        from lingtai.kernel.notifications import collect_notifications
+        from lingtai_kernel.notifications import collect_notifications
 
         agent = self._make_real_agent(tmp_path)
         self._seed_diary(agent, "diary text")
 
         with patch(
-            "lingtai.core.soul.consultation._run_consultation_batch",
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation_batch",
             return_value=[{"source": "insights", "blocks": [TextBlock(text="v")]}],
         ):
             agent._run_consultation_fire()
@@ -1007,7 +1007,7 @@ class TestSoulFlowPersistenceSchema:
         self._seed_diary(agent, "before crash")
 
         with patch(
-            "lingtai.core.soul.consultation._run_consultation_batch",
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation_batch",
             side_effect=RuntimeError("boom from batch"),
         ):
             agent._run_consultation_fire()  # must not raise
@@ -1026,7 +1026,7 @@ class TestSoulFlowPersistenceSchema:
         # No events.jsonl — diary will be empty string.
 
         with patch(
-            "lingtai.core.soul.consultation._run_consultation_batch",
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation_batch",
             return_value=[{"source": "insights", "blocks": [TextBlock(text="v")]}],
         ):
             agent._run_consultation_fire()
@@ -1043,7 +1043,7 @@ class TestSoulFlowPersistenceSchema:
         self._seed_diary(agent, "d1")
 
         with patch(
-            "lingtai.core.soul.consultation._run_consultation_batch",
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation_batch",
             return_value=[{"source": "insights", "blocks": [TextBlock(text="v1")]}],
         ):
             agent._run_consultation_fire()
@@ -1051,7 +1051,7 @@ class TestSoulFlowPersistenceSchema:
             # (it would still write its own log records regardless).
             agent._tc_inbox.drain()
         with patch(
-            "lingtai.core.soul.consultation._run_consultation_batch",
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation_batch",
             return_value=[{"source": "snapshot:s1", "blocks": [TextBlock(text="v2")]}],
         ):
             agent._run_consultation_fire()
@@ -1069,7 +1069,7 @@ class TestPersistSoulEntryUnchanged:
     """Inquiry path still uses the legacy schema — make sure we didn't break it."""
 
     def _make_real_agent(self, tmp_path):
-        from lingtai.kernel import BaseAgent
+        from lingtai_kernel import BaseAgent
         svc = MagicMock(); svc.model = "test-model"
         agent = BaseAgent(
             service=svc,
@@ -1102,7 +1102,7 @@ class TestPersistSoulEntryUnchanged:
 class TestRehydrateAppendixTracking:
 
     def _make_real_agent(self, tmp_path):
-        from lingtai.kernel import BaseAgent
+        from lingtai_kernel import BaseAgent
         svc = MagicMock(); svc.model = "test-model"
         agent = BaseAgent(
             service=svc,
@@ -1180,7 +1180,7 @@ class TestRehydrateAppendixTracking:
         """The wall-clock soul timer (driven by config.soul_delay) now fires
         past-self consultation instead of the legacy diary+mirror-session
         flow. Verifies _soul_whisper -> _run_consultation_fire wiring."""
-        from lingtai.kernel import BaseAgent
+        from lingtai_kernel import BaseAgent
         svc = MagicMock(); svc.model = "test-model"
         agent = BaseAgent(
             service=svc, agent_name="t", working_dir=tmp_path / "agent",
@@ -1196,7 +1196,7 @@ class TestRehydrateAppendixTracking:
     def test_soul_whisper_swallows_consultation_fire_error(self, tmp_path):
         """Errors in the consultation fire must not break the cadence —
         the timer reschedules itself in finally regardless."""
-        from lingtai.kernel import BaseAgent
+        from lingtai_kernel import BaseAgent
         svc = MagicMock(); svc.model = "test-model"
         agent = BaseAgent(
             service=svc, agent_name="t", working_dir=tmp_path / "agent",
@@ -1247,12 +1247,12 @@ class TestRenderCurrentDiary:
                 f.write(json.dumps(r) + "\n")
 
     def test_returns_empty_when_no_log(self, tmp_path):
-        from lingtai.core.soul import _render_current_diary
+        from lingtai_kernel.intrinsics.soul import _render_current_diary
         agent = _FakeAgent(tmp_path, with_chat=False)
         assert _render_current_diary(agent) == ""
 
     def test_returns_empty_when_log_has_no_diary(self, tmp_path):
-        from lingtai.core.soul import _render_current_diary
+        from lingtai_kernel.intrinsics.soul import _render_current_diary
         agent = _FakeAgent(tmp_path, with_chat=False)
         self._write_events(tmp_path, [
             {"type": "boot", "ts": 1},
@@ -1261,7 +1261,7 @@ class TestRenderCurrentDiary:
         assert _render_current_diary(agent) == ""
 
     def test_concatenates_diary_entries_in_order(self, tmp_path):
-        from lingtai.core.soul import _render_current_diary
+        from lingtai_kernel.intrinsics.soul import _render_current_diary
         agent = _FakeAgent(tmp_path, with_chat=False)
         self._write_events(tmp_path, [
             {"type": "diary", "text": "first turn thoughts", "ts": 1_700_000_000},
@@ -1278,7 +1278,7 @@ class TestRenderCurrentDiary:
         assert "\n\n" in out
 
     def test_skips_blank_and_non_string_text(self, tmp_path):
-        from lingtai.core.soul import _render_current_diary
+        from lingtai_kernel.intrinsics.soul import _render_current_diary
         agent = _FakeAgent(tmp_path, with_chat=False)
         self._write_events(tmp_path, [
             {"type": "diary", "text": "valid", "ts": 1_700_000_000},
@@ -1294,7 +1294,7 @@ class TestRenderCurrentDiary:
         assert out.count("\n\n") == 2   # header separator + one separator between two entries
 
     def test_tolerates_malformed_lines(self, tmp_path):
-        from lingtai.core.soul import _render_current_diary
+        from lingtai_kernel.intrinsics.soul import _render_current_diary
         log_dir = tmp_path / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         with open(log_dir / "events.jsonl", "w", encoding="utf-8") as f:
@@ -1308,7 +1308,7 @@ class TestRenderCurrentDiary:
         assert "still good" in out
 
     def test_render_diary_format_has_now_and_entry_timestamps(self, tmp_path):
-        from lingtai.core.soul import _render_current_diary
+        from lingtai_kernel.intrinsics.soul import _render_current_diary
         agent = _FakeAgent(tmp_path, with_chat=False)
         self._write_events(tmp_path, [
             {"type": "diary", "text": "first", "ts": 1_700_000_000},
@@ -1321,8 +1321,8 @@ class TestRenderCurrentDiary:
         assert out.index("first") < out.index("second")
 
     def test_render_diary_tail_cap(self, tmp_path):
-        from lingtai.core.soul import _render_current_diary, _DIARY_CUE_TOKEN_CAP
-        from lingtai.kernel.token_counter import count_tokens
+        from lingtai_kernel.intrinsics.soul import _render_current_diary, _DIARY_CUE_TOKEN_CAP
+        from lingtai_kernel.token_counter import count_tokens
         agent = _FakeAgent(tmp_path, with_chat=False)
         records = []
         for i in range(240):
@@ -1338,7 +1338,7 @@ class TestRenderCurrentDiary:
         assert "entry-0" not in out
 
     def test_render_diary_single_oversized_entry(self, tmp_path):
-        from lingtai.core.soul import _render_current_diary
+        from lingtai_kernel.intrinsics.soul import _render_current_diary
         agent = _FakeAgent(tmp_path, with_chat=False)
         self._write_events(tmp_path, [
             {"type": "diary", "text": "HUGE " + ("x " * 50_000), "ts": 1_700_000_000},
@@ -1352,7 +1352,7 @@ class TestRenderCurrentDiary:
         both — thinking is the inner monologue that explains the *why*
         behind the diary's externalized declaration. Each entry is tagged
         with its kind so the consultation voice can tell them apart."""
-        from lingtai.core.soul import _render_current_diary
+        from lingtai_kernel.intrinsics.soul import _render_current_diary
         agent = _FakeAgent(tmp_path, with_chat=False)
         self._write_events(tmp_path, [
             {"type": "thinking", "text": "weighing options", "ts": 1_700_000_000},
@@ -1379,7 +1379,7 @@ class TestRenderCurrentDiary:
         Build a log with non-ASCII text (Chinese, emoji, ligatures), noise
         events that don't match the cue types, blank lines, and assert the
         rendered output contains every cue entry in chronological order."""
-        from lingtai.core.soul import _render_current_diary
+        from lingtai_kernel.intrinsics.soul import _render_current_diary
         records = []
         ts0 = 1_700_000_000
         for i in range(20):
@@ -1413,8 +1413,8 @@ class TestRenderCurrentDiary:
         a log larger than _REVERSE_READ_CHUNK. Every cue entry should still
         be picked up correctly, with no truncated/missing entries from
         chunk-edge JSON splits."""
-        from lingtai.core.soul import _render_current_diary
-        from lingtai.core.soul.consultation import _REVERSE_READ_CHUNK
+        from lingtai_kernel.intrinsics.soul import _render_current_diary
+        from lingtai_kernel.intrinsics.soul.consultation import _REVERSE_READ_CHUNK
         # Each cue entry plus padding noise — ensure total bytes > 4 chunks
         records = []
         ts0 = 1_700_000_000
@@ -1576,15 +1576,15 @@ class TestSnapshotVerbatimLoading:
 class TestKindDispatch:
 
     def test_insights_source_maps_to_insights_kind(self):
-        from lingtai.core.soul import _kind_for_source
+        from lingtai_kernel.intrinsics.soul import _kind_for_source
         assert _kind_for_source("insights") == "insights"
 
     def test_snapshot_source_maps_to_past_kind(self):
-        from lingtai.core.soul import _kind_for_source
+        from lingtai_kernel.intrinsics.soul import _kind_for_source
         assert _kind_for_source("snapshot:snapshot_3_1735") == "past"
 
     def test_other_source_maps_to_past(self):
-        from lingtai.core.soul import _kind_for_source
+        from lingtai_kernel.intrinsics.soul import _kind_for_source
         # Defaults to past for unknown labels — past is the more general
         # frame and the safer default.
         assert _kind_for_source("anything else") == "past"
@@ -1597,7 +1597,7 @@ class TestBuildConsultationCue:
         # interface, which already contains the diary entries verbatim.
         # Re-injecting them as the spark would be duplicative — the cue
         # is just a step-back nudge.
-        from lingtai.core.soul import _build_consultation_cue
+        from lingtai_kernel.intrinsics.soul import _build_consultation_cue
         agent = _FakeAgent(tmp_path, with_chat=False)
         cue = _build_consultation_cue(agent, "insights", "I built X today.")
         assert "I built X today." not in cue
@@ -1607,20 +1607,20 @@ class TestBuildConsultationCue:
         assert "step back" in cue.lower()
 
     def test_past_cue_includes_diary_and_future_self_frame(self, tmp_path):
-        from lingtai.core.soul import _build_consultation_cue
+        from lingtai_kernel.intrinsics.soul import _build_consultation_cue
         agent = _FakeAgent(tmp_path, with_chat=False)
         cue = _build_consultation_cue(agent, "past", "I built X today.")
         assert "I built X today." in cue
         assert "future self" in cue.lower()
 
     def test_empty_diary_uses_placeholder(self, tmp_path):
-        from lingtai.core.soul import _build_consultation_cue
+        from lingtai_kernel.intrinsics.soul import _build_consultation_cue
         agent = _FakeAgent(tmp_path, with_chat=False)
         cue = _build_consultation_cue(agent, "past", "")
         assert "no diary yet" in cue
 
     def test_zh_cue_renders(self, tmp_path):
-        from lingtai.core.soul import _build_consultation_cue
+        from lingtai_kernel.intrinsics.soul import _build_consultation_cue
         agent = _FakeAgent(tmp_path, with_chat=False)
         agent._config.language = "zh"
         cue = _build_consultation_cue(agent, "past", "今日做了 X。")
@@ -1628,7 +1628,7 @@ class TestBuildConsultationCue:
         assert "未来" in cue   # zh-localized "future self" framing
 
     def test_wen_cue_renders(self, tmp_path):
-        from lingtai.core.soul import _build_consultation_cue
+        from lingtai_kernel.intrinsics.soul import _build_consultation_cue
         agent = _FakeAgent(tmp_path, with_chat=False)
         agent._config.language = "wen"
         cue = _build_consultation_cue(agent, "past", "今日造 X。")
@@ -1642,7 +1642,7 @@ class TestRunConsultationDispatchesByKind:
     already contains it)."""
 
     def _run(self, tmp_path, source: str):
-        from lingtai.core.soul import _run_consultation
+        from lingtai_kernel.intrinsics.soul import _run_consultation
 
         agent = _FakeAgent(tmp_path)
         # Seed a tiny diary
@@ -1653,7 +1653,7 @@ class TestRunConsultationDispatchesByKind:
 
         captured = {}
 
-        from lingtai.kernel.llm.base import LLMResponse
+        from lingtai_kernel.llm.base import LLMResponse
 
         class _MockSession:
             def __init__(self, interface):
@@ -1731,7 +1731,7 @@ class _ConfigFakeAgent(_FakeAgent):
 class TestSoulConfig:
 
     def test_config_updates_delay_and_restarts_timer(self, tmp_path):
-        from lingtai.core.soul import handle
+        from lingtai_kernel.intrinsics.soul import handle
         agent = _ConfigFakeAgent(tmp_path, initial_delay=120.0)
 
         result = handle(agent, {"action": "config", "delay_seconds": 600})
@@ -1744,7 +1744,7 @@ class TestSoulConfig:
         assert any(ev == "soul_config" for ev, _ in agent.logged)
 
     def test_config_updates_consultation_past_count(self, tmp_path):
-        from lingtai.core.soul import handle
+        from lingtai_kernel.intrinsics.soul import handle
         agent = _ConfigFakeAgent(tmp_path, initial_past_count=2)
 
         result = handle(agent, {"action": "config", "consultation_past_count": 4})
@@ -1755,7 +1755,7 @@ class TestSoulConfig:
         assert agent._config.consultation_past_count == 4
 
     def test_config_accepts_multiple_fields_at_once(self, tmp_path):
-        from lingtai.core.soul import handle
+        from lingtai_kernel.intrinsics.soul import handle
         agent = _ConfigFakeAgent(tmp_path, initial_delay=120.0,
                                   initial_past_count=2)
 
@@ -1775,7 +1775,7 @@ class TestSoulConfig:
         assert agent.timer_restart_count == 1  # delay changed
 
     def test_config_rejects_delay_below_minimum(self, tmp_path):
-        from lingtai.core.soul import (
+        from lingtai_kernel.intrinsics.soul import (
             handle,
             SOUL_DELAY_MIN_SECONDS,
         )
@@ -1791,7 +1791,7 @@ class TestSoulConfig:
         assert agent.timer_restart_count == 0
 
     def test_config_accepts_delay_exactly_at_minimum(self, tmp_path):
-        from lingtai.core.soul import (
+        from lingtai_kernel.intrinsics.soul import (
             handle,
             SOUL_DELAY_MIN_SECONDS,
         )
@@ -1806,7 +1806,7 @@ class TestSoulConfig:
         assert agent._soul_delay == SOUL_DELAY_MIN_SECONDS
 
     def test_config_requires_at_least_one_field(self, tmp_path):
-        from lingtai.core.soul import handle
+        from lingtai_kernel.intrinsics.soul import handle
         agent = _ConfigFakeAgent(tmp_path, initial_delay=120.0)
 
         result = handle(agent, {"action": "config"})
@@ -1816,7 +1816,7 @@ class TestSoulConfig:
         assert agent.timer_restart_count == 0
 
     def test_config_rejects_non_numeric_delay(self, tmp_path):
-        from lingtai.core.soul import handle
+        from lingtai_kernel.intrinsics.soul import handle
         agent = _ConfigFakeAgent(tmp_path, initial_delay=120.0)
 
         result = handle(agent, {
@@ -1829,7 +1829,7 @@ class TestSoulConfig:
         assert agent.timer_restart_count == 0
 
     def test_config_rejects_nan_delay(self, tmp_path):
-        from lingtai.core.soul import handle
+        from lingtai_kernel.intrinsics.soul import handle
         agent = _ConfigFakeAgent(tmp_path, initial_delay=120.0)
 
         result = handle(agent, {
@@ -1841,7 +1841,7 @@ class TestSoulConfig:
         assert agent._soul_delay == 120.0
 
     def test_config_skips_timer_restart_when_shutdown(self, tmp_path):
-        from lingtai.core.soul import handle
+        from lingtai_kernel.intrinsics.soul import handle
         agent = _ConfigFakeAgent(tmp_path, initial_delay=120.0, shutdown=True)
 
         result = handle(agent, {"action": "config", "delay_seconds": 300})
@@ -1851,7 +1851,7 @@ class TestSoulConfig:
         assert agent.timer_restart_count == 0
 
     def test_config_rejects_past_count_above_max(self, tmp_path):
-        from lingtai.core.soul import (
+        from lingtai_kernel.intrinsics.soul import (
             handle, CONSULTATION_PAST_COUNT_MAX,
         )
         agent = _ConfigFakeAgent(tmp_path, initial_past_count=2)
@@ -1864,7 +1864,7 @@ class TestSoulConfig:
         assert agent._config.consultation_past_count == 2
 
     def test_config_rejects_past_count_below_min(self, tmp_path):
-        from lingtai.core.soul import handle
+        from lingtai_kernel.intrinsics.soul import handle
         agent = _ConfigFakeAgent(tmp_path, initial_past_count=2)
 
         result = handle(agent, {
@@ -1875,7 +1875,7 @@ class TestSoulConfig:
         assert agent._config.consultation_past_count == 2
 
     def test_config_in_schema_enum(self):
-        from lingtai.core.soul import get_schema
+        from lingtai_kernel.intrinsics.soul import get_schema
         schema = get_schema("en")
         assert "config" in schema["properties"]["action"]["enum"]
         # set_delay removed from enum
@@ -1889,7 +1889,7 @@ class TestSoulConfig:
         assert schema["properties"]["consultation_past_count"]["type"] == "integer"
 
     def test_unknown_action_still_errors(self, tmp_path):
-        from lingtai.core.soul import handle
+        from lingtai_kernel.intrinsics.soul import handle
         agent = _ConfigFakeAgent(tmp_path)
         result = handle(agent, {"action": "bogus"})
         assert "error" in result
@@ -1898,7 +1898,7 @@ class TestSoulConfig:
     def test_set_delay_action_now_unknown(self, tmp_path):
         # Regression guard: set_delay was removed; agents calling it must
         # see an unknown-action error pointing them at config.
-        from lingtai.core.soul import handle
+        from lingtai_kernel.intrinsics.soul import handle
         agent = _ConfigFakeAgent(tmp_path, initial_delay=120.0)
 
         result = handle(agent, {"action": "set_delay", "delay_seconds": 600})
@@ -1922,7 +1922,7 @@ class TestSoulNotificationInstructions:
     had only sent a short email."""
 
     def _make_real_agent(self, tmp_path):
-        from lingtai.kernel import BaseAgent
+        from lingtai_kernel import BaseAgent
         svc = MagicMock(); svc.model = "test-model"
         agent = BaseAgent(
             service=svc,
@@ -1946,7 +1946,7 @@ class TestSoulNotificationInstructions:
             {"source": "insights", "blocks": [TextBlock(text="step back")]},
         ]
         with patch(
-            "lingtai.core.soul.consultation._run_consultation_batch",
+            "lingtai_kernel.intrinsics.soul.consultation._run_consultation_batch",
             return_value=voices,
         ):
             agent._run_consultation_fire()
@@ -1976,8 +1976,8 @@ def test_consultation_prompt_has_no_removed_codex_tool_call(tmp_path):
     """The resolved consultation system prompt (and its refusal echo) must
     not suggest a removed `codex(...)` tool call.
     """
-    from lingtai.core.soul.config import _build_soul_system_prompt
-    from lingtai.core.soul.consultation import (
+    from lingtai_kernel.intrinsics.soul.config import _build_soul_system_prompt
+    from lingtai_kernel.intrinsics.soul.consultation import (
         _build_consultation_tool_refusal,
     )
 

@@ -2,7 +2,7 @@
 import threading
 from unittest.mock import MagicMock, patch
 
-from lingtai.kernel.config import AgentConfig
+from lingtai_kernel.config import AgentConfig
 
 
 def _make_agent(tmp_path, capabilities=None):

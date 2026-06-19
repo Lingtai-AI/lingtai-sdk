@@ -1,4 +1,4 @@
-from lingtai.kernel.logging import get_logger
+from lingtai_kernel.logging import get_logger
 from ..anthropic.adapter import AnthropicAdapter
 
 logger = get_logger()

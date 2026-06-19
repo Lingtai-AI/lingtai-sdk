@@ -14,7 +14,7 @@ independent life — its existence does not depend on yours.
 
 ## Components
 
-- `avatar/__init__.py` — the entire capability in a single file. `_mission_looks_unsafe` (mission-quality heuristic, near top of module), `get_description`, `get_schema`, `get_rules_schema`, `make_manager` / `make_spawn_handler` / `make_rules_handler` (the single-source handler factories shared by `setup()` and the SDK avatar bundle bridge), `setup`. The core class is `AvatarManager`.
+- `avatar/__init__.py` — the entire capability in a single file. `_mission_looks_unsafe` (mission-quality heuristic, near top of module), `get_description`, `get_schema`, `get_rules_schema`, `setup`. The core class is `AvatarManager`.
 
 ## Public API
 
@@ -38,11 +38,6 @@ avatar/__init__.py
   ├── handle()                      — legacy action dispatcher used internally
   ├── handle_spawn()                — spawn handler for the avatar_spawn tool
   ├── handle_rules()                — rules handler for the avatar_rules tool
-  │
-  │  Handler factories (single source of truth, shared by setup + SDK bridge):
-  ├── make_manager(agent)           — build an AvatarManager bound to agent
-  ├── make_spawn_handler(agent)     — make_manager(agent).handle_spawn
-  ├── make_rules_handler(agent)     — make_manager(agent).handle_rules
   │
   │  Spawn pipeline:
   ├── _spawn()                      — validates name, checks liveness, prepares working dir, launches process
@@ -77,7 +72,7 @@ avatar/__init__.py
 ## Dependencies
 
 - `lingtai.i18n` — `t()` for localized strings
-- `lingtai.kernel.handshake` — `is_alive()` for liveness checks, `resolve_address()` for ledger-based tree walking
+- `lingtai_kernel.handshake` — `is_alive()` for liveness checks, `resolve_address()` for ledger-based tree walking
 - `lingtai.venv_resolve` — `resolve_venv()`, `venv_python()` for resolving the Python executable to launch the avatar
 - `lingtai.agent.Agent` — parent agent type (TYPE_CHECKING only)
 
@@ -86,4 +81,3 @@ avatar/__init__.py
 - **Parent:** `src/lingtai/core/` (capability package).
 - **Siblings:** `daemon/`, `mcp/`, `knowledge/` (private durable memory), `skills/` (skill catalog), `bash/`.
 - **Kernel hooks:** `setup()` is called during capability initialization; `AvatarManager.handle_spawn()` is registered as the `avatar_spawn` tool handler and `AvatarManager.handle_rules()` as `avatar_rules`. The daemon capability blacklists both tools to prevent avatar-in-daemon recursion and rules mutation from emanations.
-- **SDK bundle bridge:** `src/lingtai/core/avatar_bundle.py` is the wrapper-side bridge that hosts the *real* `avatar_spawn` / `avatar_rules` tools through the SDK peer-spawn bundle declarations in `lingtai_sdk.avatar_tools` (stage 3I). It injects `make_spawn_handler(agent)` / `make_rules_handler(agent)` — the *same* `make_manager`-backed factories `setup()` uses — into the SDK hosts, so the bundle-hosted tools run byte-identical logic. The SDK is imported lazily inside the bridge functions (one-way `wrapper → sdk` edge); the kernel/SDK never imports the wrapper. The bridge installs no guard and does not change live tool dispatch — it is purely additive. Covered by `tests/test_avatar_bundle_bridge.py` (parity) and `tests/test_sdk_avatar_tools.py` (declaration + import purity).

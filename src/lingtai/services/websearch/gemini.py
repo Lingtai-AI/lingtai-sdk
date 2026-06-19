@@ -1,7 +1,7 @@
 """Gemini web search — uses Google Search grounding via google-genai."""
 from __future__ import annotations
 
-from lingtai.kernel.logging import get_logger
+from lingtai_kernel.logging import get_logger
 
 from . import SearchResult, SearchService
 

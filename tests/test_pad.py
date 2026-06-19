@@ -8,8 +8,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lingtai.kernel.builtin_tools import BUILTIN_TOOL_NAMES, get_builtin_tool_module
-from lingtai.kernel.base_agent import BaseAgent
+from lingtai_kernel.intrinsics import ALL_INTRINSICS
+from lingtai_kernel.base_agent import BaseAgent
 
 
 def make_mock_service():
@@ -26,9 +26,10 @@ def make_mock_service():
 
 
 def test_psyche_in_all_intrinsics():
-    assert "psyche" in BUILTIN_TOOL_NAMES
-    assert "pad" not in BUILTIN_TOOL_NAMES
-    mod = get_builtin_tool_module("psyche")
+    assert "psyche" in ALL_INTRINSICS
+    assert "pad" not in ALL_INTRINSICS
+    info = ALL_INTRINSICS["psyche"]
+    mod = info["module"]
     schema = mod.get_schema()
     # Schema is intentionally flat (no allOf) for strict-mode provider
     # compatibility — see #114. Per-(object, action) constraints live in

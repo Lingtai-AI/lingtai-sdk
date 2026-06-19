@@ -1,7 +1,7 @@
 """Tests for ToolTimer."""
 import time
 
-from lingtai.kernel.tool_timing import ToolTimer
+from lingtai_kernel.tool_timing import ToolTimer
 
 
 def test_tool_timer_measures_elapsed_ms():

@@ -167,7 +167,7 @@ def _discover_agents(base_dir: Path) -> dict[str, AgentNode]:
 
 def _build_avatar_edges(nodes: dict[str, AgentNode]) -> list[AvatarEdge]:
     """Pass 2 — read delegates/ledger.jsonl for each node."""
-    from lingtai.kernel.handshake import resolve_address
+    from lingtai_kernel.handshake import resolve_address
 
     edges: list[AvatarEdge] = []
     for parent_address, node in list(nodes.items()):

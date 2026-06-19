@@ -27,18 +27,15 @@ from lingtai.services.file_io import (
     DEFAULT_MAX_FILE_BYTES,
     DEFAULT_MAX_VISITED,
     DEFAULT_WALLTIME_S,
+    GrepMatch,
     LocalFileIOService,
     TraversalStats,
 )
-from lingtai.services import file_io_sidecar as _sidecar_mod
 from lingtai.services.file_io_sidecar import (
-    BACKEND_ENV_VAR,
     RustFileIOBackend,
     SidecarAdapter,
     SidecarError,
     SidecarRequest,
-    default_file_io_service,
-    resolve_sidecar_binary,
 )
 
 
@@ -506,7 +503,7 @@ def test_default_local_file_io_service_does_not_touch_sidecar(tmp_path: Path) ->
 
 @pytest.mark.skipif(shutil.which("cargo") is None, reason="Rust toolchain is optional")
 def test_rust_sidecar_integration_grep_and_glob(tmp_path: Path) -> None:
-    crate = Path(__file__).resolve().parents[1] / "src" / "lingtai" / "native" / "search_sidecar"
+    crate = Path(__file__).resolve().parents[1] / "experimental" / "lingtai-search-sidecar"
     subprocess.run(["cargo", "build", "--quiet"], cwd=crate, check=True, timeout=300)
     binary = crate / "target" / "debug" / (
         "lingtai-search-sidecar.exe" if os.name == "nt" else "lingtai-search-sidecar"
@@ -542,6 +539,14 @@ def test_rust_sidecar_integration_grep_and_glob(tmp_path: Path) -> None:
 # Sidecar binary resolver — priority order across env, packaged, dev tree
 # ---------------------------------------------------------------------------
 
+
+from lingtai.services import file_io_sidecar as _sidecar_mod
+from lingtai.services.file_io_sidecar import (
+    BACKEND_ENV_VAR,
+    default_file_io_service,
+    resolve_sidecar_binary,
+)
+from lingtai.services.file_io import LocalFileIOBackend, LocalFileIOService
 
 
 class TestResolveSidecarBinary:

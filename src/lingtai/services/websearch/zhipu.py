@@ -1,7 +1,7 @@
 """Zhipu web search — uses Z.AI's web search MCP server (HTTP remote)."""
 from __future__ import annotations
 
-from lingtai.kernel.logging import get_logger
+from lingtai_kernel.logging import get_logger
 
 from . import SearchResult, SearchService
 

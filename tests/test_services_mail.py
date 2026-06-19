@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from lingtai.kernel.services.mail import FilesystemMailService
+from lingtai_kernel.services.mail import FilesystemMailService
 
 
 def _setup_agent_dir(path: Path) -> Path:

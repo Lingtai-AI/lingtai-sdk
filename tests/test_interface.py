@@ -1,7 +1,7 @@
 """Tests for ChatInterface.pop_orphan_tool_call()."""
 from __future__ import annotations
 
-from lingtai.kernel.llm.interface import (
+from lingtai_kernel.llm.interface import (
     ChatInterface,
     TextBlock,
     ToolCallBlock,

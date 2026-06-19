@@ -22,7 +22,7 @@ Provider-specific web search — standalone services behind a common `SearchServ
 - **Factory** — `create_search_service(provider, api_key=...)` at `__init__.py:48` dispatches by name. Supported: `duckduckgo`, `anthropic`, `openai`, `gemini`, `minimax`, `zhipu`.
 - **MCP dependencies** — `minimax.py` uses `lingtai.services.mcp.MCPClient` (subprocess); `zhipu.py` uses `lingtai.services.mcp.HTTPMCPClient` (remote HTTP).
 - **External SDKs** — `anthropic`, `openai`, `google.genai`, `ddgs`.
-- **Logging** — all providers except DuckDuckGo use `lingtai.kernel.logging.get_logger`.
+- **Logging** — all providers except DuckDuckGo use `lingtai_kernel.logging.get_logger`.
 
 ## Composition
 

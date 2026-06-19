@@ -29,15 +29,15 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lingtai.kernel.base_agent import BaseAgent
-from lingtai.kernel.llm.base import ChatSession
-from lingtai.kernel.llm.interface import (
+from lingtai_kernel.base_agent import BaseAgent
+from lingtai_kernel.llm.base import ChatSession
+from lingtai_kernel.llm.interface import (
     ChatInterface,
     TextBlock,
     ToolCallBlock,
     ToolResultBlock,
 )
-from lingtai.kernel.tc_inbox import InvoluntaryToolCall, TCInbox
+from lingtai_kernel.tc_inbox import InvoluntaryToolCall, TCInbox
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +99,7 @@ class TestPreRequestHookABC:
                 return ChatInterface()
 
             def send(self, message):
-                from lingtai.kernel.llm.base import LLMResponse
+                from lingtai_kernel.llm.base import LLMResponse
                 return LLMResponse()
 
         s = _DummySession()
@@ -112,7 +112,7 @@ class TestPreRequestHookABC:
                 return ChatInterface()
 
             def send(self, message):
-                from lingtai.kernel.llm.base import LLMResponse
+                from lingtai_kernel.llm.base import LLMResponse
                 return LLMResponse()
 
         s = _DummySession()

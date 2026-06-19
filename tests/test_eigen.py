@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lingtai.kernel.base_agent import BaseAgent
+from lingtai_kernel.base_agent import BaseAgent
 
 
 def make_mock_service():
@@ -95,7 +95,7 @@ def test_psyche_pad_load_empty(tmp_path):
 
 def test_psyche_molt_uses_summary(tmp_path):
     """molt wipes context and re-injects agent's summary."""
-    from lingtai.kernel.llm.interface import ChatInterface, TextBlock
+    from lingtai_kernel.llm.interface import ChatInterface, TextBlock
 
     svc = make_mock_service()
 
@@ -114,7 +114,7 @@ def test_psyche_molt_uses_summary(tmp_path):
     )
     agent.start()
     try:
-        from lingtai.kernel.llm.interface import ToolCallBlock
+        from lingtai_kernel.llm.interface import ToolCallBlock
 
         agent._session.ensure_session()
         agent._session._chat.interface.add_user_message("Hello")
@@ -181,7 +181,7 @@ def test_psyche_molt_rejects_missing_summary(tmp_path):
 
 def test_eigen_schema_has_context_molt(tmp_path):
     """Schema exposes context/summary without strict-incompatible combinators."""
-    from lingtai.core.psyche import get_schema
+    from lingtai_kernel.intrinsics.psyche import get_schema
     s = get_schema("en")
     assert "context" in s["properties"]["object"]["enum"]
     assert "summary" in s["properties"]
@@ -209,8 +209,8 @@ def test_psyche_rejects_invalid_object_action_pair(tmp_path):
 
 def test_eigen_forget_wipes_context(tmp_path):
     """context_forget nuclear wipes the session."""
-    from lingtai.kernel.llm.interface import ChatInterface, TextBlock
-    from lingtai.core.psyche import context_forget
+    from lingtai_kernel.llm.interface import ChatInterface, TextBlock
+    from lingtai_kernel.intrinsics.psyche import context_forget
 
     svc = make_mock_service()
 
@@ -317,7 +317,7 @@ def _agent_with_session(tmp_path):
     """Build a BaseAgent with a mock session that uses a real ChatInterface
     so molt code can actually walk and serialize entries. Returns the agent;
     caller is responsible for stop()."""
-    from lingtai.kernel.llm.interface import ChatInterface
+    from lingtai_kernel.llm.interface import ChatInterface
 
     svc = make_mock_service()
 
@@ -341,7 +341,7 @@ def _agent_with_session(tmp_path):
 def test_snapshot_written_on_agent_molt(tmp_path):
     """Agent-initiated molt drops a discrete snapshot file under history/snapshots/."""
     import json
-    from lingtai.kernel.llm.interface import TextBlock, ToolCallBlock
+    from lingtai_kernel.llm.interface import TextBlock, ToolCallBlock
 
     agent = _agent_with_session(tmp_path)
     try:
@@ -405,8 +405,8 @@ def test_snapshot_written_on_agent_molt(tmp_path):
 def test_snapshot_written_on_system_forget(tmp_path):
     """System-initiated context_forget also writes a snapshot, source != 'agent'."""
     import json
-    from lingtai.kernel.llm.interface import TextBlock
-    from lingtai.core.psyche import context_forget
+    from lingtai_kernel.llm.interface import TextBlock
+    from lingtai_kernel.intrinsics.psyche import context_forget
 
     agent = _agent_with_session(tmp_path)
     try:
@@ -436,7 +436,7 @@ def test_snapshot_written_on_system_forget(tmp_path):
 
 def test_snapshot_filename_uses_molt_count(tmp_path):
     """Successive molts produce successive molt_count values in filenames."""
-    from lingtai.core.psyche import context_forget
+    from lingtai_kernel.intrinsics.psyche import context_forget
 
     agent = _agent_with_session(tmp_path)
     try:
@@ -461,7 +461,7 @@ def test_snapshot_filename_uses_molt_count(tmp_path):
 def test_snapshot_helper_swallows_failures(tmp_path):
     """_write_molt_snapshot is best-effort — it returns None on any failure
     rather than propagating, so a broken disk can't block a molt."""
-    from lingtai.core import psyche
+    from lingtai_kernel.intrinsics import psyche
 
     # Block the snapshots dir by planting a file where its parent should be.
     (tmp_path / "history").write_text("blocker — not a directory")

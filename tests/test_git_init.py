@@ -11,8 +11,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lingtai.kernel.base_agent import BaseAgent
-from lingtai.kernel.config import AgentConfig
+from lingtai_kernel.base_agent import BaseAgent
+from lingtai_kernel.config import AgentConfig
 
 
 def make_mock_service():

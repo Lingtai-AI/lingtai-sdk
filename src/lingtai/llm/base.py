@@ -10,8 +10,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Any
 
-from lingtai.kernel.llm.base import ChatSession, FunctionSchema, LLMResponse
-from lingtai.kernel.llm.interface import ChatInterface, ToolResultBlock
+from lingtai_kernel.llm.base import ChatSession, FunctionSchema, LLMResponse
+from lingtai_kernel.llm.interface import ChatInterface, ToolResultBlock
 
 from .api_gate import APICallGate
 

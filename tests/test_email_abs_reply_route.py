@@ -319,7 +319,7 @@ def test_abs_reply_lands_in_original_sender_inbox_not_self(tmp_path):
     to dev-1's reply. That third hop is where the bare-alias ``from`` made
     the message self-deliver inside dev-2's own network.
     """
-    from lingtai.kernel.services.mail import FilesystemMailService
+    from lingtai_kernel.services.mail import FilesystemMailService
 
     stop = threading.Event()
 

@@ -11,13 +11,13 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from lingtai.kernel.llm.interface import (
+from lingtai_kernel.llm.interface import (
     ChatInterface,
     TextBlock,
     ToolCallBlock,
     ToolResultBlock,
 )
-from lingtai.kernel.llm.base import ChatSession, FunctionSchema
+from lingtai_kernel.llm.base import ChatSession, FunctionSchema
 from lingtai.llm.service import LLMService
 
 
@@ -239,7 +239,7 @@ def test_compaction_warning_published_above_threshold(tmp_path):
 
         agent._session.send = capture_send
 
-        from lingtai.kernel.message import _make_message, MSG_REQUEST
+        from lingtai_kernel.message import _make_message, MSG_REQUEST
         msg = _make_message(MSG_REQUEST, sender="test", content="do something")
         agent._handle_request(msg)
 

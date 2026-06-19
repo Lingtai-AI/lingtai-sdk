@@ -31,7 +31,7 @@ def _make_agent_with_launch_cmd(tmp_path, agent_name="alice"):
     refresh path proceeds past the `cmd is None` early return. The
     actual subprocess call is patched in each test to avoid relaunches.
     """
-    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai_kernel.base_agent import BaseAgent
     wd = tmp_path / "test"
     wd.mkdir(exist_ok=True)
     agent = BaseAgent(
@@ -185,7 +185,7 @@ def test_perform_refresh_no_launch_cmd_skips_handshake(tmp_path):
     `_perform_refresh` logs and returns BEFORE touching the handshake or
     signaling shutdown — those signals would orphan the agent without a
     relaunch to recover it."""
-    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai_kernel.base_agent import BaseAgent
     wd = tmp_path / "test"
     wd.mkdir(exist_ok=True)
     agent = BaseAgent(

@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai_kernel.base_agent import BaseAgent
 
 log = logging.getLogger(__name__)
 
@@ -243,7 +243,7 @@ def _dispatch_summary(
     fingerprint change on the next heartbeat tick and handles the
     IDLE→MSG_TC_WAKE transition.
     """
-    from lingtai.kernel.notifications import submit as publish_notification
+    from lingtai_kernel.notifications import submit as publish_notification
 
     plural = "" if count == 1 else "s"
     header = f"{count} new event{plural} from MCP '{mcp_name}'"

@@ -30,10 +30,10 @@ from ...i18n import t
 if TYPE_CHECKING:
     from ...agent import Agent
 
-from lingtai.kernel.llm.base import FunctionSchema
-from lingtai.kernel.loop_guard import LoopGuard
-from lingtai.kernel.meta_block import build_meta
-from lingtai.kernel.tool_executor import ToolExecutor
+from lingtai_kernel.llm.base import FunctionSchema
+from lingtai_kernel.loop_guard import LoopGuard
+from lingtai_kernel.meta_block import build_meta
+from lingtai_kernel.tool_executor import ToolExecutor
 from .run_dir import DaemonRunDir
 from .claude_interactive import ClaudeInteractiveError, run_claude_interactive
 
@@ -632,7 +632,7 @@ class DaemonManager:
         narrow exception so a parent can grant a running daemon local-network
         communication when the task prompt calls for it.
         """
-        from lingtai.kernel.builtin_tools import get_builtin_tool_module
+        from lingtai_kernel.intrinsics import ALL_INTRINSICS
 
         allowed = {"email"}
         schemas: dict[str, FunctionSchema] = {}
@@ -641,7 +641,10 @@ class DaemonManager:
         for name in sorted(allowed):
             if name not in self._agent._intrinsics:
                 continue
-            module = get_builtin_tool_module(name)
+            info = ALL_INTRINSICS.get(name)
+            if not info:
+                continue
+            module = info["module"]
             schemas[name] = FunctionSchema(
                 name=name,
                 description=module.get_description(lang),
@@ -947,7 +950,7 @@ class DaemonManager:
         ``preset_surface`` is None, the parent's currently registered regular
         capability surface is used, again plus only task-scoped MCP tools.
         """
-        from ..registry import _GROUPS
+        from ...capabilities import _GROUPS
 
         # Expand groups and filter blacklist
         tool_names: set[str] = set()
@@ -993,6 +996,7 @@ class DaemonManager:
             # Build merged schemas + dispatch — preset tools first, MCP fills in
             schemas: list[FunctionSchema] = []
             dispatch: dict = {}
+            parent_schema_map = {s.name: s for s in self._agent._tool_schemas}
             for n in sorted(tool_names):
                 if n in preset_schemas:
                     schemas.append(preset_schemas[n])
@@ -1048,7 +1052,7 @@ class DaemonManager:
 
     def _expand_requested_tools(self, requested: list[str]) -> set[str]:
         """Expand requested daemon tools after group aliases and blacklist."""
-        from ..registry import _GROUPS
+        from ...capabilities import _GROUPS
 
         tool_names: set[str] = set()
         for name in requested:
@@ -1080,8 +1084,8 @@ class DaemonManager:
         The caller (``_handle_emanate``) converts required setup failures into
         a tool-level error and refuses the whole batch.
         """
-        from ..registry import setup_capability, _GROUPS, _BUILTIN
-        from lingtai.kernel.presets import expand_inherit
+        from ...capabilities import setup_capability, _GROUPS, _BUILTIN
+        from ...presets import expand_inherit
 
         # Resolve provider:"inherit" sentinels against the preset's LLM
         # (not the parent's). expand_inherit mutates in place — work on a
@@ -1223,7 +1227,7 @@ class DaemonManager:
         if preset_llm:
             # Build a dedicated LLM service for this emanation from the preset.
             from lingtai.llm.service import LLMService
-            from lingtai.kernel.config_resolve import resolve_env
+            from lingtai_kernel.config_resolve import resolve_env
             api_key = resolve_env(preset_llm.get("api_key"), preset_llm.get("api_key_env"))
             service = LLMService(
                 provider=preset_llm["provider"],
@@ -1251,7 +1255,7 @@ class DaemonManager:
         def _dispatch_daemon_tool(tc):
             handler = dispatch.get(tc.name)
             if handler is None:
-                from lingtai.kernel.types import UnknownToolError
+                from lingtai_kernel.types import UnknownToolError
                 raise UnknownToolError(tc.name)
             args = dict(tc.args or {})
             if tc.name in intrinsic_tool_names:
@@ -2088,8 +2092,8 @@ class DaemonManager:
         # Pre-flight: resolve any per-task presets BEFORE scheduling.
         # If any preset is invalid, refuse the whole batch. Presets are
         # identified by path (~/foo.json, ./foo.json, or absolute).
-        from lingtai.kernel.presets import load_preset
-        from lingtai.kernel.preset_connectivity import check_connectivity
+        from lingtai.presets import load_preset
+        from lingtai_kernel.preset_connectivity import check_connectivity
 
         resolved_presets: list[dict | None] = []  # one entry per task — None means inherit
         for spec in tasks:
@@ -3659,6 +3663,7 @@ class DaemonManager:
         session_id_captured: str | None = None
         text_chunks: list[str] = []
         final_text: str | None = None
+        final_is_error = False
         any_event = False
 
         def _store_session_id(sid: str) -> None:
@@ -4091,6 +4096,7 @@ class DaemonManager:
 
         text_chunks: list[str] = []
         final_text: str | None = None
+        final_is_error = False
         any_event = False
         timed_out = False
 
@@ -4931,49 +4937,14 @@ class DaemonManager:
             self._agent._log(event_type, **fields)
 
 
-def make_manager(agent: "Agent", max_emanations: int = 100,
-                 max_turns: int = DEFAULT_MAX_TURNS, timeout: float = 3600.0,
-                 notify_threshold: int = 20) -> DaemonManager:
-    """Build the ``DaemonManager`` bound to *agent* with the given limits.
-
-    Single source of truth for daemon-manager construction: both ``setup()`` (the
-    normal capability-registration path) and the SDK communication/execution
-    bundle bridge (``lingtai.core.communication_bundle``) build the manager
-    through this factory, so the bundle-hosted ``daemon`` tool runs against a
-    manager constructed byte-identically to the one ``setup()`` registers.
-    Constructing the manager neither spawns nor kills any process — only an
-    explicit ``emanate`` / ``ask`` / ``reclaim`` call does.
-    """
-    return DaemonManager(agent, max_emanations=max_emanations,
-                         max_turns=max_turns, timeout=timeout,
-                         notify_threshold=notify_threshold)
-
-
-def make_handler(agent: "Agent", max_emanations: int = 100,
-                 max_turns: int = DEFAULT_MAX_TURNS, timeout: float = 3600.0,
-                 notify_threshold: int = 20):
-    """Build the ``daemon`` tool handler bound to *agent*.
-
-    Returns the ``handle`` method of a freshly-built :class:`DaemonManager` (see
-    :func:`make_manager`). The handler is the same ``mgr.handle`` callable
-    ``setup()`` registers, so the SDK bundle bridge and the live capability path
-    share one behavior. The manager is otherwise unreferenced by callers that only
-    want the handler; use :func:`make_manager` directly when the manager object
-    itself is needed (as ``setup()`` does, to return it).
-    """
-    return make_manager(agent, max_emanations=max_emanations,
-                        max_turns=max_turns, timeout=timeout,
-                        notify_threshold=notify_threshold).handle
-
-
 def setup(agent: "Agent", max_emanations: int = 100,
           max_turns: int = DEFAULT_MAX_TURNS, timeout: float = 3600.0,
           notify_threshold: int = 20) -> DaemonManager:
     """Set up the daemon capability on an agent."""
     lang = agent._config.language
-    mgr = make_manager(agent, max_emanations=max_emanations,
-                       max_turns=max_turns, timeout=timeout,
-                       notify_threshold=notify_threshold)
+    mgr = DaemonManager(agent, max_emanations=max_emanations,
+                        max_turns=max_turns, timeout=timeout,
+                        notify_threshold=notify_threshold)
     schema = get_schema(lang)
     agent.add_tool("daemon", schema=schema, handler=mgr.handle,
                    description=get_description(lang))

@@ -15,8 +15,8 @@ from typing import Any
 from unittest.mock import MagicMock
 from uuid import uuid4
 
-from lingtai.core import system as sys_intrinsic
-from lingtai.kernel.notifications import (
+from lingtai_kernel.intrinsics import system as sys_intrinsic
+from lingtai_kernel.notifications import (
     collect_notifications,
     is_generic_dismiss_guarded,
     notification_fingerprint,
@@ -123,7 +123,7 @@ def test_legacy_ids_path_is_accepted_but_ignored(tmp_path: Path) -> None:
 
 
 def test_email_registers_generic_dismiss_guard() -> None:
-    import lingtai.core.email  # noqa: F401 - import performs registration
+    import lingtai_kernel.intrinsics.email  # noqa: F401 - import performs registration
 
     suggestion = is_generic_dismiss_guarded("email")
     assert suggestion is not None
@@ -132,7 +132,7 @@ def test_email_registers_generic_dismiss_guard() -> None:
 
 
 def test_guarded_email_refuses_without_force(tmp_path: Path) -> None:
-    import lingtai.core.email  # noqa: F401 - import performs registration
+    import lingtai_kernel.intrinsics.email  # noqa: F401 - import performs registration
 
     agent = _StubAgent(tmp_path)
     publish(tmp_path, "email", {"header": "1 unread"})
@@ -149,7 +149,7 @@ def test_guarded_email_refuses_without_force(tmp_path: Path) -> None:
 def test_guarded_email_force_clears_surface_but_not_mail_state(tmp_path: Path) -> None:
     from lingtai.agent import Agent
 
-    import lingtai.core.email  # noqa: F401 - import performs registration
+    import lingtai_kernel.intrinsics.email  # noqa: F401 - import performs registration
 
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()
@@ -184,7 +184,7 @@ def test_guarded_email_force_clears_surface_but_not_mail_state(tmp_path: Path) -
 
 
 def test_soul_dismiss_alias_uses_shared_helper(tmp_path: Path) -> None:
-    from lingtai.core import soul
+    from lingtai_kernel.intrinsics import soul
 
     agent = _StubAgent(tmp_path)
     publish(tmp_path, "soul", {"header": "soul flow"})

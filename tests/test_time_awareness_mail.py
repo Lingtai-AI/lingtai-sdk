@@ -1,7 +1,7 @@
 """Tests: mail intrinsic return paths blank timestamps when time_awareness=False."""
 from types import SimpleNamespace
 
-from lingtai.kernel.time_veil import scrub_time_fields
+from lingtai_kernel.time_veil import scrub_time_fields
 
 
 def _agent(time_awareness: bool):

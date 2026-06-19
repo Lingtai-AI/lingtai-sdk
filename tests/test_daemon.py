@@ -8,9 +8,9 @@ import threading
 import time
 from unittest.mock import MagicMock
 
-from lingtai.kernel.config import AgentConfig
-from lingtai.kernel.llm.base import FunctionSchema, ToolCall
-from lingtai.kernel.tool_call_guard import GuardDecision, ToolCallGuard
+from lingtai_kernel.config import AgentConfig
+from lingtai_kernel.llm.base import FunctionSchema, ToolCall
+from lingtai_kernel.tool_call_guard import GuardDecision, ToolCallGuard
 
 
 def _make_agent(tmp_path, capabilities=None):
@@ -800,7 +800,7 @@ def test_handle_emanate_dispatches_and_returns_ids(tmp_path):
 
     time.sleep(1)
 
-    from lingtai.kernel.notifications import collect_notifications
+    from lingtai_kernel.notifications import collect_notifications
 
     assert agent.inbox.empty()
     events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
@@ -1179,7 +1179,7 @@ def test_end_to_end_emanate_list_ask_reclaim(tmp_path):
     statuses = {e["id"]: e["status"] for e in list_result["emanations"]}
     assert statuses.get("em-1") == "done"
 
-    from lingtai.kernel.notifications import collect_notifications
+    from lingtai_kernel.notifications import collect_notifications
 
     assert agent.inbox.empty()
     events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
@@ -1194,7 +1194,7 @@ def test_end_to_end_emanate_list_ask_reclaim(tmp_path):
 
 
 def test_on_emanation_done_publishes_system_notification_not_request(tmp_path):
-    from lingtai.kernel.notifications import collect_notifications
+    from lingtai_kernel.notifications import collect_notifications
 
     agent = _make_agent(tmp_path, ["daemon"])
     agent.inbox = queue.Queue()
@@ -1226,7 +1226,7 @@ def test_on_emanation_done_publishes_system_notification_not_request(tmp_path):
 
 
 def test_on_emanation_done_failure_always_notifies(tmp_path):
-    from lingtai.kernel.notifications import collect_notifications
+    from lingtai_kernel.notifications import collect_notifications
 
     agent = _make_agent(tmp_path, ["daemon"])
     agent.inbox = queue.Queue()
@@ -1255,7 +1255,7 @@ def test_on_emanation_done_failure_always_notifies(tmp_path):
 
 
 def test_on_emanation_done_short_success_still_suppressed(tmp_path):
-    from lingtai.kernel.notifications import collect_notifications
+    from lingtai_kernel.notifications import collect_notifications
 
     agent = _make_agent(tmp_path, ["daemon"])
     agent.inbox = queue.Queue()
@@ -1668,7 +1668,7 @@ def test_emanate_with_preset_validates_preset_exists(tmp_path, monkeypatch):
 def test_emanate_with_preset_unreachable_refuses(tmp_path, monkeypatch):
     """If the requested preset has connectivity 'unreachable', refuse the emanation."""
     from unittest.mock import patch
-    import lingtai.kernel.preset_connectivity as preset_connectivity
+    import lingtai_kernel.preset_connectivity as preset_connectivity
 
     presets_dir = tmp_path / "presets"
     presets_dir.mkdir()
@@ -1717,7 +1717,7 @@ def test_emanate_with_preset_passes_through(tmp_path, monkeypatch):
     """When preset is valid and reachable, emanation is scheduled and
     daemon.json records the preset name + provider + model."""
     from unittest.mock import patch
-    import lingtai.kernel.preset_connectivity as preset_connectivity
+    import lingtai_kernel.preset_connectivity as preset_connectivity
 
     presets_dir = tmp_path / "presets"
     presets_dir.mkdir()

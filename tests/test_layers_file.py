@@ -128,7 +128,7 @@ def test_grep_via_capability(tmp_path):
 
 def test_base_agent_has_no_file_intrinsics(tmp_path):
     """BaseAgent should NOT have file intrinsics after phase 2."""
-    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai_kernel.base_agent import BaseAgent
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     for name in ("read", "write", "edit", "glob", "grep"):
         assert name not in agent._intrinsics, f"{name} should not be in BaseAgent intrinsics"
@@ -137,7 +137,7 @@ def test_base_agent_has_no_file_intrinsics(tmp_path):
 
 def test_base_agent_kernel_only(tmp_path):
     """BaseAgent should have exactly 4 intrinsics: email, system, psyche, soul."""
-    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai_kernel.base_agent import BaseAgent
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     assert set(agent._intrinsics.keys()) == {"email", "system", "psyche", "soul"}
     agent.stop(timeout=1.0)

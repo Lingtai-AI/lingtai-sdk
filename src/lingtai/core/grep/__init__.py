@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 from ...i18n import t
 
 if TYPE_CHECKING:
-    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai_kernel.base_agent import BaseAgent
 
 
 def get_description(lang: str = "en") -> str:
@@ -32,14 +32,9 @@ def get_schema(lang: str = "en") -> dict:
 
 
 
-def make_handler(agent: "BaseAgent"):
-    """Build the ``grep`` tool handler bound to *agent*.
-
-    Single source of truth for the grep behavior: both ``setup()`` and the SDK
-    file-tool bundle bridge (``lingtai.core.file_bundle``) wire this same
-    closure, so the bundle-hosted tool runs byte-identical logic to the
-    registered tool.
-    """
+def setup(agent: "BaseAgent") -> None:
+    """Set up the grep capability on an agent."""
+    lang = agent._config.language
 
     def handle_grep(args: dict) -> dict:
         pattern = args.get("pattern", "")
@@ -90,15 +85,4 @@ def make_handler(agent: "BaseAgent"):
         except Exception as e:
             return {"status": "error", "message": f"Grep failed: {e}"}
 
-    return handle_grep
-
-
-def setup(agent: "BaseAgent") -> None:
-    """Set up the grep capability on an agent."""
-    lang = agent._config.language
-    agent.add_tool(
-        "grep",
-        schema=get_schema(lang),
-        handler=make_handler(agent),
-        description=get_description(lang),
-    )
+    agent.add_tool("grep", schema=get_schema(lang), handler=handle_grep, description=get_description(lang))

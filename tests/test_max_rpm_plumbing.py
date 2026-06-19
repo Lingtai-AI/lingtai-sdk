@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from lingtai.kernel.config import AgentConfig
+from lingtai_kernel.config import AgentConfig
 from lingtai.llm.service import LLMService
 from lingtai.llm.base import LLMAdapter, _GatedSession
 from lingtai.llm.api_gate import APICallGate

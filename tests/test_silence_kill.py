@@ -23,7 +23,7 @@ from unittest.mock import MagicMock
 from uuid import uuid4
 
 from lingtai.agent import Agent
-from lingtai.kernel.base_agent import BaseAgent
+from lingtai_kernel.base_agent import BaseAgent
 
 
 def _persist_inbox_email(working_dir: Path, *, sender="sender", subject="hi",
@@ -112,8 +112,8 @@ def test_old_admin_keys_ignored(tmp_path):
 
 def test_sequential_execution_stops_on_cancel(tmp_path):
     """Sequential tool execution should return empty when cancel event is set."""
-    from lingtai.kernel.loop_guard import LoopGuard
-    from lingtai.kernel.tool_executor import ToolExecutor
+    from lingtai_kernel.loop_guard import LoopGuard
+    from lingtai_kernel.tool_executor import ToolExecutor
     from lingtai.llm import ToolCall
 
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
@@ -154,7 +154,7 @@ def test_normal_email_notifies_inbox(tmp_path):
     notification sync mechanism reads the file and injects the wire
     pair (or wakes the agent if asleep).
     """
-    from lingtai.kernel.notifications import collect_notifications
+    from lingtai_kernel.notifications import collect_notifications
 
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     _persist_inbox_email(agent.working_dir, sender="colleague", subject="hello", message="hi there")
@@ -194,7 +194,7 @@ def test_non_admin_can_send_normal_mail(tmp_path):
 def test_mail_type_silence_treated_as_normal(tmp_path):
     """type='silence' is treated like normal mail: publishes ``.notification/email.json``,
     does not set cancel."""
-    from lingtai.kernel.notifications import collect_notifications
+    from lingtai_kernel.notifications import collect_notifications
 
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     assert not agent._cancel_event.is_set()
@@ -217,7 +217,7 @@ def test_mail_type_silence_treated_as_normal(tmp_path):
 def test_mail_type_kill_treated_as_normal(tmp_path):
     """type='kill' is treated like normal mail: publishes ``.notification/email.json``,
     does not set cancel or shutdown."""
-    from lingtai.kernel.notifications import collect_notifications
+    from lingtai_kernel.notifications import collect_notifications
 
     agent = BaseAgent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
     assert not agent._cancel_event.is_set()

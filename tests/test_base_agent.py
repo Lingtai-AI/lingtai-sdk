@@ -5,10 +5,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lingtai.kernel.base_agent import BaseAgent
-from lingtai.kernel.message import Message, _make_message, MSG_REQUEST, MSG_USER_INPUT
-from lingtai.kernel.state import AgentState
-from lingtai.kernel.types import UnknownToolError
+from lingtai_kernel.base_agent import BaseAgent
+from lingtai_kernel.message import Message, _make_message, MSG_REQUEST, MSG_USER_INPUT
+from lingtai_kernel.state import AgentState
+from lingtai_kernel.types import UnknownToolError
 
 
 def make_mock_service():

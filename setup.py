@@ -6,7 +6,7 @@ two extra steps into the standard ``setuptools.build_meta`` flow:
 1. **Bundle the Rust sidecar binary into the wheel.**
    ``BuildPyWithSidecar`` and ``BdistWheelImpure`` both call
    ``_ensure_sidecar_built()``, which runs ``cargo build --release`` on
-   ``src/lingtai/native/search_sidecar`` and copies the resulting binary
+   ``experimental/lingtai-search-sidecar`` and copies the resulting binary
    into ``src/lingtai/bin/lingtai-search-sidecar[.exe]``. The function is
    idempotent — repeated invocations are cheap because cargo no-ops when
    nothing changed.
@@ -30,7 +30,7 @@ Skip / fallback behavior:
   (``LINGTAI_FILE_IO_SIDECAR=…``).
 * Set ``LINGTAI_REQUIRE_RUST_BUILD=1`` to make any cargo failure abort the
   build instead of degrading gracefully.
-* The Rust crate sources live under ``src/lingtai/native/search_sidecar/``
+* The Rust crate sources live under ``experimental/lingtai-search-sidecar/``
   and are included in sdists via ``MANIFEST.in`` so source builds can
   rebuild from the bundled crate.
 """
@@ -61,7 +61,7 @@ except ImportError:  # pragma: no cover - exercised only on old setuptools
 
 
 REPO_ROOT = Path(__file__).parent.resolve()
-SIDECAR_CRATE = REPO_ROOT / "src" / "lingtai" / "native" / "search_sidecar"
+SIDECAR_CRATE = REPO_ROOT / "experimental" / "lingtai-search-sidecar"
 PACKAGE_BIN_DIR = REPO_ROOT / "src" / "lingtai" / "bin"
 BINARY_NAME = "lingtai-search-sidecar.exe" if os.name == "nt" else "lingtai-search-sidecar"
 

@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 from ...i18n import t
 
 if TYPE_CHECKING:
-    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai_kernel.base_agent import BaseAgent
 
 
 def get_description(lang: str = "en") -> str:
@@ -31,17 +31,9 @@ def get_schema(lang: str = "en") -> dict:
 
 
 
-def make_handler(agent: "BaseAgent"):
-    """Build the ``edit`` tool handler bound to *agent*.
-
-    Single source of truth for the edit behavior: both ``setup()`` (the normal
-    capability-registration path) and the SDK file-mutation bundle bridge
-    (``lingtai.core.file_bundle``) wire this same closure, so the bundle-hosted
-    tool runs byte-identical logic to the registered tool — the same
-    read-modify-write against ``agent._file_io`` / ``agent._working_dir``, the
-    same ambiguity refusal (``old_string`` not found / found more than once
-    without ``replace_all``), and the same error structures.
-    """
+def setup(agent: "BaseAgent") -> None:
+    """Set up the edit capability on an agent."""
+    lang = agent._config.language
 
     def handle_edit(args: dict) -> dict:
         path = args.get("file_path", "")
@@ -73,15 +65,4 @@ def make_handler(agent: "BaseAgent"):
             return {"status": "error", "message": f"Cannot write {path}: {e}"}
         return {"status": "ok", "replacements": count if replace_all else 1}
 
-    return handle_edit
-
-
-def setup(agent: "BaseAgent") -> None:
-    """Set up the edit capability on an agent."""
-    lang = agent._config.language
-    agent.add_tool(
-        "edit",
-        schema=get_schema(lang),
-        handler=make_handler(agent),
-        description=get_description(lang),
-    )
+    agent.add_tool("edit", schema=get_schema(lang), handler=handle_edit, description=get_description(lang))

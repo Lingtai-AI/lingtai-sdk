@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from lingtai.kernel.notifications import (
+from lingtai_kernel.notifications import (
     notification_fingerprint,
     collect_notifications,
     publish,
@@ -167,7 +167,7 @@ def test_concurrent_publish_atomicity(tmp_path: Path) -> None:
 def test_notification_action_returns_empty_when_nothing_published(
     tmp_path: Path,
 ) -> None:
-    from lingtai.core.system import handle
+    from lingtai_kernel.intrinsics.system import handle
 
     @dataclass
     class _Stub:
@@ -190,7 +190,7 @@ def test_notification_action_returns_empty_when_nothing_published(
 
 
 def test_notification_action_returns_placeholder(tmp_path: Path) -> None:
-    from lingtai.core.system import handle
+    from lingtai_kernel.intrinsics.system import handle
 
     publish(tmp_path, "email", {"count": 5, "newest_received_at": "2026-05-05T00:00:00Z"})
     publish(tmp_path, "soul", {"voices": [{"source": "warmth", "voice": "..."}]})
@@ -240,7 +240,7 @@ class _ProducerStubAgent:
 def test_email_publish_writes_file(tmp_path: Path, monkeypatch) -> None:
     """When the email producer has unread mail, it writes
     `.notification/email.json` with count + digest."""
-    from lingtai.kernel.base_agent import messaging
+    from lingtai_kernel.base_agent import messaging
 
     agent = _ProducerStubAgent(_working_dir=tmp_path)
 
@@ -248,7 +248,7 @@ def test_email_publish_writes_file(tmp_path: Path, monkeypatch) -> None:
         return ("3 unread:\n- A\n- B\n- C\n", 3, "2026-05-05T00:00:00Z")
 
     monkeypatch.setattr(
-        "lingtai.core.email._render_unread_digest",
+        "lingtai_kernel.intrinsics.email.primitives._render_unread_digest",
         fake_render,
     )
 
@@ -264,14 +264,14 @@ def test_email_publish_writes_file(tmp_path: Path, monkeypatch) -> None:
 
 def test_email_clear_on_zero(tmp_path: Path, monkeypatch) -> None:
     """When unread count drops to 0, the producer clears the file."""
-    from lingtai.kernel.base_agent import messaging
+    from lingtai_kernel.base_agent import messaging
 
     agent = _ProducerStubAgent(_working_dir=tmp_path)
     publish(tmp_path, "email", {"data": {"count": 5}})  # pre-existing
     assert (tmp_path / ".notification" / "email.json").exists()
 
     monkeypatch.setattr(
-        "lingtai.core.email._render_unread_digest",
+        "lingtai_kernel.intrinsics.email.primitives._render_unread_digest",
         lambda _agent, **_kw: ("", 0, None),
     )
 
@@ -282,7 +282,7 @@ def test_email_clear_on_zero(tmp_path: Path, monkeypatch) -> None:
 
 def test_system_publish_appends_event(tmp_path: Path) -> None:
     """Two calls produce a single file with both events."""
-    from lingtai.kernel.base_agent import messaging
+    from lingtai_kernel.base_agent import messaging
 
     agent = _ProducerStubAgent(_working_dir=tmp_path)
     messaging._enqueue_system_notification(
@@ -303,7 +303,7 @@ def test_system_publish_appends_event(tmp_path: Path) -> None:
 
 def test_system_publish_caps_at_20(tmp_path: Path) -> None:
     """25 sequential calls keep only the 20 most recent events."""
-    from lingtai.kernel.base_agent import messaging
+    from lingtai_kernel.base_agent import messaging
 
     agent = _ProducerStubAgent(_working_dir=tmp_path)
     for i in range(25):
@@ -321,7 +321,7 @@ def test_system_publish_caps_at_20(tmp_path: Path) -> None:
 
 def test_system_publish_concurrent_no_lost_writes(tmp_path: Path) -> None:
     """20 threads concurrently publish; all events end up in the file."""
-    from lingtai.kernel.base_agent import messaging
+    from lingtai_kernel.base_agent import messaging
 
     agent = _ProducerStubAgent(_working_dir=tmp_path)
     n_events = 20
@@ -345,7 +345,7 @@ def test_system_publish_concurrent_no_lost_writes(tmp_path: Path) -> None:
 
 def test_soul_voices_shape(tmp_path: Path) -> None:
     """The soul producer's voice-shaping helper trims empty fields."""
-    from lingtai.core.soul.flow import _shape_soul_voices
+    from lingtai_kernel.intrinsics.soul.flow import _shape_soul_voices
 
     voices = [
         {"source": "warmth", "voice": "remember to rest", "thinking": ["..."]},
@@ -363,7 +363,7 @@ def test_soul_voices_shape(tmp_path: Path) -> None:
 
 def test_human_soul_inquiry_publishes_btw_notification(tmp_path: Path) -> None:
     """Human `/btw` inquiry results are mirrored to the agent as notification."""
-    from lingtai.core.soul.inquiry import (
+    from lingtai_kernel.intrinsics.soul.inquiry import (
         _publish_human_inquiry_notification,
     )
 
@@ -399,7 +399,7 @@ def test_non_human_soul_inquiry_does_not_publish_btw_notification(
     monkeypatch,
 ) -> None:
     """Auto-insight / agent inquiries keep the existing log-only behavior."""
-    from lingtai.core.soul import inquiry
+    from lingtai_kernel.intrinsics.soul import inquiry
 
     agent = _ProducerStubAgent(_working_dir=tmp_path)
     monkeypatch.setattr(
@@ -427,7 +427,7 @@ def test_non_human_soul_inquiry_does_not_publish_btw_notification(
 
 def test_submit_writes_envelope(tmp_path: Path) -> None:
     """``submit`` builds the documented envelope and writes the file."""
-    from lingtai.kernel.notifications import submit
+    from lingtai_kernel.notifications import submit
 
     submit(tmp_path, "system",
            header="hello", icon="✨",
@@ -446,7 +446,7 @@ def test_submit_writes_envelope(tmp_path: Path) -> None:
 
 
 def test_submit_priority_override(tmp_path: Path) -> None:
-    from lingtai.kernel.notifications import submit
+    from lingtai_kernel.notifications import submit
 
     submit(tmp_path, "nudge",
            header="oh no", icon="🚨",
@@ -458,10 +458,10 @@ def test_submit_priority_override(tmp_path: Path) -> None:
 def test_submit_via_system_alias(tmp_path: Path) -> None:
     """``intrinsics.system.publish_notification`` is the same callable
     as ``notifications.submit`` — producers can import either."""
-    from lingtai.core.system import (
+    from lingtai_kernel.intrinsics.system import (
         publish_notification, clear_notification,
     )
-    from lingtai.kernel.notifications import submit, clear
+    from lingtai_kernel.notifications import submit, clear
 
     assert publish_notification is submit
     assert clear_notification is clear
@@ -522,7 +522,7 @@ def test_molt_preserves_notification_dir(tmp_path: Path) -> None:
 
 def _make_chat_stub():
     """Minimal ChatInterface-backed chat stub for sync tests."""
-    from lingtai.kernel.llm.interface import ChatInterface
+    from lingtai_kernel.llm.interface import ChatInterface
 
     class _ChatStub:
         def __init__(self):
@@ -545,9 +545,9 @@ def test_sync_idle_posts_wake_message(tmp_path: Path) -> None:
     without posting a wake message left the run loop blocked on
     ``inbox.get()`` even though the wire was correct on disk.
     """
-    from lingtai.kernel.base_agent import BaseAgent
-    from lingtai.kernel.state import AgentState
-    from lingtai.kernel.message import MSG_TC_WAKE
+    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai_kernel.state import AgentState
+    from lingtai_kernel.message import MSG_TC_WAKE
 
     chat = _make_chat_stub()
 
@@ -609,9 +609,9 @@ def test_sync_idle_injects_post_molt_after_molt_batch_deferred_stamp(tmp_path: P
     Here we reproduce the uncommitted-fp state left by the per-molt-batch
     deferral and assert IDLE sync injects the wake.
     """
-    from lingtai.kernel.base_agent import BaseAgent
-    from lingtai.kernel.state import AgentState
-    from lingtai.kernel.message import MSG_TC_WAKE
+    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai_kernel.state import AgentState
+    from lingtai_kernel.message import MSG_TC_WAKE
 
     chat = _make_chat_stub()
 
@@ -674,10 +674,10 @@ def test_sync_idle_injects_post_molt_after_molt_batch_deferred_stamp(tmp_path: P
 def test_sync_idle_injects_pair_with_synthesized_marker(tmp_path: Path) -> None:
     """IDLE: fingerprint change → synthetic pair appended; result block
     has synthesized=True and JSON body carries `_synthesized: true`."""
-    from lingtai.kernel.base_agent import BaseAgent
-    from lingtai.kernel.state import AgentState
-    from lingtai.kernel.llm.interface import ToolCallBlock, ToolResultBlock
-    from lingtai.kernel.message import _make_message  # noqa: F401
+    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai_kernel.state import AgentState
+    from lingtai_kernel.llm.interface import ToolCallBlock, ToolResultBlock
+    from lingtai_kernel.message import _make_message  # noqa: F401
 
     chat = _make_chat_stub()
 
@@ -732,7 +732,7 @@ def test_sync_idle_injects_pair_with_synthesized_marker(tmp_path: Path) -> None:
     # Assistant entry is tool-only: no visible synthesized TextBlock summary
     # should appear in the transcript / diary surface on the successful path.
     assert len(entries[0].content) == 1
-    from lingtai.kernel.llm.interface import TextBlock
+    from lingtai_kernel.llm.interface import TextBlock
     assert not any(isinstance(block, TextBlock) for block in entries[0].content)
     injected_logs = [fields for evt, fields in agent._logs if evt == "notification_pair_injected"]
     assert injected_logs
@@ -764,8 +764,8 @@ def test_sync_idle_injects_pair_with_synthesized_marker(tmp_path: Path) -> None:
 
 def test_sync_idle_skeletonizes_then_reinjects(tmp_path: Path) -> None:
     """Two consecutive sync calls — old payload is skeletonized, new pair appended."""
-    from lingtai.kernel.base_agent import BaseAgent
-    from lingtai.kernel.state import AgentState
+    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai_kernel.state import AgentState
 
     chat = _make_chat_stub()
 
@@ -827,8 +827,8 @@ def test_sync_idle_skeletonizes_then_reinjects(tmp_path: Path) -> None:
 
 def test_sync_idle_empty_strips(tmp_path: Path) -> None:
     """When all producer files are cleared, the wire pair is stripped."""
-    from lingtai.kernel.base_agent import BaseAgent
-    from lingtai.kernel.state import AgentState
+    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai_kernel.state import AgentState
 
     chat = _make_chat_stub()
 
@@ -883,8 +883,8 @@ def test_sync_idle_empty_strips(tmp_path: Path) -> None:
 
 def test_sync_no_change_is_noop(tmp_path: Path) -> None:
     """Two syncs without any filesystem change → second is a no-op."""
-    from lingtai.kernel.base_agent import BaseAgent
-    from lingtai.kernel.state import AgentState
+    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai_kernel.state import AgentState
 
     chat = _make_chat_stub()
 
@@ -940,9 +940,9 @@ def test_sync_active_defers_without_committing_or_mutating_tool_result(tmp_path:
     unchanged and keeps the fingerprint uncommitted so the next IDLE boundary
     retries via a distinct synthetic notification pair.
     """
-    from lingtai.kernel.base_agent import BaseAgent
-    from lingtai.kernel.state import AgentState
-    from lingtai.kernel.llm.interface import ToolCallBlock, ToolResultBlock
+    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai_kernel.state import AgentState
+    from lingtai_kernel.llm.interface import ToolCallBlock, ToolResultBlock
 
     chat = _make_chat_stub()
     iface = chat.interface
@@ -1010,8 +1010,8 @@ def test_sync_active_defers_without_committing_or_mutating_tool_result(tmp_path:
 def test_sync_empty_state_clears_pending_meta(tmp_path: Path) -> None:
     """If a pending ACTIVE payload exists and producer files vanish before
     delivery, the empty-state sync must drop the stale pending payload."""
-    from lingtai.kernel.base_agent import BaseAgent
-    from lingtai.kernel.state import AgentState
+    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai_kernel.state import AgentState
 
     chat = _make_chat_stub()
 
@@ -1065,7 +1065,7 @@ def test_session_manager_has_no_notification_inject_hook() -> None:
     ToolResultBlock content at ``SessionManager.send()`` time.
     """
     import inspect
-    from lingtai.kernel.session import SessionManager
+    from lingtai_kernel.session import SessionManager
 
     params = inspect.signature(SessionManager.__init__).parameters
     assert "notification_inject_fn" not in params
@@ -1074,7 +1074,7 @@ def test_session_manager_has_no_notification_inject_hook() -> None:
 
 def test_base_agent_no_longer_exposes_meta_prefix_injector() -> None:
     """BaseAgent no longer carries the mutating _inject_notification_meta path."""
-    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai_kernel.base_agent import BaseAgent
 
     assert not hasattr(BaseAgent, "_inject_notification_meta")
 
@@ -1087,11 +1087,11 @@ def test_end_of_turn_idle_sync_delivers_deferred_notification(tmp_path: Path) ->
     becomes a distinct synthetic notification pair and a MSG_TC_WAKE.
     """
     import queue
-    from lingtai.kernel.base_agent import BaseAgent
-    from lingtai.kernel.base_agent import turn as turn_mod
-    from lingtai.kernel.message import _make_message, MSG_REQUEST, MSG_TC_WAKE
-    from lingtai.kernel.state import AgentState
-    from lingtai.kernel.llm.interface import ToolResultBlock
+    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai_kernel.base_agent import turn as turn_mod
+    from lingtai_kernel.message import _make_message, MSG_REQUEST, MSG_TC_WAKE
+    from lingtai_kernel.state import AgentState
+    from lingtai_kernel.llm.interface import ToolResultBlock
 
     class _SessionStub:
         def __init__(self, chat):
@@ -1190,9 +1190,9 @@ def test_end_of_turn_idle_sync_delivers_deferred_notification(tmp_path: Path) ->
 def test_sync_asleep_wakes_on_change(tmp_path: Path) -> None:
     """Producer publishes while agent is ASLEEP → state transitions to
     IDLE, pair is injected, MSG_TC_WAKE goes to inbox."""
-    from lingtai.kernel.base_agent import BaseAgent
-    from lingtai.kernel.state import AgentState
-    from lingtai.kernel.message import MSG_TC_WAKE
+    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai_kernel.state import AgentState
+    from lingtai_kernel.message import MSG_TC_WAKE
 
     chat = _make_chat_stub()
     state_history: list[AgentState] = []
@@ -1250,8 +1250,8 @@ def test_sync_asleep_wakes_on_change(tmp_path: Path) -> None:
 def test_sync_asleep_no_change_stays_asleep(tmp_path: Path) -> None:
     """No producer write → fingerprint stays empty → agent stays
     ASLEEP."""
-    from lingtai.kernel.base_agent import BaseAgent
-    from lingtai.kernel.state import AgentState
+    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai_kernel.state import AgentState
 
     chat = _make_chat_stub()
 
@@ -1307,8 +1307,8 @@ def _make_asleep_inject_fail_agent(tmp_path: Path, chat, state_history):
     """Build an ASLEEP stub agent whose `_inject_notification_pair`
     always returns False — simulating a wire that cannot accept the
     synthetic pair even after `_heal_pending_tool_calls`."""
-    from lingtai.kernel.base_agent import BaseAgent
-    from lingtai.kernel.state import AgentState
+    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai_kernel.state import AgentState
 
     class _Agent(BaseAgent):
         def __init__(self, workdir):
@@ -1370,9 +1370,9 @@ def test_sync_asleep_inject_fail_falls_back_to_degraded_request(tmp_path: Path) 
     request that tells it to call system(action="notification") or
     read the producer files directly.
     """
-    from lingtai.kernel.state import AgentState
-    from lingtai.kernel.message import MSG_REQUEST, MSG_TC_WAKE
-    from lingtai.kernel.notifications import notification_fingerprint
+    from lingtai_kernel.state import AgentState
+    from lingtai_kernel.message import MSG_REQUEST, MSG_TC_WAKE
+    from lingtai_kernel.notifications import notification_fingerprint
 
     chat = _make_chat_stub()
     state_history: list = []
@@ -1418,7 +1418,7 @@ def test_sync_asleep_inject_fail_does_not_replay_on_second_sync(tmp_path: Path) 
     """After the degraded path commits the fingerprint, a second sync
     with the same on-disk state must be a complete no-op — no extra
     inject attempts, no extra inbox messages, no extra log entries."""
-    from lingtai.kernel.state import AgentState
+    from lingtai_kernel.state import AgentState
 
     chat = _make_chat_stub()
     state_history: list = []
@@ -1453,7 +1453,7 @@ def _make_anthropic_session_with_pre_staged_pair():
     """Build a real AnthropicChatSession with a synthesized notification
     pair already at the wire tail."""
     from unittest.mock import MagicMock
-    from lingtai.kernel.llm.interface import (
+    from lingtai_kernel.llm.interface import (
         ChatInterface,
         ToolCallBlock,
         ToolResultBlock,
@@ -1542,7 +1542,7 @@ def test_anthropic_send_none_error_does_not_drop_pair() -> None:
     # Wire is unchanged — the synthesized pair survived.
     assert len(iface.entries) == pre_count
     assert iface.entries[-1].role == "user"
-    from lingtai.kernel.llm.interface import ToolResultBlock
+    from lingtai_kernel.llm.interface import ToolResultBlock
     assert any(
         isinstance(b, ToolResultBlock) for b in iface.entries[-1].content
     )
@@ -1552,7 +1552,7 @@ def _make_openai_session_with_pre_staged_pair():
     """Build a real OpenAIChatSession with a synthesized notification
     pair already at the wire tail."""
     from unittest.mock import MagicMock
-    from lingtai.kernel.llm.interface import (
+    from lingtai_kernel.llm.interface import (
         ChatInterface,
         ToolCallBlock,
         ToolResultBlock,
@@ -1670,11 +1670,11 @@ def test_context_molt_batch_skips_active_notification_stamp(tmp_path):
     """The psyche.molt result batch must not consume its own post-molt wake."""
     from types import SimpleNamespace
 
-    from lingtai.kernel.base_agent.turn import _batch_includes_context_molt
-    from lingtai.kernel.llm.base import ToolCall
-    from lingtai.kernel.llm.interface import ToolResultBlock
-    from lingtai.kernel.meta_block import attach_active_notifications
-    from lingtai.kernel.notifications import notification_fingerprint
+    from lingtai_kernel.base_agent.turn import _batch_includes_context_molt
+    from lingtai_kernel.llm.base import ToolCall
+    from lingtai_kernel.llm.interface import ToolResultBlock
+    from lingtai_kernel.meta_block import attach_active_notifications
+    from lingtai_kernel.notifications import notification_fingerprint
 
     notif_dir = tmp_path / ".notification"
     notif_dir.mkdir(parents=True, exist_ok=True)
@@ -1709,11 +1709,11 @@ def test_non_molt_batch_after_molt_can_consume_post_molt(tmp_path):
     """If the agent keeps going ACTIVE after molt, the next batch sees post-molt."""
     from types import SimpleNamespace
 
-    from lingtai.kernel.base_agent.turn import _batch_includes_context_molt
-    from lingtai.kernel.llm.base import ToolCall
-    from lingtai.kernel.llm.interface import ToolResultBlock
-    from lingtai.kernel.meta_block import attach_active_notifications
-    from lingtai.kernel.notifications import notification_fingerprint
+    from lingtai_kernel.base_agent.turn import _batch_includes_context_molt
+    from lingtai_kernel.llm.base import ToolCall
+    from lingtai_kernel.llm.interface import ToolResultBlock
+    from lingtai_kernel.meta_block import attach_active_notifications
+    from lingtai_kernel.notifications import notification_fingerprint
 
     notif_dir = tmp_path / ".notification"
     notif_dir.mkdir(parents=True, exist_ok=True)

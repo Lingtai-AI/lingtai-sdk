@@ -1,4 +1,4 @@
-from lingtai.kernel.state import AgentState
+from lingtai_kernel.state import AgentState
 
 
 def test_agent_state_values():

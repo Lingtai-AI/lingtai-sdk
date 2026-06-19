@@ -9,7 +9,7 @@ import pytest
 def test_no_credentials_when_env_var_unset(monkeypatch):
     """If api_key_env is set but the env var is not, return no_credentials immediately."""
     monkeypatch.delenv("MISSING_KEY", raising=False)
-    from lingtai.kernel.preset_connectivity import check_connectivity
+    from lingtai_kernel.preset_connectivity import check_connectivity
     result = check_connectivity(
         provider="minimax",
         base_url="https://api.minimax.io",
@@ -22,7 +22,7 @@ def test_no_credentials_when_env_var_unset(monkeypatch):
 def test_no_credentials_does_not_make_network_call(monkeypatch):
     """When env var is missing, no socket/network call is attempted."""
     monkeypatch.delenv("MISSING_KEY", raising=False)
-    from lingtai.kernel import preset_connectivity
+    from lingtai_kernel import preset_connectivity
     with patch.object(preset_connectivity, "_probe_host") as probe:
         result = preset_connectivity.check_connectivity(
             provider="minimax",
@@ -36,7 +36,7 @@ def test_no_credentials_does_not_make_network_call(monkeypatch):
 def test_ok_when_host_reachable(monkeypatch):
     """When env var is set and host is reachable, return ok with latency."""
     monkeypatch.setenv("MOCK_KEY", "sk-test")
-    from lingtai.kernel import preset_connectivity
+    from lingtai_kernel import preset_connectivity
     with patch.object(preset_connectivity, "_probe_host", return_value=42):
         result = preset_connectivity.check_connectivity(
             provider="x",
@@ -51,7 +51,7 @@ def test_ok_when_host_reachable(monkeypatch):
 def test_unreachable_when_host_probe_raises(monkeypatch):
     """When the probe raises, return unreachable with the error message."""
     monkeypatch.setenv("MOCK_KEY", "sk-test")
-    from lingtai.kernel import preset_connectivity
+    from lingtai_kernel import preset_connectivity
     with patch.object(preset_connectivity, "_probe_host", side_effect=OSError("connection refused")):
         result = preset_connectivity.check_connectivity(
             provider="x",
@@ -64,7 +64,7 @@ def test_unreachable_when_host_probe_raises(monkeypatch):
 
 def test_no_api_key_env_skips_credential_check(monkeypatch):
     """If api_key_env is None or empty, skip credential check and just probe."""
-    from lingtai.kernel import preset_connectivity
+    from lingtai_kernel import preset_connectivity
     with patch.object(preset_connectivity, "_probe_host", return_value=10):
         result = preset_connectivity.check_connectivity(
             provider="x",
@@ -77,7 +77,7 @@ def test_no_api_key_env_skips_credential_check(monkeypatch):
 def test_default_url_used_when_base_url_missing(monkeypatch):
     """When base_url is None, fall back to provider's default URL."""
     monkeypatch.setenv("MOCK_KEY", "sk-test")
-    from lingtai.kernel import preset_connectivity
+    from lingtai_kernel import preset_connectivity
     captured = {}
     def fake_probe(host, port, timeout):
         captured["host"] = host
@@ -96,7 +96,7 @@ def test_default_url_used_when_base_url_missing(monkeypatch):
 def test_unreachable_when_no_url_and_unknown_provider(monkeypatch):
     """No base_url + unknown provider → unreachable with explanatory error."""
     monkeypatch.setenv("MOCK_KEY", "sk-test")
-    from lingtai.kernel.preset_connectivity import check_connectivity
+    from lingtai_kernel.preset_connectivity import check_connectivity
     result = check_connectivity(
         provider="weird-provider",
         base_url=None,
@@ -114,7 +114,7 @@ def test_no_caching_every_call_reprobes(monkeypatch):
     (or short-circuits on no_credentials, which is free anyway).
     """
     monkeypatch.setenv("MOCK_KEY", "sk-test")
-    from lingtai.kernel import preset_connectivity
+    from lingtai_kernel import preset_connectivity
     probe_calls = []
     def counting_probe(host, port, timeout):
         probe_calls.append((host, port))
@@ -130,7 +130,7 @@ def test_check_many_runs_in_parallel(monkeypatch):
     """check_many() runs probes concurrently — total time is bounded by the
     slowest single probe, not the sum."""
     monkeypatch.setenv("MOCK_KEY", "sk-test")
-    from lingtai.kernel import preset_connectivity
+    from lingtai_kernel import preset_connectivity
 
     def slow_probe(host, port, timeout):
         time.sleep(0.5)
@@ -157,7 +157,7 @@ def test_check_many_preserves_input_order(monkeypatch):
     """check_many() returns results in the same order as specs, even though
     probes complete in arbitrary order in the thread pool."""
     monkeypatch.setenv("MOCK_KEY", "sk-test")
-    from lingtai.kernel import preset_connectivity
+    from lingtai_kernel import preset_connectivity
 
     def variable_probe(host, port, timeout):
         # Probes complete in reverse order from input
@@ -176,5 +176,67 @@ def test_check_many_preserves_input_order(monkeypatch):
 
 
 def test_check_many_empty_list_returns_empty():
-    from lingtai.kernel.preset_connectivity import check_many
+    from lingtai_kernel.preset_connectivity import check_many
     assert check_many([]) == []
+
+
+# ---------------------------------------------------------------------------
+# Local CLI-login providers (e.g. claude-agent-sdk)
+# ---------------------------------------------------------------------------
+
+
+def test_claude_agent_sdk_ok_when_package_importable(monkeypatch):
+    """A local CLI-login provider with its package importable is `ok` —
+    no base_url, no api_key_env, and crucially no TCP probe."""
+    from lingtai_kernel import preset_connectivity
+    with patch.object(preset_connectivity, "_probe_host") as probe, \
+         patch.object(preset_connectivity, "_module_available", return_value=True):
+        result = preset_connectivity.check_connectivity(
+            provider="claude-agent-sdk",
+            base_url=None,
+            api_key_env=None,
+        )
+        assert result["status"] == "ok"
+        probe.assert_not_called()  # local provider — never hits the network
+
+
+def test_claude_agent_sdk_no_base_url_does_not_error(monkeypatch):
+    """The bug: a saved claude-agent-sdk preset was reported unreachable with
+    'no base_url and no default URL'. A local CLI-login provider must never
+    fail just because it has no base_url."""
+    from lingtai_kernel import preset_connectivity
+    with patch.object(preset_connectivity, "_module_available", return_value=True):
+        result = preset_connectivity.check_connectivity(
+            provider="claude-agent-sdk",
+            base_url=None,
+            api_key_env=None,
+        )
+        assert result["status"] != "unreachable"
+        assert "no base_url" not in (result.get("error") or "")
+
+
+def test_claude_agent_sdk_underscore_alias_treated_as_local(monkeypatch):
+    """The underscore alias claude_agent_sdk is the same local provider."""
+    from lingtai_kernel import preset_connectivity
+    with patch.object(preset_connectivity, "_module_available", return_value=True):
+        result = preset_connectivity.check_connectivity(
+            provider="claude_agent_sdk",
+            base_url=None,
+            api_key_env=None,
+        )
+        assert result["status"] == "ok"
+
+
+def test_claude_agent_sdk_missing_package_reports_no_credentials(monkeypatch):
+    """When the optional package is absent, report a clear, actionable status
+    (not the misleading 'no base_url' error)."""
+    from lingtai_kernel import preset_connectivity
+    with patch.object(preset_connectivity, "_module_available", return_value=False):
+        result = preset_connectivity.check_connectivity(
+            provider="claude-agent-sdk",
+            base_url=None,
+            api_key_env=None,
+        )
+        assert result["status"] == "no_credentials"
+        assert "claude-agent-sdk" in (result.get("error") or "")
+        assert "no base_url" not in (result.get("error") or "")

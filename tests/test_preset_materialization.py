@@ -267,7 +267,7 @@ def test_materialize_picks_up_context_limit_from_legacy_layout(tmp_path, monkeyp
     reads the preset. The materializer then writes it into init.json's
     manifest root (init.json's schema is unchanged).
     """
-    from lingtai.kernel.migrate.migrate import reset_process_cache
+    from lingtai_kernel.migrate.migrate import reset_process_cache
     reset_process_cache()
     plib = _make_preset_lib(tmp_path, {
         "narrow": {
@@ -468,7 +468,7 @@ def test_refresh_preset_omitting_daemon_keeps_override_in_manager(tmp_path, monk
     sets daemon.max_emanations=30 → live DaemonManager ceiling is 30."""
     from unittest.mock import MagicMock
     from lingtai.agent import Agent
-    from lingtai.kernel.config import AgentConfig
+    from lingtai_kernel.config import AgentConfig
 
     plib = _make_preset_lib(tmp_path, {
         "codex": {
@@ -512,7 +512,7 @@ def test_refresh_preset_keeps_daemon_override_in_manager(tmp_path, monkeypatch):
     """
     from unittest.mock import MagicMock
     from lingtai.agent import Agent
-    from lingtai.kernel.config import AgentConfig
+    from lingtai_kernel.config import AgentConfig
 
     plib = _make_preset_lib(tmp_path, {
         "smart": {
@@ -630,7 +630,7 @@ def test_materialize_missing_active_falls_back_to_default(tmp_path, monkeypatch)
     env_file.write_text("")
     data = _build_init_with_active_and_default(active_missing, default_present, env_file)
 
-    from lingtai.kernel.presets import materialize_active_preset
+    from lingtai.presets import materialize_active_preset
     materialize_active_preset(data, tmp_path)
 
     assert data["manifest"]["preset"]["active"] == default_present
@@ -652,7 +652,7 @@ def test_materialize_missing_active_and_missing_default_raises(tmp_path):
         env_file=env_file,
     )
 
-    from lingtai.kernel.presets import materialize_active_preset
+    from lingtai.presets import materialize_active_preset
     with pytest.raises(KeyError):
         materialize_active_preset(data, tmp_path)
 
@@ -670,7 +670,7 @@ def test_materialize_missing_active_with_same_default_raises(tmp_path):
         active_path=same_missing, default_path=same_missing, env_file=env_file,
     )
 
-    from lingtai.kernel.presets import materialize_active_preset
+    from lingtai.presets import materialize_active_preset
     with pytest.raises(KeyError):
         materialize_active_preset(data, tmp_path)
 
@@ -703,7 +703,7 @@ def test_materialize_malformed_active_does_not_fall_back(tmp_path):
         active_path=str(bad_active), default_path=str(good_default), env_file=env_file,
     )
 
-    from lingtai.kernel.presets import materialize_active_preset
+    from lingtai.presets import materialize_active_preset
     with pytest.raises(ValueError):
         materialize_active_preset(data, tmp_path)
     # active was NOT silently rewritten

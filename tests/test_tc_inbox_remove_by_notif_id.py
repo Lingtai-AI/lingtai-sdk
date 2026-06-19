@@ -3,8 +3,8 @@ cover the race where a notification is dismissed before it has been
 spliced into the wire chat (still queued in tc_inbox)."""
 from __future__ import annotations
 
-from lingtai.kernel.tc_inbox import TCInbox, InvoluntaryToolCall
-from lingtai.kernel.llm.interface import ToolCallBlock, ToolResultBlock
+from lingtai_kernel.tc_inbox import TCInbox, InvoluntaryToolCall
+from lingtai_kernel.llm.interface import ToolCallBlock, ToolResultBlock
 
 
 def _make_notification_item(notif_id: str, call_id: str) -> InvoluntaryToolCall:

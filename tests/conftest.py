@@ -9,7 +9,7 @@ import pytest
 def _isolate_notification_dismiss_guards():
     """Keep generic notification-dismiss guard registration test-local."""
 
-    from lingtai.kernel.notifications import _GENERIC_DISMISS_GUARDED
+    from lingtai_kernel.notifications import _GENERIC_DISMISS_GUARDED
 
     snapshot = dict(_GENERIC_DISMISS_GUARDED)
     yield

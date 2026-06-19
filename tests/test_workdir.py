@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from lingtai.kernel.workdir import WorkingDir
+from lingtai_kernel.workdir import WorkingDir
 
 
 def test_workdir_accepts_path(tmp_path):

@@ -4,15 +4,14 @@ Skills capability — per-agent skill catalog and skill-manual surface. This is 
 
 ## Components
 
-- `skills/__init__.py` — the capability implementation. `get_description` (`__init__.py:305-306`), `get_schema` (`__init__.py:309-320`), `make_handler` (`__init__.py:323-357`), `setup` (`__init__.py:360-387`), `_reconcile` (`__init__.py:214-302`), and scanner helpers (`__init__.py:53-211`). `make_handler(agent, paths)` is the stable single-source-of-truth seam: `setup()` registers `make_handler(agent, path_list)` via `add_tool`, and the SDK bundle bridge `lingtai.core.skills_bundle` hosts the *same* factory's handler (threading the same Tier-1 `paths`), so the bundle-hosted `skills` tool cannot drift from the registered one.
+- `skills/__init__.py` — the capability implementation. `get_description` (`__init__.py:296-297`), `get_schema` (`__init__.py:300-311`), `setup` (`__init__.py:314-348`), `_reconcile` (`__init__.py:205-289`), and scanner helpers (`__init__.py:53-198`).
 - `skills/manual/` — `skills-manual` skill documentation, template assets, and validator script.
 
 ## Connections
 
-- `lingtai.core.registry` maps canonical `skills` here. Former skill-catalog `library.paths` compatibility is removed in the clean rename.
+- `lingtai.capabilities` maps canonical `skills` here. Former skill-catalog `library.paths` compatibility is removed in the clean rename.
 - `Agent._install_intrinsic_manuals()` copies every capability `manual/` bundle into `.library/intrinsic/capabilities/<name>/`, then re-runs `skills._reconcile()` for first-turn catalog freshness when `skills` is loaded (`../../agent.py:158-229`).
 - The daemon capability blacklists `skills` so emanations do not recursively receive the skill catalog tool (`../daemon/__init__.py:34`).
-- `lingtai.core.skills_bundle` (the wrapper-side SDK bundle bridge, stage 3G) injects `make_handler(agent, paths)` into the `lingtai_sdk.skill_tools` catalog bundle host. Additive only — `setup()` remains the live registration path; the bridge installs no guard and changes no dispatch.
 
 ## Public API
 
@@ -24,10 +23,10 @@ The `skills` tool exposes one action:
 
 ## State
 
-- Skill storage remains `<agent>/.library/` for compatibility: `intrinsic/` is CLI-managed and `custom/` is agent-authored (`__init__.py:227-229`).
+- Skill storage remains `<agent>/.library/` for compatibility: `intrinsic/` is CLI-managed and `custom/` is agent-authored (`__init__.py:217-220`).
 - Config path source is canonical `manifest.capabilities.skills.paths` (`../../init_schema.py:247-268`).
-- Prompt state is the `skills` section (`__init__.py:264-270`).
-- Health check expects `.library/intrinsic/capabilities/skills/SKILL.md` and reports `skills_manual`, with `library_manual` retained as a response compatibility key (`__init__.py:272-298`).
+- Prompt state is the `skills` section (`__init__.py:255-261`).
+- Health check expects `.library/intrinsic/capabilities/skills/SKILL.md` and reports `skills_manual`, with `library_manual` retained as a response compatibility key (`__init__.py:263-282`).
 
 ## Notes
 

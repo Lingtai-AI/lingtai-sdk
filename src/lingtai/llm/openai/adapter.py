@@ -21,20 +21,20 @@ from urllib.parse import urlsplit
 import httpx
 import openai
 
-from lingtai.kernel.logging import get_logger
+from lingtai_kernel.logging import get_logger
 
-from lingtai.kernel.llm.base import (
+from lingtai_kernel.llm.base import (
     ChatSession,
     FunctionSchema,
     LLMResponse,
     ToolCall,
     UsageMetadata,
 )
-from lingtai.kernel.llm.interface import ToolResultBlock
+from lingtai_kernel.llm.interface import ToolResultBlock
 from lingtai.llm.base import LLMAdapter
-from lingtai.kernel.llm.interface import ChatInterface, TextBlock, ThinkingBlock, ToolCallBlock
+from lingtai_kernel.llm.interface import ChatInterface, TextBlock, ThinkingBlock, ToolCallBlock
 from ..interface_converters import to_openai, to_responses_input
-from lingtai.kernel.llm.streaming import StreamingAccumulator
+from lingtai_kernel.llm.streaming import StreamingAccumulator
 
 logger = get_logger()
 
@@ -64,35 +64,6 @@ def _base_url_namespace(base_url: str | None) -> str:
     if host:
         return host
     return "h" + hashlib.sha256(base_url.encode("utf-8")).hexdigest()[:12]
-
-
-def _resolve_agent_init_path(agent_init_path: str | os.PathLike[str] | None) -> Path | None:
-    """Resolve the local ``init.json`` path used for Codex cache affinity.
-
-    The preferred source is an explicit ``agent_init_path`` injected by the
-    LingTai host. As a fallback for direct construction and daemon preset
-    sessions, use ``LINGTAI_AGENT_DIR/init.json`` when the host environment is
-    present. Returns ``None`` for library/test callers with no agent context,
-    preserving the historical model-scoped default.
-    """
-    candidate: Path | None = None
-    if agent_init_path:
-        candidate = Path(agent_init_path).expanduser()
-    else:
-        agent_dir = os.environ.get("LINGTAI_AGENT_DIR")
-        if agent_dir:
-            candidate = Path(agent_dir).expanduser() / "init.json"
-    if candidate is None:
-        return None
-    return candidate.resolve(strict=False)
-
-
-def _agent_init_path_hash(agent_init_path: str | os.PathLike[str] | None) -> str | None:
-    """Return a short non-reversible hash for a resolved agent ``init.json`` path."""
-    resolved = _resolve_agent_init_path(agent_init_path)
-    if resolved is None:
-        return None
-    return hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:16]
 
 
 def _validate_compact_threshold(value: int | None) -> int | None:
@@ -1255,12 +1226,10 @@ class OpenAIAdapter(LLMAdapter):
         default_headers: dict | None = None,
         compact_threshold: int | None = 100_000,
         prompt_cache_key: str | bool | None = None,
-        agent_init_path: str | os.PathLike[str] | None = None,
     ):
         self.base_url = base_url
         self._use_responses = use_responses
         self._force_responses = force_responses
-        self._agent_init_path = str(agent_init_path) if agent_init_path else None
         # Prompt-cache-key policy for this adapter's OpenAI-compatible sessions:
         #   None  -> auto-derive a stable, namespaced default per model
         #   str   -> use this exact key for every session (override)
@@ -1279,7 +1248,7 @@ class OpenAIAdapter(LLMAdapter):
         # (lingtai/llm/_register.py:_openai reads provider defaults); when
         # unset we fall back to the intended 100k default. ``None`` disables
         # compaction entirely. Config is injected at construction here, never
-        # read from a global module — see lingtai.kernel.config's contract.
+        # read from a global module — see lingtai_kernel.config's contract.
         self._compact_threshold = _validate_compact_threshold(compact_threshold)
         kwargs: dict[str, Any] = {"api_key": api_key}
         if base_url:
@@ -1749,15 +1718,11 @@ class CodexOpenAIAdapter(OpenAIAdapter):
 
     def _default_prompt_cache_key(self, model: str) -> str:
         # Stable, conservative default so successive Codex turns hit the
-        # backend prompt cache. Keyed by model plus the local agent init.json
-        # path hash so one persistent agent/workstream keeps cache affinity
-        # without leaking machine paths or forcing unrelated agents into the
-        # same Codex cache bucket. `:v2` marks the schema change from the
-        # earlier model-only key. Never paired with `prompt_cache_retention`
-        # (Codex rejects that parameter).
-        init_hash = _agent_init_path_hash(self._agent_init_path)
-        if init_hash:
-            return f"lingtai-codex:{model}:init-{init_hash}:v2"
+        # backend prompt cache. Keyed by model so distinct models don't share
+        # a cache namespace; `:v1` lets us bump it if the stable prefix ever
+        # changes shape. Never paired with `prompt_cache_retention` (Codex
+        # rejects that parameter). This intentionally ignores the codex
+        # base_url host — the namespace is the fixed ``lingtai-codex`` prefix.
         return f"lingtai-codex:{model}:v1"
 
     def _create_responses_session(
@@ -1806,7 +1771,7 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             previous_response_id=None,
             compact_threshold=None,
             interface=interface,
-            # Resolves to an agent-init-path-hashed Codex key by default (see
+            # Resolves to ``lingtai-codex:{model}:v1`` by default (see
             # ``_default_prompt_cache_key``), but honors an explicit override
             # or a ``prompt_cache_key=False`` disable passed to the adapter.
             prompt_cache_key=self._resolve_prompt_cache_key(model),

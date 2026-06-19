@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lingtai.kernel.sent_message_tracker import (
+from lingtai_kernel.sent_message_tracker import (
     SentMessageTracker,
     SEND_TOOLS,
     SEND_ACTIONS,
@@ -178,14 +178,14 @@ class TestCheckExternalSend:
         return tc
 
     def test_non_send_tool_ignored(self):
-        from lingtai.kernel.base_agent.turn import _check_external_send
+        from lingtai_kernel.base_agent.turn import _check_external_send
         agent = self._make_agent()
         tc = self._make_tc("read", {"path": "/tmp"})
         _check_external_send(agent, [tc])
         assert len(agent._sent_tracker._entries) == 0
 
     def test_send_action_records(self):
-        from lingtai.kernel.base_agent.turn import _check_external_send
+        from lingtai_kernel.base_agent.turn import _check_external_send
         agent = self._make_agent()
         tc = self._make_tc("telegram", {
             "action": "send",
@@ -196,7 +196,7 @@ class TestCheckExternalSend:
         assert len(agent._sent_tracker._entries) == 1
 
     def test_reply_action_records(self):
-        from lingtai.kernel.base_agent.turn import _check_external_send
+        from lingtai_kernel.base_agent.turn import _check_external_send
         agent = self._make_agent()
         tc = self._make_tc("imap", {
             "action": "reply",
@@ -207,7 +207,7 @@ class TestCheckExternalSend:
         assert len(agent._sent_tracker._entries) == 1
 
     def test_dedup_warns_via_tool_result(self):
-        from lingtai.kernel.base_agent.turn import _check_external_send
+        from lingtai_kernel.base_agent.turn import _check_external_send
         agent = self._make_agent()
         # First send
         tc1 = self._make_tc("telegram", {
@@ -248,7 +248,7 @@ class TestCheckExternalSend:
         MCP tool (e.g. telegram) returned a structured result and the
         send happened to match a recent one.
         """
-        from lingtai.kernel.base_agent.turn import _check_external_send
+        from lingtai_kernel.base_agent.turn import _check_external_send
         agent = self._make_agent()
         tc1 = self._make_tc("telegram", {
             "action": "send",
@@ -284,7 +284,7 @@ class TestCheckExternalSend:
 
     def test_dedup_without_tool_results(self):
         """Dedup still skips recording when tool_results not passed."""
-        from lingtai.kernel.base_agent.turn import _check_external_send
+        from lingtai_kernel.base_agent.turn import _check_external_send
         agent = self._make_agent()
         tc1 = self._make_tc("telegram", {
             "action": "send",
@@ -303,14 +303,14 @@ class TestCheckExternalSend:
         assert len(agent._sent_tracker._entries) == 1
 
     def test_check_action_not_a_send(self):
-        from lingtai.kernel.base_agent.turn import _check_external_send
+        from lingtai_kernel.base_agent.turn import _check_external_send
         agent = self._make_agent()
         tc = self._make_tc("telegram", {"action": "check"})
         _check_external_send(agent, [tc])
         assert len(agent._sent_tracker._entries) == 0
 
     def test_internal_mail_ignored(self):
-        from lingtai.kernel.base_agent.turn import _check_external_send
+        from lingtai_kernel.base_agent.turn import _check_external_send
         agent = self._make_agent()
         tc = self._make_tc("email", {
             "action": "send",
@@ -321,7 +321,7 @@ class TestCheckExternalSend:
         assert len(agent._sent_tracker._entries) == 0
 
     def test_multiple_tools_mixed(self):
-        from lingtai.kernel.base_agent.turn import _check_external_send
+        from lingtai_kernel.base_agent.turn import _check_external_send
         agent = self._make_agent()
         tc_read = self._make_tc("read", {"path": "/tmp"})
         tc_send = self._make_tc("feishu", {
@@ -350,13 +350,13 @@ class TestCheckPollBackoff:
         return tc
 
     def test_first_check_not_backoff(self):
-        from lingtai.kernel.base_agent.turn import _check_poll_backoff
+        from lingtai_kernel.base_agent.turn import _check_poll_backoff
         agent = self._make_agent()
         tc = self._make_tc("telegram", {"action": "check"})
         assert not _check_poll_backoff(agent, [tc])
 
     def test_three_checks_trigger_backoff(self):
-        from lingtai.kernel.base_agent.turn import _check_poll_backoff
+        from lingtai_kernel.base_agent.turn import _check_poll_backoff
         agent = self._make_agent()
         tc = self._make_tc("telegram", {"action": "check"})
         _check_poll_backoff(agent, [tc])  # 1
@@ -364,7 +364,7 @@ class TestCheckPollBackoff:
         assert _check_poll_backoff(agent, [tc])  # 3 — triggers
 
     def test_send_resets_backoff(self):
-        from lingtai.kernel.base_agent.turn import _check_poll_backoff
+        from lingtai_kernel.base_agent.turn import _check_poll_backoff
         agent = self._make_agent()
         tc_check = self._make_tc("telegram", {"action": "check"})
         tc_send = self._make_tc("telegram", {
@@ -378,8 +378,8 @@ class TestCheckPollBackoff:
         assert not _check_poll_backoff(agent, [tc_check])  # 1 again
 
     def test_read_result_with_messages_resets_backoff(self):
-        from lingtai.kernel.base_agent.turn import _check_poll_backoff
-        from lingtai.kernel.llm.interface import ToolResultBlock
+        from lingtai_kernel.base_agent.turn import _check_poll_backoff
+        from lingtai_kernel.llm.interface import ToolResultBlock
 
         agent = self._make_agent()
         tc = self._make_tc("telegram", {"action": "read"}, id="tc-read")
@@ -396,8 +396,8 @@ class TestCheckPollBackoff:
         assert agent._sent_tracker._poll_counts.get("telegram", 0) == 0
 
     def test_check_result_with_emails_or_conversations_resets_backoff(self):
-        from lingtai.kernel.base_agent.turn import _check_poll_backoff
-        from lingtai.kernel.llm.interface import ToolResultBlock
+        from lingtai_kernel.base_agent.turn import _check_poll_backoff
+        from lingtai_kernel.llm.interface import ToolResultBlock
 
         for tool_name, content in (
             ("imap", '{"emails": [{"subject": "hi"}]}'),
@@ -413,7 +413,7 @@ class TestCheckPollBackoff:
             assert agent._sent_tracker._poll_counts.get(tool_name, 0) == 0
 
     def test_non_external_tool_ignored(self):
-        from lingtai.kernel.base_agent.turn import _check_poll_backoff
+        from lingtai_kernel.base_agent.turn import _check_poll_backoff
         agent = self._make_agent()
         tc = self._make_tc("email", {"action": "check"})
         for _ in range(5):

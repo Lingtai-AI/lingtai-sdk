@@ -1,6 +1,6 @@
-from lingtai.kernel.prompt import build_system_prompt
-from lingtai.kernel.prompt import build_system_prompt_batches
-from lingtai.kernel.prompt import SystemPromptManager
+from lingtai_kernel.prompt import build_system_prompt
+from lingtai_kernel.prompt import build_system_prompt_batches
+from lingtai_kernel.prompt import SystemPromptManager
 
 
 def test_build_system_prompt_minimal():

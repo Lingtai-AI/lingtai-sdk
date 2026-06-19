@@ -11,7 +11,7 @@ def _mk_fake_agent(time_awareness: bool):
 
 
 def test_status_runtime_blanks_when_time_blind():
-    from lingtai.kernel.time_veil import scrub_time_fields, now_iso
+    from lingtai_kernel.time_veil import scrub_time_fields, now_iso
     agent = _mk_fake_agent(False)
 
     runtime = scrub_time_fields(
@@ -33,7 +33,7 @@ def test_status_runtime_blanks_when_time_blind():
 
 
 def test_status_runtime_preserved_when_time_aware():
-    from lingtai.kernel.time_veil import scrub_time_fields, now_iso
+    from lingtai_kernel.time_veil import scrub_time_fields, now_iso
     agent = _mk_fake_agent(True)
 
     runtime = scrub_time_fields(

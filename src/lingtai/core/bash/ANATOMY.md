@@ -7,7 +7,7 @@ be explicitly opted into.
 
 ## Components
 
-- `bash/__init__.py` — the entire capability in a single file. `get_description` (`bash/__init__.py:32-33`), `get_schema` (`bash/__init__.py:36-70`), `resolve_policy` / `make_manager` / `make_handler` / `setup`. Two core classes: `BashPolicy` (`bash/__init__.py:74-162`) for command filtering, `BashManager` (`bash/__init__.py:165-503`) for execution. `make_manager(agent, policy_file, yolo)` is the stable single-source-of-truth seam: it resolves the policy (`resolve_policy`) and builds the `BashManager`; `setup()` and `make_handler(agent)` both go through it, and the SDK bundle bridge `lingtai.core.bash_bundle` hosts the *same* factory's handler, so the bundle-hosted `bash` tool cannot drift from the registered one.
+- `bash/__init__.py` — the entire capability in a single file. `get_description` (`bash/__init__.py:32-33`), `get_schema` (`bash/__init__.py:36-70`), `setup` (`bash/__init__.py:505-539`). Two core classes: `BashPolicy` (`bash/__init__.py:74-162`) for command filtering, `BashManager` (`bash/__init__.py:165-503`) for execution.
 - `bash/bash_policy.json` — default denylist policy shipped with the kernel. Denies destructive (`rm`, `rmdir`, `shred`, `dd`), privilege escalation (`sudo`, `su`, `doas`), permission changes (`chmod`, `chown`, `chgrp`), disk management (`mount`, `umount`, `mkfs`, `fdisk`), package managers (`apt`, `apt-get`, `yum`, `dnf`, `brew`), process control (`kill`, `killall`, `pkill`, `shutdown`, `reboot`, `systemctl`), network (`nc`, `ncat`), and code execution (`eval`, `exec`).
 
 ## Public API
@@ -52,10 +52,7 @@ bash/__init__.py
   │   ├── _handle_cancel(args)       — SIGTERM to process group, cleanup
   │   └── _close_handles(job_id)     — closes open file handles for a job
   │
-  ├── resolve_policy(policy_file, yolo) — yolo / explicit file / bundled default → BashPolicy
-  ├── make_manager(agent, policy_file, yolo) — single source of truth: resolve_policy + build BashManager
-  ├── make_handler(agent, policy_file, yolo) — make_manager(...).handle (the SDK bridge's seam)
-  └── setup(agent, policy_file, yolo) — make_manager, then registers bash tool with policy-aware description
+  └── setup(agent, policy_file, yolo) — resolves policy, registers bash tool
 ```
 
 ## Key Invariants
@@ -67,13 +64,12 @@ bash/__init__.py
 - **Subprocess isolation:** Commands run via `subprocess.run(shell=True, capture_output=True, text=True, timeout=...)` in the agent's working directory by default.
 - **Async subprocess:** Async commands use `subprocess.Popen(shell=True, start_new_session=True)` with stdout/stderr redirected to files under `system/jobs/{job_id}/`. `start_new_session=True` ensures the process gets its own session, enabling `os.killpg()` for clean cancellation.
 - **Job lifecycle:** Jobs are created on async run, tracked via PID files, and cleaned up (directory deleted) after poll-completion or cancel. File handles are closed via `_close_handles()` to avoid resource leaks.
-- **Policy file location:** Default policy is `bash/bash_policy.json` (shipped with the kernel). Can be overridden via `policy_file` arg or bypassed with `yolo=True`. `resolve_policy()` is the single resolution path shared by `setup()`, `make_manager()`, and the SDK bridge.
-- **SDK bundle bridge (stage 3H):** `lingtai.core.bash_bundle` (the wrapper-side bridge) injects `make_handler(agent)` into the `lingtai_sdk.bash_tools` shell-execution bundle host. The SDK declares `bash` as a non-privileged, in-process bundle with a per-action risk table (`run`/`cancel` → DESTRUCTIVE, `poll` → CAUTION; bundle posture DESTRUCTIVE). Additive only — `setup()` remains the live registration path; the bridge installs no guard and changes no dispatch.
+- **Policy file location:** Default policy is `bash/bash_policy.json` (shipped with the kernel). Can be overridden via `policy_file` arg or bypassed with `yolo=True`.
 
 ## Dependencies
 
 - `lingtai.i18n` — `t()` for localized strings
-- `lingtai.kernel.base_agent.BaseAgent` — agent type (TYPE_CHECKING only)
+- `lingtai_kernel.base_agent.BaseAgent` — agent type (TYPE_CHECKING only)
 
 ## Composition
 

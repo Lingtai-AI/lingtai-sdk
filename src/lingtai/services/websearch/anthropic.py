@@ -1,7 +1,7 @@
 """Anthropic web search — uses Claude's native web_search tool."""
 from __future__ import annotations
 
-from lingtai.kernel.logging import get_logger
+from lingtai_kernel.logging import get_logger
 
 from . import SearchResult, SearchService
 

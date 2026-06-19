@@ -17,9 +17,9 @@ import threading
 from pathlib import Path
 
 
-from lingtai.kernel.base_agent.turn import _process_response
-from lingtai.kernel.llm.base import LLMResponse, ToolCall
-from lingtai.kernel.llm.interface import (
+from lingtai_kernel.base_agent.turn import _process_response
+from lingtai_kernel.llm.base import LLMResponse, ToolCall
+from lingtai_kernel.llm.interface import (
     ChatInterface,
     TextBlock,
     ToolCallBlock,

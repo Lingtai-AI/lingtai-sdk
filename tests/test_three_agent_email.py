@@ -20,8 +20,8 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from lingtai.agent import Agent
-from lingtai.kernel.config import AgentConfig
-from lingtai.kernel.services.mail import FilesystemMailService
+from lingtai_kernel.config import AgentConfig
+from lingtai_kernel.services.mail import FilesystemMailService
 
 
 def _make_mock_service():

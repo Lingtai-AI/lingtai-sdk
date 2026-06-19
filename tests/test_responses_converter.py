@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from lingtai.llm.interface_converters import to_responses_input
-from lingtai.kernel.llm.interface import (
+from lingtai_kernel.llm.interface import (
     ChatInterface,
     TextBlock,
     ThinkingBlock,

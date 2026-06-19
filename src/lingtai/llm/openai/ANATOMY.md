@@ -9,69 +9,68 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 | File | LOC | Role |
 |------|-----|------|
 | `__init__.py` | 3 | Re-exports `OpenAIAdapter`, `OpenAIChatSession` |
-| `adapter.py` | 1813 | 5 classes + helpers: `OpenAIChatSession`, `OpenAIResponsesSession`, `OpenAIAdapter`, `CodexResponsesSession`, `CodexOpenAIAdapter` |
+| `adapter.py` | 1778 | 5 classes + helpers: `OpenAIChatSession`, `OpenAIResponsesSession`, `OpenAIAdapter`, `CodexResponsesSession`, `CodexOpenAIAdapter` |
 | `defaults.py` | 7 | `DEFAULTS` dict: `api_compat="openai"`, `use_responses_api=True` |
 
 ### adapter.py class map
 
 | Class | Lines | Role |
 |-------|-------|------|
-| `OpenAIChatSession` | 521–1032 | Chat Completions session with context overflow auto-recovery; sends optional `prompt_cache_key` |
-| `OpenAIResponsesSession` | 1035–1233 | Responses API session with server-side `previous_response_id` chaining, optional `context_management` compaction, and optional `prompt_cache_key` |
-| `OpenAIAdapter` | 1236–1551 | `LLMAdapter` implementation; dispatches to Completions or Responses path; receives injected `compact_threshold`; derives the default `prompt_cache_key` via `_default_prompt_cache_key` / `_resolve_prompt_cache_key`; stores optional `agent_init_path` for Codex cache affinity |
-| `CodexResponsesSession` | 1554–1739 | Stateless Responses variant for ChatGPT-OAuth `/backend-api/codex` |
-| `CodexOpenAIAdapter` | 1742–1813 | Adapter variant that builds `CodexResponsesSession`; overrides `_default_prompt_cache_key` to include a local `init.json` path hash when available (`lingtai-codex:{model}:init-<hash>:v2`), falling back to the historical `lingtai-codex:{model}:v1` when no agent context exists |
+| `OpenAIChatSession` | 492–1003 | Chat Completions session with context overflow auto-recovery; sends optional `prompt_cache_key` |
+| `OpenAIResponsesSession` | 1006–1204 | Responses API session with server-side `previous_response_id` chaining, optional `context_management` compaction, and optional `prompt_cache_key` |
+| `OpenAIAdapter` | 1207–1520 | `LLMAdapter` implementation; dispatches to Completions or Responses path; receives injected `compact_threshold`; derives the default `prompt_cache_key` via `_default_prompt_cache_key` / `_resolve_prompt_cache_key` |
+| `CodexResponsesSession` | 1523–1709 | Stateless Responses variant for ChatGPT-OAuth `/backend-api/codex` |
+| `CodexOpenAIAdapter` | 1711–1778 | Adapter variant that builds `CodexResponsesSession`; overrides `_default_prompt_cache_key` → `lingtai-codex:{model}:v1` |
 
 ### adapter.py helpers
 
 | Function | Lines | Role |
 |----------|-------|------|
 | `_base_url_namespace()` | 53–66 | Stable namespace token for an OpenAI-compatible `base_url` (URL host, or short hash fallback) used in the default `prompt_cache_key` |
-| `_resolve_agent_init_path()` / `_agent_init_path_hash()` | 69–95 | Resolve a local agent `init.json` path (explicit or `LINGTAI_AGENT_DIR`) and return a short non-reversible hash for Codex cache affinity without leaking filesystem paths |
-| `_validate_compact_threshold()` | 98–112 | Validates/normalizes OpenAI Responses auto-compaction threshold; positive `int` or explicit `None` (disable) only |
-| `_codex_responses_trace_path()` / `_codex_responses_trace_record()` | 114–208 | Opt-in Codex Responses stream diagnostic trace helpers; safe metadata only, default off |
-| `_build_http_timeout()` | 211–226 | `httpx.Timeout` per-phase caps (connect≤30s, read≤60s, pool=10s) |
-| `_build_tools()` | 233–249 | `FunctionSchema` → OpenAI CC tool format (`{type, function: {name, description, parameters}}`) |
-| `_build_responses_tools()` | 309–335 | `FunctionSchema` → Responses API flat format (`{type, name, description, parameters}`); scrubs disallowed top-level JSON-Schema combinators (`allOf`, `oneOf`, etc.) |
-| `_parse_tool_calls()` | 338–355 | Raw SDK `tool_calls` → `list[ToolCall]` |
-| `_parse_response()` | 358–404 | ChatCompletion → `LLMResponse` (extracts reasoning from `reasoning_content` or `reasoning`) |
-| `_handle_responses_reasoning_event()` | 425–468 | Responses stream reasoning-summary event handler; accumulates `summary_text` deltas/done fallback without raw reasoning text |
-| `_parse_responses_api_response()` | 471–513 | Responses API output → `LLMResponse` (handles `message`, `function_call`, `reasoning` output items) |
+| `_validate_compact_threshold()` | 69–83 | Validates/normalizes OpenAI Responses auto-compaction threshold; positive `int` or explicit `None` (disable) only |
+| `_codex_responses_trace_path()` / `_codex_responses_trace_record()` | 63–157 | Opt-in Codex Responses stream diagnostic trace helpers; safe metadata only, default off |
+| `_build_http_timeout()` | 159–173 | `httpx.Timeout` per-phase caps (connect≤30s, read≤60s, pool=10s) |
+| `_build_tools()` | 165–179 | `FunctionSchema` → OpenAI CC tool format (`{type, function: {name, description, parameters}}`) |
+| `_build_responses_tools()` | 189–213 | `FunctionSchema` → Responses API flat format (`{type, name, description, parameters}`); scrubs disallowed top-level JSON-Schema combinators (`allOf`, `oneOf`, etc.) |
+| `_parse_tool_calls()` | 216–233 | Raw SDK `tool_calls` → `list[ToolCall]` |
+| `_parse_response()` | 236–280 | ChatCompletion → `LLMResponse` (extracts reasoning from `reasoning_content` or `reasoning`) |
+| `_handle_responses_reasoning_event()` | 303–346 | Responses stream reasoning-summary event handler; accumulates `summary_text` deltas/done fallback without raw reasoning text |
+| `_parse_responses_api_response()` | 349–391 | Responses API output → `LLMResponse` (handles `message`, `function_call`, `reasoning` output items) |
 
 ## Connections
 
 - **Base class** — `OpenAIAdapter` extends `LLMAdapter` (`from lingtai.llm.base import LLMAdapter`, line 29).
-- **Kernel types** — imports `ChatSession`, `FunctionSchema`, `LLMResponse`, `ToolCall`, `UsageMetadata` from `lingtai.kernel.llm.base`.
+- **Kernel types** — imports `ChatSession`, `FunctionSchema`, `LLMResponse`, `ToolCall`, `UsageMetadata` from `lingtai_kernel.llm.base`.
 - **Interface converters** — imports `to_openai` and `to_responses_input` from `lingtai.llm.interface_converters` (line 31).
-- **Streaming** — imports `StreamingAccumulator` from `lingtai.kernel.llm.streaming` (line 32).
+- **Streaming** — imports `StreamingAccumulator` from `lingtai_kernel.llm.streaming` (line 32).
 - **HTTP client** — imports `httpx` for timeout construction (line 16); `openai` SDK for all API calls (line 17).
-- **Subclass hooks** — `_session_class` (line 1244) for Completions path; `_adapter_extra_body()` (line 1477) for provider-specific `extra_body`; `_default_prompt_cache_key()` (line 1296) for the provider-namespaced cache key.
+- **Subclass hooks** — `_session_class` (line 1215) for Completions path; `_adapter_extra_body()` (line 1446) for provider-specific `extra_body`; `_default_prompt_cache_key()` (line 1265) for the provider-namespaced cache key.
 
 ## Composition
 
 ### Two session paths
 
-The adapter forks at `create_chat()` (line 1326):
-1. **Responses API** (`_create_responses_session`, line 1366) — when `use_responses=True` AND (`base_url` is None OR `force_responses=True`). Builds `OpenAIResponsesSession`.
-2. **Chat Completions** (`_create_completions_session`, line 1418) — fallback for compatible providers. Builds `self._session_class` (subclass-overridable).
+The adapter forks at `create_chat()` (line 1295):
+1. **Responses API** (`_create_responses_session`, line 1335) — when `use_responses=True` AND (`base_url` is None OR `force_responses=True`). Builds `OpenAIResponsesSession`.
+2. **Chat Completions** (`_create_completions_session`, line 1387) — fallback for compatible providers. Builds `self._session_class` (subclass-overridable).
 
 Both paths return sessions wrapped via `_wrap_with_gate()` for rate limiting.
 
-### Chat Completions session flow (`OpenAIChatSession.send`, line 678)
+### Chat Completions session flow (`OpenAIChatSession.send`, line 438)
 
 1. Record user input into `ChatInterface` (str → `add_user_message`; list → `add_tool_results`)
 2. `_build_kwargs()`: enforce tool pairing → serialize via `_build_messages()` → `_pair_orphan_tool_calls()` wire guard
 3. `_run_with_overflow_recovery(_do_call)` — retries with context trimming on 400 context-length errors
 4. On success: record assistant response into interface via `_record_assistant_response()`
 
-### Responses API session flow (`OpenAIResponsesSession.send`, line 1070)
+### Responses API session flow (`OpenAIResponsesSession.send`, line 853)
 
 1. `_convert_input(message)` → Responses API input items
 2. Chain `previous_response_id` if available
 3. Call `client.responses.create(**kwargs)`
 4. Store `response_id` for next turn
 
-### Codex stateless flow (`CodexResponsesSession.send_stream`, line 1570)
+### Codex stateless flow (`CodexResponsesSession.send_stream`, line 1266)
 
 1. Record message into canonical `ChatInterface`
 2. `to_responses_input(interface)` — replay full conversation as input items
@@ -83,7 +82,7 @@ Both paths return sessions wrapped via `_wrap_with_gate()` for rate limiting.
 **Default-on for every OpenAI-compatible path.** Both `OpenAIChatSession` and `OpenAIResponsesSession` accept an optional `prompt_cache_key` and, when set, add it to the request kwargs on all send paths (Chat Completions `send` / `send_stream`; Responses `send` / `send_stream`; Codex `send_stream`). A bare directly-constructed session leaves it `None` (opt-in) — the *adapter* supplies the namespaced default:
 
 - `OpenAIAdapter._default_prompt_cache_key(model)` derives the namespace from identity: official OpenAI (no `base_url`) → `lingtai-openai:{model}:v1`; any custom/compatible `base_url` → `lingtai-openai-compat:{host}:{model}:v1` (host from `_base_url_namespace`, hash fallback). Distinct endpoints/models never share a cache slot.
-- Provider subclasses with a fixed identity override it: DeepSeek → `lingtai-deepseek:{model}:v1`, Zhipu/GLM → `lingtai-zhipu:{model}:v1`, MiMo → `lingtai-mimo:{model}:v1`, Codex → `lingtai-codex:{model}:init-<hash>:v2` when an agent `init.json` path is available, falling back to `lingtai-codex:{model}:v1` for direct/library construction without agent context. The compat probe (`reports/prompt-cache-key-openai-compat-probe-*.json`) confirmed DeepSeek/Zhipu/MiMo Chat Completions accept the field.
+- Provider subclasses with a fixed identity override it: DeepSeek → `lingtai-deepseek:{model}:v1`, Zhipu/GLM → `lingtai-zhipu:{model}:v1`, MiMo → `lingtai-mimo:{model}:v1`, Codex → `lingtai-codex:{model}:v1`. The compat probe (`reports/prompt-cache-key-openai-compat-probe-*.json`) confirmed DeepSeek/Zhipu/MiMo Chat Completions accept the field.
 - `_resolve_prompt_cache_key(model)` applies the adapter's policy from the constructor kwarg `prompt_cache_key`: `None` (default) → auto-derive; an explicit string → override for every session; `False` → disable (never sent). Both `_create_completions_session` and `_create_responses_session` (and the Codex variant) pass `_resolve_prompt_cache_key(model)` into the session.
 
 `prompt_cache_retention` is deliberately never sent — Codex rejects it (`Unsupported parameter`) and the whole OpenAI-compatible surface is kept uniform — and no Anthropic-style `cache_control` is emitted (Codex rejects `Unknown parameter`). MiniMax is Anthropic-compatible in this repo and is unaffected.
@@ -111,10 +110,10 @@ Both paths return sessions wrapped via `_wrap_with_gate()` for rate limiting.
 
 ### Context overflow auto-recovery
 
-`OpenAIChatSession._run_with_overflow_recovery()` is inherited from `ChatSession` (`lingtai/kernel/llm/base.py:384`) and wraps any API call in a retry loop:
+`OpenAIChatSession._run_with_overflow_recovery()` is inherited from `ChatSession` (`lingtai_kernel/llm/base.py:384`) and wraps any API call in a retry loop:
 - Detects 400 `context_length_exceeded` via `_is_context_overflow_error()` (line 276) — checks both canonical OpenAI code and loose string heuristics for compatible vendors.
-- `_trim_context_one_round()` (`lingtai/kernel/llm/base.py:303`) drops ~10% of non-system entries from the FRONT of the interface. Snaps cut point to never split `assistant[ToolCallBlock]` from `user[ToolResultBlock]`.
-- Max 10 rounds (`lingtai/kernel/llm/base.py:291`). On successful recovery, injects a `[kernel]` molt notice via `_inject_overflow_notice()` (`lingtai/kernel/llm/base.py:363`).
+- `_trim_context_one_round()` (`lingtai_kernel/llm/base.py:303`) drops ~10% of non-system entries from the FRONT of the interface. Snaps cut point to never split `assistant[ToolCallBlock]` from `user[ToolResultBlock]`.
+- Max 10 rounds (`lingtai_kernel/llm/base.py:291`). On successful recovery, injects a `[kernel]` molt notice via `_inject_overflow_notice()` (`lingtai_kernel/llm/base.py:363`).
 
 ### Wire-layer orphan guard
 
@@ -147,8 +146,8 @@ The Codex / Responses path has the same invariant: `to_responses_input` ends wit
 
 ### Subclass hooks
 
-- `_session_class` (line 1244) — override to inject provider-specific session behavior on the CC path.
-- `_adapter_extra_body()` (line 1477) — override to add `extra_body` JSON fields (e.g. OpenRouter `reasoning: {include: true}`).
+- `_session_class` (line 1215) — override to inject provider-specific session behavior on the CC path.
+- `_adapter_extra_body()` (line 1446) — override to add `extra_body` JSON fields (e.g. OpenRouter `reasoning: {include: true}`).
 - `_default_prompt_cache_key(model)` (line 1265) — override to give a provider a clean cache namespace (DeepSeek/Zhipu/MiMo/Codex do).
 
 ### `send(None)` contract — continue from wire

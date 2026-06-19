@@ -33,7 +33,7 @@ Gemini adapter — `google-genai` SDK with Chat API and Interactions API, thinki
 
 ## Connections
 
-- **Imports from `lingtai.kernel`**: `ChatSession`, `FunctionSchema`, `LLMResponse`, `ToolCall`, `UsageMetadata`, `ToolResultBlock`, `ChatInterface`, `StreamingAccumulator`
+- **Imports from `lingtai_kernel`**: `ChatSession`, `FunctionSchema`, `LLMResponse`, `ToolCall`, `UsageMetadata`, `ToolResultBlock`, `ChatInterface`, `StreamingAccumulator`
 - **Imports from `lingtai`**: `LLMAdapter` ABC, `to_gemini` converter (lazy in `create_chat`)
 - **External**: `google.genai`, `google.genai.errors`, `google.genai.types`
 - **No inheritance from other adapters** (standalone implementation)

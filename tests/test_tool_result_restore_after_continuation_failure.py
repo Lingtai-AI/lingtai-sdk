@@ -13,12 +13,12 @@ from pathlib import Path
 
 import pytest
 
-from lingtai.kernel.base_agent.turn import (
+from lingtai_kernel.base_agent.turn import (
     _process_response,
     _restore_tool_results_after_continuation_failure,
 )
-from lingtai.kernel.llm.base import LLMResponse, ToolCall
-from lingtai.kernel.llm.interface import (
+from lingtai_kernel.llm.base import LLMResponse, ToolCall
+from lingtai_kernel.llm.interface import (
     ChatInterface,
     TextBlock,
     ToolCallBlock,
@@ -728,8 +728,8 @@ def test_tc_wake_legacy_path_restores_real_item_result_when_send_fails():
     agent loses the message that was on the wire.
     """
     from dataclasses import dataclass, field
-    from lingtai.kernel.base_agent.turn import _handle_tc_wake
-    from lingtai.kernel.tc_inbox import InvoluntaryToolCall, TCInbox
+    from lingtai_kernel.base_agent.turn import _handle_tc_wake
+    from lingtai_kernel.tc_inbox import InvoluntaryToolCall, TCInbox
 
     iface = ChatInterface()
     iface.add_system("system")
@@ -820,7 +820,7 @@ def test_tc_wake_legacy_path_restores_real_item_result_when_send_fails():
         _tc_inbox=inbox,
     )
 
-    from lingtai.kernel.message import Message, MSG_TC_WAKE
+    from lingtai_kernel.message import Message, MSG_TC_WAKE
     wake_msg = Message(type=MSG_TC_WAKE, sender="kernel", content="", timestamp=0.0)
 
     with pytest.raises(RuntimeError, match="No tool output found"):

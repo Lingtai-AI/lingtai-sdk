@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from . import VisionService
 
-from lingtai.kernel.logging import get_logger
+from lingtai_kernel.logging import get_logger
 
 logger = get_logger()
 

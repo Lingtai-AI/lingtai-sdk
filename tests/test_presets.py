@@ -5,13 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from lingtai.kernel.presets import (
+from lingtai.presets import (
     discover_presets,
+    discover_presets_in_dirs,
     load_preset,
     default_presets_path,
     expand_inherit,
     home_shortened,
-    materialize_active_preset,
     preset_context_limit,
     preset_tier,
     resolve_preset_name,
@@ -271,7 +271,7 @@ def test_load_preset_relocates_legacy_root_context_limit(tmp_path):
 
 def test_load_preset_drops_duplicate_legacy_root_context_limit(tmp_path):
     """Both locations with the same value are accepted in memory."""
-    from lingtai.kernel.migrate.migrate import reset_process_cache
+    from lingtai_kernel.migrate.migrate import reset_process_cache
     reset_process_cache()
     p = {
         "name": "dup",
@@ -293,7 +293,7 @@ def test_load_preset_drops_duplicate_legacy_root_context_limit(tmp_path):
 
 def test_load_preset_conflicting_legacy_root_context_limit_preserves_llm(tmp_path):
     """When both locations disagree, canonical manifest.llm wins."""
-    from lingtai.kernel.migrate.migrate import reset_process_cache
+    from lingtai_kernel.migrate.migrate import reset_process_cache
     reset_process_cache()
     p = {
         "name": "dup",
@@ -698,6 +698,8 @@ def test_tier_vocabulary_is_numeric_one_through_five():
 # (presets are an atomic swap; skills.paths is the one carve-out). These tests
 # pin that documented behavior so it stays explicit rather than surprising, and
 # guard the skills.paths carve-out against regressions.
+
+from lingtai.presets import materialize_active_preset
 
 
 def _preset_content(name, llm, capabilities):

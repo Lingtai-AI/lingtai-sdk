@@ -10,8 +10,8 @@ import json
 import queue
 from unittest.mock import MagicMock, patch
 
-from lingtai.kernel.config import AgentConfig
-from lingtai.kernel.llm.base import FunctionSchema
+from lingtai_kernel.config import AgentConfig
+from lingtai_kernel.llm.base import FunctionSchema
 
 
 def _make_agent(tmp_path, capabilities=None, presets_dir=None):
@@ -196,7 +196,7 @@ def test_instantiate_still_raises_on_broken_known_capability(tmp_path, monkeypat
     def boom(target, name, **kwargs):
         raise ValueError("simulated broken setup")
 
-    monkeypatch.setattr("lingtai.core.registry.setup_capability", boom)
+    monkeypatch.setattr("lingtai.capabilities.setup_capability", boom)
     try:
         mgr._instantiate_preset_capabilities(
             {"read": {}},  # known capability — should propagate the failure
@@ -216,7 +216,7 @@ def test_instantiate_skips_broken_unused_known_capability(tmp_path, monkeypatch)
     mgr = agent.get_capability("daemon")
 
     original_setup = __import__(
-        "lingtai.core.registry", fromlist=["setup_capability"]
+        "lingtai.capabilities", fromlist=["setup_capability"]
     ).setup_capability
 
     def boom_for_vision(target, name, **kwargs):
@@ -224,7 +224,7 @@ def test_instantiate_skips_broken_unused_known_capability(tmp_path, monkeypatch)
             raise ValueError("simulated broken vision")
         return original_setup(target, name, **kwargs)
 
-    monkeypatch.setattr("lingtai.core.registry.setup_capability", boom_for_vision)
+    monkeypatch.setattr("lingtai.capabilities.setup_capability", boom_for_vision)
 
     schemas, handlers = mgr._instantiate_preset_capabilities(
         {"file": {}, "vision": {"provider": "codex", "api_key_env": "IGNORED"}},
@@ -244,7 +244,7 @@ def test_instantiate_raises_for_broken_required_known_capability(tmp_path, monke
     def boom(target, name, **kwargs):
         raise ValueError("simulated broken vision")
 
-    monkeypatch.setattr("lingtai.core.registry.setup_capability", boom)
+    monkeypatch.setattr("lingtai.capabilities.setup_capability", boom)
 
     try:
         mgr._instantiate_preset_capabilities(
@@ -288,7 +288,7 @@ def test_instantiate_resolves_inherit_against_preset_llm(tmp_path):
     def fake_setup(target, name, **kwargs):
         captured[name] = kwargs
 
-    with patch("lingtai.core.registry.setup_capability", side_effect=fake_setup):
+    with patch("lingtai.capabilities.setup_capability", side_effect=fake_setup):
         mgr._instantiate_preset_capabilities(
             {"web_search": {"provider": "inherit"}},
             {"provider": "gemini", "model": "gemini-pro",
@@ -368,7 +368,7 @@ def test_emanate_with_preset_instantiates_caps_for_emanation(tmp_path,
                                                               monkeypatch):
     """Parent has only ['daemon']; preset declares 'file'. Emanation can
     request 'file' tools and the daemon spawns successfully."""
-    import lingtai.kernel.preset_connectivity as preset_connectivity
+    import lingtai_kernel.preset_connectivity as preset_connectivity
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
 
     presets_dir = tmp_path / "presets"
@@ -400,7 +400,7 @@ def test_emanate_preset_with_intrinsics_dispatches(tmp_path, monkeypatch):
 
     This is the lingtai #29 repro: the TUI wizard writes 'email' into
     user presets, and the daemon used to refuse the whole batch on it."""
-    import lingtai.kernel.preset_connectivity as preset_connectivity
+    import lingtai_kernel.preset_connectivity as preset_connectivity
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
 
     presets_dir = tmp_path / "presets"
@@ -435,7 +435,7 @@ def test_emanate_preset_request_for_email_intrinsic_dispatches(tmp_path, monkeyp
     but a parent may request tools:["email"] and the daemon receives the parent
     email intrinsic through the normal tool-surface builder.
     """
-    import lingtai.kernel.preset_connectivity as preset_connectivity
+    import lingtai_kernel.preset_connectivity as preset_connectivity
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
 
     presets_dir = tmp_path / "presets"
@@ -461,7 +461,7 @@ def test_emanate_preset_does_not_pollute_parent_tool_registry(tmp_path,
                                                                 monkeypatch):
     """After a preset-driven emanation is scheduled, the parent's tool
     registry is unchanged — no preset tools leaked into the parent."""
-    import lingtai.kernel.preset_connectivity as preset_connectivity
+    import lingtai_kernel.preset_connectivity as preset_connectivity
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
 
     presets_dir = tmp_path / "presets"
@@ -489,8 +489,8 @@ def test_emanate_preset_does_not_pollute_parent_tool_registry(tmp_path,
 
 def test_emanate_preset_broken_unused_vision_dispatches(tmp_path, monkeypatch):
     """File-only daemon dispatch is not blocked by broken unused vision."""
-    import lingtai.kernel.preset_connectivity as preset_connectivity
-    import lingtai.core.registry as capabilities
+    import lingtai_kernel.preset_connectivity as preset_connectivity
+    import lingtai.capabilities as capabilities
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
 
     original_setup = capabilities.setup_capability
@@ -529,8 +529,8 @@ def test_emanate_preset_broken_unused_vision_dispatches(tmp_path, monkeypatch):
 
 def test_emanate_preset_broken_requested_vision_fails(tmp_path, monkeypatch):
     """Requested capability setup failures remain hard errors."""
-    import lingtai.kernel.preset_connectivity as preset_connectivity
-    import lingtai.core.registry as capabilities
+    import lingtai_kernel.preset_connectivity as preset_connectivity
+    import lingtai.capabilities as capabilities
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
 
     original_setup = capabilities.setup_capability

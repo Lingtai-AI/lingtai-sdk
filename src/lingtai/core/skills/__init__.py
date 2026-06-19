@@ -29,14 +29,14 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 import yaml
 
 from ...i18n import t
 
 if TYPE_CHECKING:
-    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai_kernel.base_agent import BaseAgent
 
 log = logging.getLogger(__name__)
 
@@ -320,43 +320,6 @@ def get_schema(lang: str = "en") -> dict:
     }
 
 
-def make_handler(
-    agent: "BaseAgent",
-    paths: list[str] | None = None,
-) -> Callable[[dict], dict]:
-    """Build the ``skills`` tool handler bound to *agent* and its Tier-1 *paths*.
-
-    Single source of truth for the ``skills`` tool's behavior: both ``setup()``
-    (the normal capability-registration path) and the SDK skills bundle bridge
-    (``lingtai.core.skills_bundle``) obtain the handler through this factory, so
-    the bundle-hosted ``skills`` tool runs byte-identical logic to the one
-    ``setup()`` registers — against the same ``agent`` state
-    (``agent._working_dir``/``.library`` and the rendered ``skills``
-    system-prompt section) and the same Tier-1 ``paths``.
-
-    ``paths`` is the Tier-1 list from ``init.json``
-    ``manifest.capabilities.skills.paths``; the handler closes over a private
-    copy so a later mutation of the caller's list cannot change dispatch. The
-    returned handler takes a single ``args: dict`` and supports the one ``info``
-    action (re-reconcile: scan ``.library/`` + the Tier-1 paths, re-render the
-    prompt section, return the manual body + health snapshot). Any other action
-    returns the same shape-stable error dict the live tool returns. The handler
-    is pure presentation: it never writes to ``.library/``.
-    """
-    path_list = list(paths) if paths else []
-
-    def handle_skills(args: dict) -> dict:
-        action = args.get("action", "")
-        if action == "info":
-            return _reconcile(agent, path_list)
-        return {
-            "status": "error",
-            "message": f"unknown action: {action!r}, only 'info' is supported",
-        }
-
-    return handle_skills
-
-
 def setup(agent: "BaseAgent", paths: list[str] | None = None, **_ignored) -> None:
     """Set up the skills capability.
 
@@ -376,12 +339,19 @@ def setup(agent: "BaseAgent", paths: list[str] | None = None, **_ignored) -> Non
     # This only READS from .library/ — the initializer has already written it.
     _reconcile(agent, path_list)
 
-    # Register the `info` action via the shared make_handler seam (single source
-    # of truth shared with the SDK skills bundle bridge). `info` re-runs
-    # _reconcile to get a fresh snapshot.
+    # Register the `info` action. `info` re-runs _reconcile to get a fresh snapshot.
+    def handle_skills(args: dict) -> dict:
+        action = args.get("action", "")
+        if action == "info":
+            return _reconcile(agent, path_list)
+        return {
+            "status": "error",
+            "message": f"unknown action: {action!r}, only 'info' is supported",
+        }
+
     agent.add_tool(
         "skills",
         schema=get_schema(lang),
-        handler=make_handler(agent, path_list),
+        handler=handle_skills,
         description=get_description(lang),
     )

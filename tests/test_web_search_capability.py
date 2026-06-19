@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from lingtai.agent import Agent
-from lingtai.core.web_search import WebSearchManager
+from lingtai.capabilities.web_search import WebSearchManager
 from lingtai.services.websearch import SearchResult, SearchService, create_search_service
 
 

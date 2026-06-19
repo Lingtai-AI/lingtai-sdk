@@ -35,7 +35,7 @@ from lingtai.llm.openai.adapter import (
 from lingtai.llm.deepseek.adapter import DeepSeekAdapter
 from lingtai.llm.zhipu.adapter import ZhipuAdapter
 from lingtai.llm.mimo.adapter import MimoAdapter
-from lingtai.kernel.llm.base import FunctionSchema
+from lingtai_kernel.llm.base import FunctionSchema
 
 
 # --- Chat Completions fakes -------------------------------------------------
@@ -295,7 +295,7 @@ def test_disabled_prompt_cache_key_omits_field_responses():
 def test_chat_session_omits_cache_key_when_unset():
     """A bare OpenAIChatSession with no key set sends nothing — the default
     lives in the adapter, not the session, so direct construction is opt-in."""
-    from lingtai.kernel.llm.interface import ChatInterface
+    from lingtai_kernel.llm.interface import ChatInterface
 
     iface = ChatInterface()
     iface.add_system("system prompt")

@@ -72,7 +72,7 @@ def _build_workdir(wd: Path, plib: Path, active: str = "big"):
 
 def _make_test_agent(tmp_path):
     """BaseAgent with stubs for _activate_preset, _perform_refresh, and get_token_usage."""
-    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai_kernel.base_agent import BaseAgent
     from unittest.mock import MagicMock
     svc = MagicMock()
     svc.get_adapter.return_value = MagicMock()

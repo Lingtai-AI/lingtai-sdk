@@ -71,7 +71,7 @@ def _setup_mock_chat(agent):
 
 
 def _build_molt_call_entry(mock_interface, tc_id, summary, reasoning=None):
-    from lingtai.kernel.llm.interface import ToolCallBlock
+    from lingtai_kernel.llm.interface import ToolCallBlock
 
     args = {"object": "context", "action": "molt", "summary": summary}
     if reasoning is not None:
@@ -109,7 +109,7 @@ class TestPostMoltNotificationAgentMolt:
                 reasoning="context full; want to resume foo cleanly",
             )
 
-            from lingtai.core.psyche._molt import _context_molt
+            from lingtai_kernel.intrinsics.psyche._molt import _context_molt
             result = _context_molt(agent, {
                 "summary": "finish the foo feature",
                 "_reasoning": "context full; want to resume foo cleanly",
@@ -155,7 +155,7 @@ class TestPostMoltNotificationAgentMolt:
                 summary="first line: keep going on the parser bug\nsecond line",
             )
 
-            from lingtai.core.psyche._molt import _context_molt
+            from lingtai_kernel.intrinsics.psyche._molt import _context_molt
             result = _context_molt(agent, {
                 "summary": "first line: keep going on the parser bug\nsecond line",
                 "_tc_id": tc_id,
@@ -187,7 +187,7 @@ class TestPostMoltNotificationAgentMolt:
                 summary="continue work",
             )
 
-            from lingtai.core.psyche._molt import _context_molt
+            from lingtai_kernel.intrinsics.psyche._molt import _context_molt
             result = _context_molt(agent, {
                 "summary": "continue work",
                 "reasoning": "plain-key reasoning",
@@ -214,7 +214,7 @@ class TestPostMoltNotificationSystemForget:
         try:
             _setup_mock_chat(agent)
 
-            from lingtai.core.psyche._molt import context_forget
+            from lingtai_kernel.intrinsics.psyche._molt import context_forget
             result = context_forget(agent, source="warning_ladder")
             assert result.get("status") == "ok"
 
@@ -237,7 +237,7 @@ class TestPostMoltNotificationSystemForget:
         agent.start()
         try:
             _setup_mock_chat(agent)
-            from lingtai.core.psyche._molt import context_forget
+            from lingtai_kernel.intrinsics.psyche._molt import context_forget
             result = context_forget(agent, source="aed", attempts=2)
             assert result.get("status") == "ok"
 
@@ -276,7 +276,7 @@ class TestPostMoltContinuationSignal:
             )
             _build_molt_call_entry(mock_interface, tc_id, summary=summary)
 
-            from lingtai.core.psyche._molt import _context_molt
+            from lingtai_kernel.intrinsics.psyche._molt import _context_molt
             result = _context_molt(agent, {"summary": summary, "_tc_id": tc_id})
             assert result.get("status") == "ok"
 
@@ -305,7 +305,7 @@ class TestPostMoltContinuationSignal:
             tc_id = "toolu_cont_2"
             _build_molt_call_entry(mock_interface, tc_id, summary="keep going")
 
-            from lingtai.core.psyche._molt import _context_molt
+            from lingtai_kernel.intrinsics.psyche._molt import _context_molt
             result = _context_molt(agent, {"summary": "keep going", "_tc_id": tc_id})
             assert result.get("status") == "ok"
 
@@ -340,7 +340,7 @@ class TestPostMoltContinuationSignal:
             summary = "Next step: finish wiring the parser; tests red on case 3."
             _build_molt_call_entry(mock_interface, tc_id, summary=summary)
 
-            from lingtai.core.psyche._molt import _context_molt
+            from lingtai_kernel.intrinsics.psyche._molt import _context_molt
             result = _context_molt(agent, {"summary": summary, "_tc_id": tc_id})
             assert result.get("status") == "ok"
 
@@ -355,7 +355,7 @@ class TestPostMoltContinuationSignal:
         agent.start()
         try:
             _setup_mock_chat(agent)
-            from lingtai.core.psyche._molt import context_forget
+            from lingtai_kernel.intrinsics.psyche._molt import context_forget
             result = context_forget(agent, source="warning_ladder")
             assert result.get("status") == "ok"
 
@@ -375,7 +375,7 @@ class TestPostMoltChannelIsolation:
         """Falling under molt_pressure clears `.notification/molt.json` but
         leaves `.notification/post-molt.json` intact — they are separate
         producer channels."""
-        from lingtai.kernel.notifications import publish, clear
+        from lingtai_kernel.notifications import publish, clear
 
         # Use a bare workdir; this exercises only the file-channel contract.
         workdir = tmp_path / "agent"

@@ -347,7 +347,7 @@ def test_append_tokens_skipped_when_all_zero(tmp_path):
 
 def test_summing_parent_ledger_includes_daemon_spend(tmp_path):
     """sum_token_ledger on parent's ledger sums daemon and parent calls together."""
-    from lingtai.kernel.token_ledger import append_token_entry, sum_token_ledger
+    from lingtai_kernel.token_ledger import append_token_entry, sum_token_ledger
     rd = _make_run_dir(tmp_path)
     parent_ledger = tmp_path / "parent" / "logs" / "token_ledger.jsonl"
     # Parent's own call

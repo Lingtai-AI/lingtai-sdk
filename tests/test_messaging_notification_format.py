@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 from uuid import uuid4
 
-from lingtai.core.email.primitives import _render_unread_digest
+from lingtai_kernel.intrinsics.email.primitives import _render_unread_digest
 
 
 def _make_agent(tmp_path: Path, *, time_awareness: bool = True, lang: str = "en"):

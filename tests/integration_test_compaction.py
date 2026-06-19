@@ -25,7 +25,7 @@ if env_path.exists():
             os.environ.setdefault(k.strip(), v)
 
 from lingtai.llm.service import LLMService
-from lingtai.kernel.llm.interface import TextBlock
+from lingtai_kernel.llm.interface import TextBlock
 
 
 def main():

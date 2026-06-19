@@ -14,9 +14,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lingtai.kernel.llm.base import ToolCall
-from lingtai.kernel.loop_guard import LoopGuard
-from lingtai.kernel.tool_executor import (
+from lingtai_kernel.llm.base import ToolCall
+from lingtai_kernel.loop_guard import LoopGuard
+from lingtai_kernel.tool_executor import (
     _DEFAULT_MAX_RESULT_CHARS,
     ToolExecutor,
     _spill_oversized_result,

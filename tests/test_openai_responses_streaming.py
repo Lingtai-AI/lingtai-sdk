@@ -12,8 +12,8 @@ from lingtai.llm.openai.adapter import (
     CodexOpenAIAdapter,
     OpenAIResponsesSession,
 )
-from lingtai.kernel.llm.base import FunctionSchema
-from lingtai.kernel.llm.interface import TextBlock, ThinkingBlock, ToolCallBlock
+from lingtai_kernel.llm.base import FunctionSchema
+from lingtai_kernel.llm.interface import TextBlock, ThinkingBlock, ToolCallBlock
 
 
 @dataclass

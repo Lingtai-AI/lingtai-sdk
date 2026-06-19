@@ -1,6 +1,6 @@
 """Tests for the kernel-side preset library migration system.
 
-The runner is in `lingtai.kernel.migrate.migrate`; the first migration
+The runner is in `lingtai_kernel.migrate.migrate`; the first migration
 (m001) relocates `manifest.context_limit` into `manifest.llm.context_limit`.
 """
 from __future__ import annotations
@@ -11,14 +11,14 @@ from pathlib import Path
 
 import pytest
 
-from lingtai.kernel.migrate import (
+from lingtai_kernel.migrate import (
     AGENT_CURRENT_VERSION,
     CURRENT_VERSION,
     agent_meta_relative_path,
     run_agent_migrations,
     run_migrations,
 )
-from lingtai.kernel.migrate.migrate import meta_filename, reset_process_cache
+from lingtai_kernel.migrate.migrate import meta_filename, reset_process_cache
 
 
 @pytest.fixture(autouse=True)
@@ -186,7 +186,7 @@ def test_run_migrations_honors_future_version_without_downgrading(tmp_path, capl
         },
     })
 
-    caplog.set_level(logging.WARNING, logger="lingtai.kernel.migrate.migrate")
+    caplog.set_level(logging.WARNING, logger="lingtai_kernel.migrate.migrate")
     run_migrations(plib)
 
     # Meta version preserved, not downgraded
@@ -233,7 +233,7 @@ def test_run_migrations_persists_across_simulated_process_restart(tmp_path):
     })
 
     # Simulate process restart
-    from lingtai.kernel.migrate.migrate import reset_process_cache
+    from lingtai_kernel.migrate.migrate import reset_process_cache
     reset_process_cache()
 
     # Second "process": cache empty, but on-disk version says we're done
@@ -333,7 +333,7 @@ def test_run_agent_migrations_treats_non_object_meta_as_zero(tmp_path, caplog):
     meta_path.parent.mkdir(parents=True)
     meta_path.write_text("null", encoding="utf-8")
 
-    caplog.set_level(logging.WARNING, logger="lingtai.kernel.migrate.migrate")
+    caplog.set_level(logging.WARNING, logger="lingtai_kernel.migrate.migrate")
     run_agent_migrations(tmp_path)
 
     assert "procedures_file" not in _read(init_path)
@@ -347,8 +347,8 @@ def test_run_agent_migrations_treats_non_object_meta_as_zero(tmp_path, caplog):
 
 def test_registry_rejects_duplicate_versions():
     """Two migrations claiming the same version → import-time RuntimeError."""
-    from lingtai.kernel.migrate.migrate import _validate_registry
-    import lingtai.kernel.migrate.migrate as mod
+    from lingtai_kernel.migrate.migrate import _validate_registry
+    import lingtai_kernel.migrate.migrate as mod
 
     original = mod._MIGRATIONS
     try:
@@ -364,8 +364,8 @@ def test_registry_rejects_duplicate_versions():
 
 def test_registry_rejects_non_contiguous_versions():
     """Skipping a version (1, 3) → RuntimeError."""
-    from lingtai.kernel.migrate.migrate import _validate_registry
-    import lingtai.kernel.migrate.migrate as mod
+    from lingtai_kernel.migrate.migrate import _validate_registry
+    import lingtai_kernel.migrate.migrate as mod
 
     original = mod._MIGRATIONS
     try:
@@ -381,8 +381,8 @@ def test_registry_rejects_non_contiguous_versions():
 
 def test_registry_rejects_out_of_order_versions():
     """Decreasing version → RuntimeError."""
-    from lingtai.kernel.migrate.migrate import _validate_registry
-    import lingtai.kernel.migrate.migrate as mod
+    from lingtai_kernel.migrate.migrate import _validate_registry
+    import lingtai_kernel.migrate.migrate as mod
 
     original = mod._MIGRATIONS
     try:
@@ -398,8 +398,8 @@ def test_registry_rejects_out_of_order_versions():
 
 def test_registry_rejects_zero_or_negative_versions():
     """Version must be ≥ 1."""
-    from lingtai.kernel.migrate.migrate import _validate_registry
-    import lingtai.kernel.migrate.migrate as mod
+    from lingtai_kernel.migrate.migrate import _validate_registry
+    import lingtai_kernel.migrate.migrate as mod
 
     original = mod._MIGRATIONS
     try:
@@ -412,8 +412,8 @@ def test_registry_rejects_zero_or_negative_versions():
 
 def test_registry_rejects_non_callable_function():
     """The third tuple element must be callable."""
-    from lingtai.kernel.migrate.migrate import _validate_registry
-    import lingtai.kernel.migrate.migrate as mod
+    from lingtai_kernel.migrate.migrate import _validate_registry
+    import lingtai_kernel.migrate.migrate as mod
 
     original = mod._MIGRATIONS
     try:
@@ -427,14 +427,14 @@ def test_registry_rejects_non_callable_function():
 def test_current_version_derived_from_registry_max():
     """CURRENT_VERSION is the highest registered migration's version, not
     a hand-maintained constant that can drift."""
-    from lingtai.kernel.migrate.migrate import _MIGRATIONS, CURRENT_VERSION
+    from lingtai_kernel.migrate.migrate import _MIGRATIONS, CURRENT_VERSION
     assert CURRENT_VERSION == max(v for v, _, _ in _MIGRATIONS)
 
 
 def test_save_version_uses_pid_suffixed_tmp_file(tmp_path):
     """Concurrent processes writing the same meta file would otherwise race
     on `_kernel_meta.json.tmp`. The tmp filename includes the PID."""
-    from lingtai.kernel.migrate.migrate import _save_version
+    from lingtai_kernel.migrate.migrate import _save_version
     plib = tmp_path / "presets"
     plib.mkdir()
 
@@ -533,7 +533,7 @@ def test_m001_warns_and_skips_when_both_locations_set(tmp_path, caplog):
     p = _write_preset(plib, "dup", body)
 
     caplog.set_level(logging.WARNING,
-                     logger="lingtai.kernel.migrate.m001_context_limit_relocation")
+                     logger="lingtai_kernel.migrate.m001_context_limit_relocation")
     run_migrations(plib)
 
     # m001 leaves the ambiguous preset untouched (just warns); m002 still
@@ -624,7 +624,7 @@ def test_m001_continues_past_unreadable_preset(tmp_path, caplog):
     })
 
     caplog.set_level(logging.WARNING,
-                     logger="lingtai.kernel.migrate.m001_context_limit_relocation")
+                     logger="lingtai_kernel.migrate.m001_context_limit_relocation")
     run_migrations(plib)
 
     # good preset was still migrated
@@ -682,7 +682,7 @@ def test_run_agent_migrations_rewrites_legacy_curated_mcp_launch_args(tmp_path):
 
 def test_discover_presets_triggers_migration(tmp_path):
     """discover_presets() with old-layout files migrates them automatically."""
-    from lingtai.kernel.presets import discover_presets
+    from lingtai.presets import discover_presets
     plib = tmp_path / "presets"
     plib.mkdir()
     p = _write_preset(plib, "x", {
@@ -705,7 +705,7 @@ def test_discover_presets_triggers_migration(tmp_path):
 
 def test_discover_presets_excludes_kernel_meta_file(tmp_path):
     """The internal _kernel_meta.json is not surfaced as a preset."""
-    from lingtai.kernel.presets import discover_presets
+    from lingtai.presets import discover_presets
     plib = tmp_path / "presets"
     plib.mkdir()
     _write_preset(plib, "real", {
