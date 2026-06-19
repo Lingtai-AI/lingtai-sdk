@@ -252,16 +252,16 @@ def test_codex_headers_differ_for_different_agents():
 
 
 def test_codex_thread_id_varies_by_thread_salt_session_id_stable():
-    """Same agent, different thread salt (e.g. molt) -> same session, new thread."""
+    """Same agent, different last molt time -> same session, new thread."""
     molt0 = _create_codex_session_cfg(
         [_completed()],
         codex_session_anchor="/agents/alice/init.json",
-        codex_thread_salt="molt:0",
+        codex_thread_salt="2026-06-01T00:00:00Z",
     )
     molt1 = _create_codex_session_cfg(
         [_completed()],
         codex_session_anchor="/agents/alice/init.json",
-        codex_thread_salt="molt:1",
+        codex_thread_salt="2026-06-02T00:00:00Z",
     )
 
     molt0.send("x")
@@ -323,7 +323,7 @@ def test_codex_session_headers_can_be_set_directly_on_session():
 
 
 def test_codex_bare_session_omits_headers():
-    """A directly-constructed session with no ids sends no header (opt-in)."""
+    """A directly-constructed session with no ids sends no header (bare/test path)."""
     session = CodexResponsesSession(
         client=FakeClient([_completed()]),
         model="gpt-5.5",
@@ -381,7 +381,7 @@ def test_codex_factory_builds_adapter_with_per_agent_ids():
             provider_defaults={
                 "codex": {
                     "codex_session_anchor": "/agents/alice/init.json",
-                    "codex_thread_salt": "molt:3",
+                    "codex_thread_salt": "2026-06-03T00:00:00Z",
                 }
             },
         )
@@ -399,7 +399,12 @@ def test_codex_factory_builds_adapter_with_per_agent_ids():
 
 
 def _write_molt_summary(working_dir, *, count, ts, created_at):
-    """Write a system/summaries/molt_<count>_<ts>.md like the molt machinery."""
+    """Write a system/summaries/molt_<count>_<ts>.md like the molt machinery.
+
+    ``count`` only shapes the on-disk filename/frontmatter (the real format
+    written by _snapshots._write_molt_summary); the thread salt is the
+    ``created_at`` last-molt time, never the count.
+    """
     summaries = working_dir / "system" / "summaries"
     summaries.mkdir(parents=True, exist_ok=True)
     (summaries / f"molt_{count}_{ts}.md").write_text(
