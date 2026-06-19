@@ -179,7 +179,7 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
             / ".library"
             / "intrinsic"
             / "capabilities"
-            / "system-manual"
+            / "system"
             / "SKILL.md"
         )
         assert system_manual_md.is_file()
@@ -225,7 +225,7 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
             / ".library"
             / "intrinsic"
             / "capabilities"
-            / "psyche-manual"
+            / "psyche"
             / "SKILL.md"
         )
         assert psyche_md.is_file()
