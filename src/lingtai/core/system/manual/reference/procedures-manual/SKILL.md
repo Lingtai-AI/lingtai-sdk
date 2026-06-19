@@ -95,6 +95,38 @@ execution: file scans, deterministic transformations, read-only reviews, batch
 conversion, log mining, and other noisy work whose details would pollute the main
 context.
 
+**Daemon-first policy for execution-heavy work.** When the task is mainly
+execution rather than final judgment, default to considering `daemon.emanate`
+before spending another main-agent tool loop. This is a review prompt, not
+an autopilot rule: if the next action is a short deterministic command, a
+clarification to the human, or a judgment/aesthetic choice, keep it in the parent
+context. Good daemon-first candidates include multi-file scans, code review, test
+runs and failure triage, evidence gathering, large local search, batch
+conversion, and report assembly. Keep these duties with the parent: human intent
+interpretation, task framing, safety/evidence boundary setting, final review,
+durable-memory decisions, external side effects, and human-facing expression.
+
+Use a capsule-shaped handoff when daemon work is substantial:
+
+```yaml
+capsule:
+  objective: "What question should this daemon answer?"
+  scope:
+    include: ["paths, files, topics, or commands in bounds"]
+    exclude: ["side effects, claims, or areas out of bounds"]
+  result_contract:
+    artifact: "Where to write the report or patch, if any"
+    evidence: "What citations, commands, logs, or file paths must support claims"
+    uncertainty: "What must be marked unknown instead of guessed"
+  review_gate:
+    parent_checks: ["tests to rerun", "claims to verify", "risks to inspect"]
+    cannot_decide: ["final safety/judgment/external publication decisions"]
+```
+
+The token-efficiency goal is not to remove judgment. It is to move bounded noisy
+execution out of the main context, then bring back enough evidence and structure
+that the parent can review without reconstructing the entire search.
+
 Use this methodology for substantial daemon work:
 
 1. **Plan in pad first.** Record the objective, assumptions to test, daemon task

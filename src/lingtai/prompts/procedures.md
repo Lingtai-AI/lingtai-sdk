@@ -19,9 +19,15 @@ exploration and cheap deterministic work that would otherwise consume the main
 agent's context, avatars for persistent specialists, MCPs for durable external
 integrations, knowledge for private facts, and skills for reusable procedures.
 Protecting the main context is a LingTai principle: the parent plans and
-synthesizes, daemons execute noisy work. For the full daemon methodology — pad
-workflow, cost efficiency, context hygiene, and parent/daemon division of labor —
-read `system-manual` → `reference/procedures-manual/SKILL.md`.
+synthesizes, daemons execute noisy work. For execution-heavy tasks — multi-file
+scans, code review, test runs, evidence gathering, batch conversion, and report
+assembly — prefer considering a daemon-first split when the work is bounded and
+evidence-returning: parent frames/reviews/synthesizes; daemons execute under
+bounded contracts. Keep final judgment, safety decisions, external side effects,
+and human-facing wording with the parent. For the full
+daemon methodology — pad workflow, cost efficiency, context hygiene,
+parent/daemon division of labor, and capsule/result-contract templates — read
+`system-manual` → `reference/procedures-manual/SKILL.md`.
 
 ### Communication and Responsiveness
 

@@ -79,10 +79,17 @@ files, not standalone top-level skills.
 - Keep daemon lightweight. If the task needs long-lived persona, molt/pad,
   durable knowledge, or ongoing ownership, spawn an avatar/agent instead of
   stretching daemon.
-- Think of each task item as **task objective + behavior guidance + tool
-  surface**:
+- Think of each task item as **task objective + structured contract + behavior
+  guidance + tool surface**:
   - `task` answers **what to do**: concrete objective, inputs, expected output,
     destination path, and verification checklist. Keep it task-shaped.
+  - `capsule` answers **why this daemon exists and how its result will be
+    reviewed**: compact JSON-serializable objective, scope, result contract,
+    review gate, and optional metadata. Use it when delegating execution-heavy
+    work whose return must be auditable. A capsule is a structured handoff
+    and review artifact; it does not by itself make the daemon autonomous or
+    replace parent verification. Missing or `{}` means no capsule; non-object or
+    non-JSON-serializable values are rejected.
   - `system_prompt` answers **how this daemon should behave while doing it**:
     the parent's one-run role, constraints, safety posture, interpretation
     rules, collaboration boundaries, and tool-use policy. Omit it or leave it
@@ -178,6 +185,22 @@ contract:
 ```json
 {
   "task": "Audit the daemon manual changes and write a concise review to reports/daemon-manual-review.md.",
+  "capsule": {
+    "objective": "Review whether the daemon manual change is accurate and safe.",
+    "scope": {
+      "include": ["src/lingtai/core/daemon/manual", "related daemon tests"],
+      "exclude": ["unrelated runtime refactors", "network calls"]
+    },
+    "result_contract": {
+      "artifact": "reports/daemon-manual-review.md",
+      "evidence": ["quote exact file paths and line numbers for findings"],
+      "uncertainty": "mark unclear behavior instead of guessing"
+    },
+    "review_gate": {
+      "parent_checks": ["rerun relevant tests", "verify any claimed behavior in code"],
+      "cannot_decide": ["whether to merge or publish"]
+    }
+  },
   "system_prompt": "Act as a documentation reviewer. Stay read-only except for the requested report file. Use the selected daemon-manual skills only when you need exact daemon semantics. Use the local-docs MCP only for daemon documentation lookup, not for unrelated search. You may use email only to ask dev-2 for missing daemon context; do not contact the human. If you email dev-2, state the exact question, include only the relevant snippet, and summarize the exchange in your final report. Do not use web tools unless the local docs are insufficient.",
   "tools": ["file", "bash"],
   "mcp": [
@@ -190,9 +213,11 @@ contract:
 }
 ```
 
-The same pattern applies to non-email tools: `tools` grants a capability surface;
-`skills` grants a selected workflow catalog; `mcp` grants one-run MCP registrations (serialized for all backends and loaded as task tools by the LingTai backend); `system_prompt` tells the daemon how to
-exercise all of them in this one run.
+The same pattern applies to non-email tools: `capsule` states the objective,
+return contract, and review gate; `tools` grants a capability surface; `skills`
+grants a selected workflow catalog; `mcp` grants one-run MCP registrations
+(serialized for all backends and loaded as task tools by the LingTai backend);
+`system_prompt` tells the daemon how to exercise all of them in this one run.
 
 ## Maintenance
 

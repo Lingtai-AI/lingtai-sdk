@@ -143,6 +143,11 @@ def test_skills_setup_hard_copies_intrinsics(tmp_path):
         assert "reference/inspection/SKILL.md" in daemon_body
         assert "reference/cli-backends/SKILL.md" in daemon_body
         assert "reference/cleanup/SKILL.md" in daemon_body
+        assert "capsule" in daemon_body
+        assert "JSON-serializable" in daemon_body
+        assert "objective" in daemon_body
+        assert "result_contract" in daemon_body
+        assert "review_gate" in daemon_body
 
         daemon_reference_dir = daemon_md.parent / "reference"
         for reference_name in ("forensics", "inspection", "cli-backends", "cleanup"):
@@ -219,6 +224,11 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
         assert "Human-facing deliverables" in procedures_body
         assert "external side effects" in procedures_body
         assert "Resident procedures maintenance" in procedures_body
+        assert "Daemon-first policy" in procedures_body
+        assert "capsule" in procedures_body
+        assert "result_contract" in procedures_body
+        assert "review_gate" in procedures_body
+        assert "token-efficiency goal is not to remove judgment" in procedures_body
 
         psyche_md = (
             workdir
@@ -721,3 +731,5 @@ def test_resident_prompts_route_to_system_manual_nested_references():
     )
     assert "unified runtime/procedure router is\n`system-manual`" in procedures
     assert "reference/procedures-manual/SKILL.md" in procedures
+    assert "daemon-first split" in procedures
+    assert "parent frames/reviews/synthesizes" in procedures
