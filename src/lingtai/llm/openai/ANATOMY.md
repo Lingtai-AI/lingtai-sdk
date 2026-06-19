@@ -9,7 +9,7 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 | File | LOC | Role |
 |------|-----|------|
 | `__init__.py` | 3 | Re-exports `OpenAIAdapter`, `OpenAIChatSession` |
-| `adapter.py` | 1778 | 5 classes + helpers: `OpenAIChatSession`, `OpenAIResponsesSession`, `OpenAIAdapter`, `CodexResponsesSession`, `CodexOpenAIAdapter` |
+| `adapter.py` | ~1880 | 5 classes + helpers: `OpenAIChatSession`, `OpenAIResponsesSession`, `OpenAIAdapter`, `CodexResponsesSession`, `CodexOpenAIAdapter` |
 | `defaults.py` | 7 | `DEFAULTS` dict: `api_compat="openai"`, `use_responses_api=True` |
 
 ### adapter.py class map
@@ -19,14 +19,15 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 | `OpenAIChatSession` | 492–1003 | Chat Completions session with context overflow auto-recovery; sends optional `prompt_cache_key` |
 | `OpenAIResponsesSession` | 1006–1204 | Responses API session with server-side `previous_response_id` chaining, optional `context_management` compaction, and optional `prompt_cache_key` |
 | `OpenAIAdapter` | 1207–1520 | `LLMAdapter` implementation; dispatches to Completions or Responses path; receives injected `compact_threshold`; derives the default `prompt_cache_key` via `_default_prompt_cache_key` / `_resolve_prompt_cache_key` |
-| `CodexResponsesSession` | 1523–1709 | Stateless Responses variant for ChatGPT-OAuth `/backend-api/codex` |
-| `CodexOpenAIAdapter` | 1711–1778 | Adapter variant that builds `CodexResponsesSession`; overrides `_default_prompt_cache_key` → `lingtai-codex:{model}:v1` |
+| `CodexResponsesSession` | 1572–1795 | Stateless Responses variant for ChatGPT-OAuth `/backend-api/codex`; sends optional stable `session-id` / `thread-id` REST cache-affinity headers (`_cache_affinity_headers`) only when explicitly configured |
+| `CodexOpenAIAdapter` | 1797–1918 | Adapter variant that builds `CodexResponsesSession`; overrides `_default_prompt_cache_key` → `lingtai-codex:{model}:v1`; resolves the cache-affinity header ids via `_resolve_codex_ids` (returns `(None, None)` unless a per-agent identity was configured) |
 
 ### adapter.py helpers
 
 | Function | Lines | Role |
 |----------|-------|------|
-| `_base_url_namespace()` | 53–66 | Stable namespace token for an OpenAI-compatible `base_url` (URL host, or short hash fallback) used in the default `prompt_cache_key` |
+| `_base_url_namespace()` | 102–116 | Stable namespace token for an OpenAI-compatible `base_url` (URL host, or short hash fallback) used in the default `prompt_cache_key` |
+| `_codex_session_id()` / `_codex_thread_id()` | 81–99 | Derive UUID-shaped, stable Codex REST `session-id` / `thread-id` headers (issue #378). `session-id = uuid5(NS, "session:"+anchor)` where `anchor` MUST be a per-agent identity; `thread-id = uuid5(session-id, "thread:"+salt)` |
 | `_validate_compact_threshold()` | 69–83 | Validates/normalizes OpenAI Responses auto-compaction threshold; positive `int` or explicit `None` (disable) only |
 | `_codex_responses_trace_path()` / `_codex_responses_trace_record()` | 63–157 | Opt-in Codex Responses stream diagnostic trace helpers; safe metadata only, default off |
 | `_build_http_timeout()` | 159–173 | `httpx.Timeout` per-phase caps (connect≤30s, read≤60s, pool=10s) |
@@ -86,6 +87,17 @@ Both paths return sessions wrapped via `_wrap_with_gate()` for rate limiting.
 - `_resolve_prompt_cache_key(model)` applies the adapter's policy from the constructor kwarg `prompt_cache_key`: `None` (default) → auto-derive; an explicit string → override for every session; `False` → disable (never sent). Both `_create_completions_session` and `_create_responses_session` (and the Codex variant) pass `_resolve_prompt_cache_key(model)` into the session.
 
 `prompt_cache_retention` is deliberately never sent — Codex rejects it (`Unsupported parameter`) and the whole OpenAI-compatible surface is kept uniform — and no Anthropic-style `cache_control` is emitted (Codex rejects `Unknown parameter`). MiniMax is Anthropic-compatible in this repo and is unaffected.
+
+### Codex REST cache-affinity headers (`session-id` / `thread-id`)
+
+**Codex-only; sent alongside `prompt_cache_key`, not in place of it (issue #378).** The REST `/backend-api/codex/responses` endpoint does **not** accept `previous_response_id` (`Unsupported parameter`), so the near-term cache-affinity lever — like the official Codex client — is two stable, UUID-shaped HTTP headers, sent via the SDK's per-request `extra_headers` (never request-body fields):
+
+- `CodexResponsesSession` accepts optional `session_id` / `thread_id`; `_cache_affinity_headers()` emits only the ones that are set. A bare session (no ids) sends neither (opt-in, mirrors `prompt_cache_key`).
+- **These ids MUST be per-agent.** `session-id` must NOT derive from the model-only `prompt_cache_key` (`lingtai-codex:{model}:v1`) — every agent on a model shares that string, which would collapse all of them onto one session/thread. The adapter layer currently has **no per-agent identity in scope** (the factory / `LLMService` get only provider/model/defaults), so **the safe default is to send no headers at all.**
+- Headers are emitted **only** when the agent supplies a per-agent identity via constructor kwargs: `codex_session_id=<uuid str>` (verbatim) or `codex_session_anchor=<per-agent str>` (→ `session-id = _codex_session_id(anchor)`, e.g. the resolved `init.json` / agent-dir path). `codex_thread_salt` (default `"default"`) varies `thread-id = _codex_thread_id(session-id, salt)` — a caller with `molt_count` passes `molt:<n>` so a post-molt thread gets a fresh `thread-id` while `session-id` stays stable. `_resolve_codex_ids(model)` returns `(None, None)` when neither is configured.
+- The factory (`../_register.py:_codex`) reads `codex_session_id` / `codex_session_anchor` / `codex_thread_salt` from the agent's manifest `llm` defaults (allowlisted in `../service.py` `_PROVIDER_DEFAULTS_PASS_THROUGH_KEYS`), so distinct agents can configure distinct identities.
+
+> **Open follow-up (not in this PR):** nothing yet threads the agent's resolved `init.json` path or `molt_count` automatically into the adapter, so out of the box (no manifest config) no session/thread headers are sent. The config hooks above are the seam; the issue's exact `uuid5(NS, init.json path)` / `molt:<molt_count>` *automatic* mapping is deferred pending the product decisions the issue lists (what anchors `session-id`; whether `thread-id` ties to `molt_count`; whether ids are persisted; whether it's option-guarded).
 
 ## State
 

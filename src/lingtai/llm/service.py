@@ -59,7 +59,16 @@ def _generate_tool_call_id() -> str:
 # api_compat="anthropic" custom providers (e.g. local GLM proxies) to
 # OpenAIAdapter, which then explodes on raw.choices access. See
 # Lingtai-AI/lingtai#112 for the full failure trace.
-_PROVIDER_DEFAULTS_PASS_THROUGH_KEYS = ("api_compat",)
+# ``codex_session_id`` / ``codex_session_anchor`` / ``codex_thread_salt`` let an
+# agent opt into stable Codex REST cache-affinity headers (issue #378). They
+# carry the agent's per-agent identity, which the adapter layer otherwise has
+# no access to; absent them the Codex adapter sends no session/thread headers.
+_PROVIDER_DEFAULTS_PASS_THROUGH_KEYS = (
+    "api_compat",
+    "codex_session_id",
+    "codex_session_anchor",
+    "codex_thread_salt",
+)
 _PROVIDER_DEFAULTS_PRESERVE_NONE_KEYS = ("compact_threshold",)
 
 

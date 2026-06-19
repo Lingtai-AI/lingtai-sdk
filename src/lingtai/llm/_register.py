@@ -64,12 +64,24 @@ def register_all_adapters() -> None:
         kw.pop("model", None)
         kw.pop("api_key", None)  # ignore env-resolved key
         kw.pop("base_url", None)  # we set our own
+        # Per-agent Codex REST cache-affinity header config (issue #378). Read
+        # from the agent's manifest ``llm`` defaults so distinct agents supply
+        # distinct per-agent session/thread identities. Absent config -> the
+        # adapter sends no session/thread headers (safe default; the adapter has
+        # no other per-agent identity in scope).
+        d = defaults or {}
+        codex_id_kw: dict = {}
+        for cfg_key in ("codex_session_id", "codex_session_anchor", "codex_thread_salt"):
+            val = d.get(cfg_key)
+            if val is not None:
+                codex_id_kw[cfg_key] = val
         mgr = CodexTokenManager()
         adapter = CodexOpenAIAdapter(
             api_key=mgr.get_access_token(),
             base_url="https://chatgpt.com/backend-api/codex",
             use_responses=True,
             force_responses=True,
+            **codex_id_kw,
         )
         # Store the token manager so we can refresh before each API call.
         # The openai SDK's client.api_key is mutable — we update it in-place.
