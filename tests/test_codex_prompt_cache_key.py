@@ -337,6 +337,59 @@ def test_codex_bare_session_omits_headers():
     assert "extra_headers" not in session._client.responses.kwargs[0]
 
 
+# ---------------------------------------------------------------------------
+# Manifest config seam — per-agent identity flows factory -> adapter (#378)
+# ---------------------------------------------------------------------------
+
+
+def test_manifest_config_keys_pass_through_to_provider_defaults():
+    """codex_session_id/anchor/thread_salt survive the manifest->defaults map."""
+    import lingtai  # noqa: F401  (registers adapters / loads service module)
+    from lingtai.llm.service import build_provider_defaults_from_manifest_llm
+
+    d = build_provider_defaults_from_manifest_llm(
+        {
+            "provider": "codex",
+            "codex_session_anchor": "/agents/alice/init.json",
+            "codex_thread_salt": "molt:2",
+        },
+        max_rpm=0,
+    )
+    assert d["codex"]["codex_session_anchor"] == "/agents/alice/init.json"
+    assert d["codex"]["codex_thread_salt"] == "molt:2"
+
+    # No codex config -> nothing leaks (preserves the historical None default).
+    assert build_provider_defaults_from_manifest_llm({"provider": "codex"}, max_rpm=0) is None
+
+
+def test_codex_factory_builds_adapter_with_per_agent_ids():
+    """The registered codex factory wires manifest config into resolved ids."""
+    from unittest import mock
+
+    import lingtai  # noqa: F401
+    from lingtai.llm.service import LLMService
+
+    with mock.patch("lingtai.auth.codex.CodexTokenManager") as mgr_cls:
+        mgr_cls.return_value.get_access_token.return_value = "fake-token"
+
+        svc = LLMService(
+            provider="codex",
+            model="gpt-5.5",
+            provider_defaults={
+                "codex": {
+                    "codex_session_anchor": "/agents/alice/init.json",
+                    "codex_thread_salt": "molt:3",
+                }
+            },
+        )
+        sid, tid = svc.get_adapter("codex")._resolve_codex_ids("gpt-5.5")
+        assert _is_uuid(sid) and _is_uuid(tid) and sid != tid
+
+        # No config -> the safe default: no per-agent identity, no headers.
+        svc2 = LLMService(provider="codex", model="gpt-5.5")
+        assert svc2.get_adapter("codex")._resolve_codex_ids("gpt-5.5") == (None, None)
+
+
 def _is_uuid(value: str) -> bool:
     import uuid as _uuid
 
