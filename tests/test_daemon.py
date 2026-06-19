@@ -57,6 +57,19 @@ def _make_run_dir(
     )
 
 
+def _reuse_parent_service(monkeypatch, agent):
+    """Make daemon-scoped ``LLMService(...)`` construction return the parent mock.
+
+    No-preset daemon runs now always build a fresh daemon-scoped service instead
+    of reusing ``agent.service`` directly. Tests that exercise the tool loop via a
+    mock parent service patch ``LLMService`` so the freshly-built service is the
+    same mock, keeping ``agent.service.create_session`` the session under test.
+    """
+    import lingtai.llm.service as service_mod
+    monkeypatch.setattr(service_mod, "LLMService", lambda **kwargs: agent.service)
+    return agent.service
+
+
 def _write_daemon_json(tmp_path, run_id, **overrides):
     daemon_dir = tmp_path / "daemon-agent" / "daemons" / run_id
     daemon_dir.mkdir(parents=True)
@@ -614,9 +627,10 @@ def test_build_emanation_prompt_includes_task(tmp_path):
     assert "daemon emanation" in prompt.lower() or "分神" in prompt
 
 
-def test_run_emanation_returns_text(tmp_path):
+def test_run_emanation_returns_text(tmp_path, monkeypatch):
     """Emanation runs a tool loop and returns final text."""
     agent = _make_agent(tmp_path, ["file", "daemon"])
+    _reuse_parent_service(monkeypatch, agent)
     mgr = agent.get_capability("daemon")
 
     mock_session = MagicMock()
@@ -642,9 +656,217 @@ def test_run_emanation_returns_text(tmp_path):
     assert "Found 3 files" in result
 
 
-def test_run_emanation_dispatches_tools(tmp_path):
+
+def test_run_emanation_codex_parent_gets_daemon_cache_anchor(tmp_path, monkeypatch):
+    """Builtin Codex daemon runs get a per-run cache anchor, not parent service."""
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent.service.provider = "codex"
+    agent.service.model = "gpt-5.5"
+    agent.service._base_url = "https://chatgpt.com/backend-api/codex"
+    agent.service._context_window = 123456
+    agent.service._key_resolver = lambda provider: "token"
+    agent.service._provider_defaults = {
+        "codex": {
+            "max_rpm": 7,
+            "codex_session_id": "parent-fixed-id",
+            "codex_session_anchor": str((agent._working_dir / "init.json").resolve()),
+        }
+    }
+
+    captured = {}
+
+    class FakeService:
+        def __init__(self, **kwargs):
+            captured["init"] = kwargs
+            self.model = kwargs["model"]
+            self.provider = kwargs["provider"]
+
+        def create_session(self, **kwargs):
+            captured["session"] = kwargs
+            mock_session = MagicMock()
+            mock_response = MagicMock()
+            mock_response.text = "daemon done"
+            mock_response.tool_calls = []
+            mock_response.usage = MagicMock(
+                input_tokens=0,
+                output_tokens=0,
+                thinking_tokens=0,
+                cached_tokens=0,
+            )
+            mock_session.send = MagicMock(return_value=mock_response)
+            return mock_session
+
+    import lingtai.llm.service as service_mod
+    monkeypatch.setattr(service_mod, "LLMService", FakeService)
+
+    mgr = agent.get_capability("daemon")
+    cancel = threading.Event()
+    em_id = "em-codex"
+    schemas, dispatch = mgr._build_tool_surface(["file"])
+    run_dir = _make_run_dir(agent, em_id=em_id)
+    mgr._emanations[em_id] = {
+        "followup_buffer": "",
+        "followup_lock": threading.Lock(),
+        "run_dir": run_dir,
+    }
+
+    result = mgr._run_emanation(em_id, run_dir, schemas, dispatch, "x", cancel)
+
+    assert result == "daemon done"
+    agent.service.create_session.assert_not_called()
+    assert captured["init"]["provider"] == "codex"
+    assert captured["init"]["model"] == "gpt-5.5"
+    assert captured["init"]["base_url"] == "https://chatgpt.com/backend-api/codex"
+    assert captured["init"]["context_window"] == 123456
+    defaults = captured["init"]["provider_defaults"]
+    assert defaults["codex"]["max_rpm"] == 7
+    assert defaults["codex"]["codex_session_anchor"] == str((run_dir.path / "daemon.json").resolve())
+    assert "codex_session_id" not in defaults["codex"]
+
+
+def test_run_emanation_non_codex_parent_builds_fresh_daemon_service(tmp_path, monkeypatch):
+    """Builtin non-Codex daemon runs build a fresh service, not the parent one.
+
+    The daemon-scoped service must mirror the parent (provider/model/base_url/
+    key_resolver/context_window) and preserve the parent's provider defaults,
+    without any Codex-only cache anchor.
+    """
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent.service.provider = "anthropic"
+    agent.service.model = "claude-opus-4-8"
+    agent.service._base_url = "https://api.anthropic.com"
+    agent.service._context_window = 200000
+    sentinel_resolver = lambda provider: "token"
+    agent.service._key_resolver = sentinel_resolver
+    agent.service._provider_defaults = {
+        "anthropic": {"max_rpm": 5, "default_headers": {"x-test": "1"}}
+    }
+
+    captured = {}
+
+    class FakeService:
+        def __init__(self, **kwargs):
+            captured["init"] = kwargs
+            self.model = kwargs["model"]
+            self.provider = kwargs["provider"]
+
+        def create_session(self, **kwargs):
+            mock_session = MagicMock()
+            mock_response = MagicMock()
+            mock_response.text = "daemon done"
+            mock_response.tool_calls = []
+            mock_response.usage = MagicMock(
+                input_tokens=0,
+                output_tokens=0,
+                thinking_tokens=0,
+                cached_tokens=0,
+            )
+            mock_session.send = MagicMock(return_value=mock_response)
+            return mock_session
+
+    import lingtai.llm.service as service_mod
+    monkeypatch.setattr(service_mod, "LLMService", FakeService)
+
+    mgr = agent.get_capability("daemon")
+    cancel = threading.Event()
+    em_id = "em-anthropic"
+    schemas, dispatch = mgr._build_tool_surface(["file"])
+    run_dir = _make_run_dir(agent, em_id=em_id)
+    mgr._emanations[em_id] = {
+        "followup_buffer": "",
+        "followup_lock": threading.Lock(),
+        "run_dir": run_dir,
+    }
+
+    result = mgr._run_emanation(em_id, run_dir, schemas, dispatch, "x", cancel)
+
+    assert result == "daemon done"
+    # A fresh daemon-scoped service is constructed; the parent service is not reused.
+    agent.service.create_session.assert_not_called()
+    assert captured["init"]["provider"] == "anthropic"
+    assert captured["init"]["model"] == "claude-opus-4-8"
+    assert captured["init"]["base_url"] == "https://api.anthropic.com"
+    assert captured["init"]["context_window"] == 200000
+    assert captured["init"]["api_key"] == "token"
+    assert captured["init"]["key_resolver"] is sentinel_resolver
+    defaults = captured["init"]["provider_defaults"]
+    # Parent provider defaults are preserved verbatim; no Codex cache anchor.
+    assert defaults == {"anthropic": {"max_rpm": 5, "default_headers": {"x-test": "1"}}}
+    assert "codex_session_anchor" not in defaults["anthropic"]
+
+
+def test_run_emanation_codex_preset_gets_daemon_cache_anchor(tmp_path, monkeypatch):
+    """Codex preset daemons pass daemon-scoped provider defaults too."""
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    mgr = agent.get_capability("daemon")
+    captured = {}
+
+    class FakeService:
+        def __init__(self, **kwargs):
+            captured["init"] = kwargs
+            self.model = kwargs["model"]
+            self.provider = kwargs["provider"]
+
+        def create_session(self, **kwargs):
+            mock_session = MagicMock()
+            mock_response = MagicMock()
+            mock_response.text = "preset daemon done"
+            mock_response.tool_calls = []
+            mock_response.usage = MagicMock(
+                input_tokens=0,
+                output_tokens=0,
+                thinking_tokens=0,
+                cached_tokens=0,
+            )
+            mock_session.send = MagicMock(return_value=mock_response)
+            return mock_session
+
+    import lingtai.llm.service as service_mod
+    monkeypatch.setattr(service_mod, "LLMService", FakeService)
+
+    cancel = threading.Event()
+    em_id = "em-preset-codex"
+    schemas, dispatch = mgr._build_tool_surface(["file"])
+    run_dir = _make_run_dir(agent, em_id=em_id)
+    mgr._emanations[em_id] = {
+        "followup_buffer": "",
+        "followup_lock": threading.Lock(),
+        "run_dir": run_dir,
+    }
+
+    result = mgr._run_emanation(
+        em_id,
+        run_dir,
+        schemas,
+        dispatch,
+        "x",
+        cancel,
+        preset_llm={
+            "provider": "codex",
+            "model": "gpt-5.5",
+            "base_url": "https://chatgpt.com/backend-api/codex",
+            "api_key": "ignored-by-fake",
+            "max_rpm": 11,
+            "codex_session_id": "preset-fixed-id",
+            "compact_threshold": None,
+        },
+    )
+
+    assert result == "preset daemon done"
+    assert captured["init"]["provider"] == "codex"
+    assert captured["init"]["model"] == "gpt-5.5"
+    assert captured["init"]["base_url"] == "https://chatgpt.com/backend-api/codex"
+    defaults = captured["init"]["provider_defaults"]
+    assert defaults["codex"]["max_rpm"] == 11
+    assert defaults["codex"]["compact_threshold"] is None
+    assert defaults["codex"]["codex_session_anchor"] == str((run_dir.path / "daemon.json").resolve())
+    assert "codex_session_id" not in defaults["codex"]
+
+
+def test_run_emanation_dispatches_tools(tmp_path, monkeypatch):
     """Emanation dispatches tool calls and feeds results back."""
     agent = _make_agent(tmp_path, ["file", "daemon"])
+    _reuse_parent_service(monkeypatch, agent)
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
 
@@ -683,9 +905,10 @@ def test_run_emanation_dispatches_tools(tmp_path):
     assert mock_handler.called
 
 
-def test_run_emanation_uses_tool_call_guard_before_dispatch(tmp_path):
+def test_run_emanation_uses_tool_call_guard_before_dispatch(tmp_path, monkeypatch):
     """Daemon tool calls go through ToolExecutor/ToolCallGuard before handler dispatch."""
     agent = _make_agent(tmp_path, ["file", "daemon"])
+    _reuse_parent_service(monkeypatch, agent)
     agent.inbox = queue.Queue()
 
     def deny_read(proposal):
@@ -1104,9 +1327,10 @@ def test_handle_reclaim_cancels_all(tmp_path):
     pool.shutdown.assert_called_once()
 
 
-def test_run_emanation_respects_cancel_mid_loop(tmp_path):
+def test_run_emanation_respects_cancel_mid_loop(tmp_path, monkeypatch):
     """Emanation exits on cancel event between tool-call rounds."""
     agent = _make_agent(tmp_path, ["file", "daemon"])
+    _reuse_parent_service(monkeypatch, agent)
     mgr = agent.get_capability("daemon")
 
     tc = ToolCall(name="read", args={}, id="tc-1")
@@ -1143,9 +1367,10 @@ def test_run_emanation_respects_cancel_mid_loop(tmp_path):
     assert result == "[cancelled]"
 
 
-def test_end_to_end_emanate_list_ask_reclaim(tmp_path):
+def test_end_to_end_emanate_list_ask_reclaim(tmp_path, monkeypatch):
     """Full lifecycle: emanate → list → ask → results arrive → reclaim."""
     agent = _make_agent(tmp_path, ["file", "daemon"])
+    _reuse_parent_service(monkeypatch, agent)
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
 
@@ -1419,9 +1644,10 @@ def test_handle_list_includes_run_id_and_path(tmp_path):
     assert em["path"].endswith(em["run_id"])
 
 
-def test_e2e_emanate_writes_full_fs_artifact(tmp_path):
+def test_e2e_emanate_writes_full_fs_artifact(tmp_path, monkeypatch):
     """Full lifecycle: emanate → tool dispatch → completion → forensic folder."""
     agent = _make_agent(tmp_path, ["file", "daemon"])
+    _reuse_parent_service(monkeypatch, agent)
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
 
@@ -1768,9 +1994,16 @@ def test_emanate_with_preset_passes_through(tmp_path, monkeypatch):
 
 
 def test_emanate_without_preset_inherits_parent(tmp_path, monkeypatch):
-    """Existing behavior: omitting preset means daemon uses parent's
-    currently-active LLM (no new LLMService created)."""
+    """Omitting a preset builds a fresh daemon-scoped service that mirrors the
+    parent's LLM identity; the daemon does not reuse ``agent.service`` and the
+    run carries no ``preset_name``."""
     agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent.service.provider = "anthropic"
+    agent.service.model = "claude-opus-4-8"
+    agent.service._base_url = "https://api.anthropic.com"
+    agent.service._context_window = 200000
+    agent.service._key_resolver = lambda provider: "token"
+    agent.service._provider_defaults = {"anthropic": {"max_rpm": 5}}
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
 
@@ -1781,15 +2014,33 @@ def test_emanate_without_preset_inherits_parent(tmp_path, monkeypatch):
     mock_resp.usage = MagicMock(input_tokens=0, output_tokens=0,
                                 thinking_tokens=0, cached_tokens=0)
     mock_session.send = MagicMock(return_value=mock_resp)
-    agent.service.create_session = MagicMock(return_value=mock_session)
+
+    captured = {}
+
+    class FakeService:
+        def __init__(self, **kwargs):
+            captured["init"] = kwargs
+            self.model = kwargs["model"]
+            self.provider = kwargs["provider"]
+
+        def create_session(self, **kwargs):
+            return mock_session
+
+    import lingtai.llm.service as service_mod
+    monkeypatch.setattr(service_mod, "LLMService", FakeService)
 
     result = mgr.handle({"action": "emanate", "tasks": [
         {"task": "task A", "tools": ["file"]},
     ]})
     assert result["status"] == "dispatched"
-    # Parent's service was used (create_session called on agent.service)
+    # A fresh daemon-scoped service mirroring the parent is built — the parent
+    # service is not reused.
     time.sleep(1.0)
-    assert agent.service.create_session.called
+    agent.service.create_session.assert_not_called()
+    assert captured["init"]["provider"] == "anthropic"
+    assert captured["init"]["model"] == "claude-opus-4-8"
+    assert captured["init"]["base_url"] == "https://api.anthropic.com"
+    assert captured["init"]["provider_defaults"] == {"anthropic": {"max_rpm": 5}}
 
     # daemon.json has no preset_name (None)
     daemons_dir = agent._working_dir / "daemons"
