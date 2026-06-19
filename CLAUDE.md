@@ -13,7 +13,7 @@ For any non-trivial change (anything beyond a single-line typo fix), create a gi
 The convention here is `.worktrees/<slug>/` on a fresh branch off `origin/main`. Examples already on disk include `.worktrees/imap-hardening`, `.worktrees/issue73-preset-confirmation`, `.worktrees/release-0.9.7`. Use the same pattern:
 
 ```bash
-cd ~/Documents/GitHub/lingtai-kernel
+cd ~/Documents/GitHub/lingtai-sdk
 git fetch origin main
 git worktree add -b <branch-slug> .worktrees/<slug> origin/main
 cd .worktrees/<slug>
@@ -27,7 +27,7 @@ git worktree remove .worktrees/<slug>
 git branch -d <branch-slug>     # or -D if abandoned
 ```
 
-**Hard rule:** if you find yourself about to make more than ~10 lines of edits in the main checkout (the one at `~/Documents/GitHub/lingtai-kernel/`), stop and move the work to a worktree first. The 30 seconds spent setting one up are recouped many times over the first time a parallel session resets the branch out from under you.
+**Hard rule:** if you find yourself about to make more than ~10 lines of edits in the main checkout (the one at `~/Documents/GitHub/lingtai-sdk/`), stop and move the work to a worktree first. The 30 seconds spent setting one up are recouped many times over the first time a parallel session resets the branch out from under you.
 
 Single-line fixes, doc tweaks, or commits that are already staged from prior work can stay in the main checkout — the rule is about multi-step editing sessions.
 
