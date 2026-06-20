@@ -1936,10 +1936,13 @@ class BaseAgent:
             f"(b) tolerate these repeated reminders until you update the persistent config and refresh."
         )
         _dismiss_policy = (
-            "Dismiss policy: no notification action — notification(action='dismiss_channel'/"
-            "'dismiss_event'/'dismiss_ref'), including force — can clear or bypass "
-            "large-result reminders; only a successful system(action='summarize') of the "
-            "matching tool_call_id clears the reminder automatically."
+            "Dismiss policy: notification(action='dismiss_event'/'dismiss_ref') "
+            "can acknowledge and clear this reminder as an escape hatch — e.g. for "
+            "stale or pre-molt refs that can no longer be summarized. "
+            "Summarization via system(action='summarize') remains preferred: it "
+            "replaces the context-visible payload with your own summary and "
+            "auto-clears the reminder. Dismissal only clears the notification; "
+            "the original result stays in chat history and events.jsonl."
         )
         if is_spill and spill_path:
             body = (

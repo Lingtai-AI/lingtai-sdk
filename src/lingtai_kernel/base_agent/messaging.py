@@ -368,12 +368,50 @@ def _rescan_large_tool_results(agent) -> int:
         return 0
     entries = getattr(iface, "_entries", [])
 
+    # Load acknowledged large-result ref_ids so we can skip them in this rescan.
+    # These are set when the agent dismisses a large-result reminder as an escape
+    # hatch (instead of summarizing).  Acks are purged when the result is no
+    # longer in live history (summarized or chat compacted away).
+    from ..notifications import (
+        load_large_result_acks,
+        purge_stale_large_result_acks,
+    )
+    workdir = getattr(agent, "_working_dir", None)
+    existing_acks: set[str] = set()
+    if workdir is not None:
+        try:
+            existing_acks = load_large_result_acks(workdir)
+        except Exception:
+            existing_acks = set()
+
     # Total-length gate: suppress until the combined effective length of all
     # pending large-result cases is strictly greater than
     # LARGE_RESULT_TOTAL_LEN_GATE (>50000 chars).  Below that total, stay quiet.
     pending_total = _pending_large_result_total_len(agent)
     if pending_total <= LARGE_RESULT_TOTAL_LEN_GATE:
+        # Even below the gate, purge stale acks for results no longer in history.
+        if workdir is not None and existing_acks:
+            try:
+                # Build live ref_ids from pending large-result cases.
+                live_for_purge: set[str] = set()
+                for _entry in entries:
+                    if _entry.role != "user":
+                        continue
+                    for _block in _entry.content:
+                        eff = _pending_large_result_len(
+                            _block,
+                            getattr(agent, "_summarize_notification_threshold",
+                                    DEFAULT_SUMMARIZE_NOTIFICATION_THRESHOLD)
+                        )
+                        if eff is not None and _block.id:
+                            live_for_purge.add(f"large_tool_result:{_block.id}")
+                purge_stale_large_result_acks(workdir, live_for_purge)
+            except Exception:
+                pass
         return 0
+
+    # Collect live ref_ids to purge stale acks after the scan.
+    live_ref_ids: set[str] = set()
 
     published = 0
     for entry in entries:
@@ -397,6 +435,7 @@ def _rescan_large_tool_results(agent) -> int:
 
             content = block.content
             tool_call_id = block.id or "<unknown>"
+            candidate_ref_id = f"large_tool_result:{tool_call_id}"
 
             # Determine effective length — mirrors _maybe_notify_large_tool_result.
             is_spill = is_spill_manifest(content)
@@ -428,6 +467,15 @@ def _rescan_large_tool_results(agent) -> int:
                     continue
                 spill_path = None
 
+            # Track live ref_ids for ack purge after the scan.
+            live_ref_ids.add(candidate_ref_id)
+
+            # Skip if this ref_id was already acknowledged by a prior dismiss.
+            # The ack means the agent explicitly chose not to be re-notified for
+            # this specific large result (escape hatch for stale/pre-molt refs).
+            if candidate_ref_id in existing_acks:
+                continue
+
             # Build notification body — same templates as _maybe_notify_large_tool_result.
             _threshold_policy = (
                 f"This reminder is batched: it only appears once the combined length of "
@@ -442,10 +490,13 @@ def _rescan_large_tool_results(agent) -> int:
                 f"(b) tolerate these repeated reminders until you update the persistent config and refresh."
             )
             _dismiss_policy = (
-                "Dismiss policy: no notification action — notification(action='dismiss_channel'/"
-                "'dismiss_event'/'dismiss_ref'), including force — can clear or bypass "
-                "large-result reminders; only a successful system(action='summarize') of the "
-                "matching tool_call_id clears the reminder automatically."
+                "Dismiss policy: notification(action='dismiss_event'/'dismiss_ref') "
+                "can acknowledge and clear this reminder as an escape hatch — e.g. for "
+                "stale or pre-molt refs that can no longer be summarized. "
+                "Summarization via system(action='summarize') remains preferred: it "
+                "replaces the context-visible payload with your own summary and "
+                "auto-clears the reminder. Dismissal only clears the notification; "
+                "the original result stays in chat history and events.jsonl."
             )
             if is_spill and spill_path:
                 body = (
@@ -529,6 +580,14 @@ def _rescan_large_tool_results(agent) -> int:
                     tool_call_id=tool_call_id,
                     error=str(exc),
                 )
+
+    # Purge ack entries for ref_ids that are no longer in live history so the
+    # ack store does not grow without bound across summarize/compact cycles.
+    if workdir is not None and existing_acks:
+        try:
+            purge_stale_large_result_acks(workdir, live_ref_ids)
+        except Exception:
+            pass
 
     return published
 

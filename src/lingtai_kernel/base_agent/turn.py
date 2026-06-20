@@ -909,6 +909,9 @@ def _handle_request(agent, msg: Message) -> None:
         logger_fn=agent._log,
         meta_fn=lambda: build_meta(agent),
         working_dir=agent._working_dir,
+        summarize_notification_threshold=getattr(
+            agent, "_summarize_notification_threshold", None
+        ),
     )
     content = agent._pre_request(msg)
     meta = build_meta(agent)
@@ -1004,6 +1007,9 @@ def _handle_tc_wake(agent, msg: Message) -> None:
         logger_fn=agent._log,
         meta_fn=lambda: build_meta(agent),
         working_dir=agent._working_dir,
+        summarize_notification_threshold=getattr(
+            agent, "_summarize_notification_threshold", None
+        ),
     )
 
     # Legacy tc_inbox path — drained items get spliced and driven the

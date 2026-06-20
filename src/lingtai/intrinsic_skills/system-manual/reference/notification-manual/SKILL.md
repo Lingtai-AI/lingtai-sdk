@@ -118,28 +118,60 @@ mirror. `force=true` also bypasses a producer-registered generic-dismiss guard.
 `force` never touches producer-owned state, and (see below) never bypasses the
 large-result reminder guard.
 
-## Undismissable large-result reminders
+## Large-result reminders — dismissal and summarization
 
-System events with `source="large_tool_result"` are **undismissable**. They
-cannot be cleared by any notification action:
-
-- `dismiss_channel` on `system` (with or without `force=true`) is refused;
-- `dismiss_event` matching one is refused;
-- `dismiss_ref` matching one is refused, including with `force=true`.
-
-All return `reason="undismissable_large_result_reminder"`. There is no `force`
-backdoor.
-
-These reminders represent a large tool result that still costs context budget.
-The only way to clear one is to **summarize** the result via the system tool:
+System events with `source="large_tool_result"` remind you that a tool result
+exceeds the large-result threshold and is consuming context budget. The
+**preferred** discharge is summarization:
 
 ```text
 system(action="summarize", items=[{"tool_call_id": "toolu_...", "summary": "..."}])
 ```
 
 A successful summarize of that `tool_call_id` auto-clears the matching
-`large_tool_result:<tool_call_id>` reminder. A failed summarize item leaves its
-reminder in place.
+`large_tool_result:<tool_call_id>` reminder and replaces the context-visible
+payload with your own summary. A failed summarize item leaves its reminder in
+place.
+
+**Dismissal as an escape hatch.** When summarization is not possible — e.g.
+for stale or pre-molt `tool_call_id`s that can no longer be found in the current
+session — you may dismiss the reminder:
+
+```text
+notification(action="dismiss_ref", ref_id="large_tool_result:<tool_call_id>")
+notification(action="dismiss_event", event_id="<event_id>")
+```
+
+A dismiss acknowledges the ref_id so the same old result does not immediately
+re-trigger a reminder on the next rescan. New large results with new
+`tool_call_id`s still produce reminders. The original large result payload
+remains unchanged in chat history and in `events.jsonl`.
+
+Whole-channel system dismiss (`dismiss_channel channel="system"`) that covers
+large-result events also acks them before clearing. Use summarization whenever
+the result is still accessible and relevant; dismissal is for cleanup of stale
+or irrelevant reminders.
+
+### Progressive disclosure — digesting large results
+
+When you receive a large tool result, treat it as requiring an index-style
+digest:
+
+1. **Conclusion** — what the result says in one sentence.
+2. **Key evidence** — the 3-5 most important facts, paths, IDs, or values.
+3. **Validation status** — any errors, warnings, or unexpected findings.
+4. **Risks / caveats** — what to watch out for.
+5. **Next steps** — what to do with this information.
+
+The raw full output remains in `events.jsonl` for fallback. Once digested,
+call `system(action="summarize")` to replace the context-visible copy with your
+summary, then continue your work.
+
+> **Timing note:** `system.summarize` can summarize only already-completed prior
+> tool results — it cannot summarize the current result in the same tool batch
+> before that result exists. On the **next step**, you may run
+> `system(action="summarize")` in parallel with other independent work to digest
+> a prior result.
 
 ## Protected channels
 

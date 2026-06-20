@@ -712,8 +712,8 @@ def test_rescan_spill_body_no_raise_disable_threshold_wording():
 # ---------------------------------------------------------------------------
 
 
-def test_rescan_body_says_dismiss_cannot_bypass():
-    """Rescan body must say cleanup is background hygiene and dismiss cannot bypass it."""
+def test_rescan_body_dismiss_policy_wording():
+    """Rescan body must say cleanup is background hygiene and explain dismiss policy."""
     iface = ChatInterface()
     _add_tool_pair(iface, "tc-dismiss-wording", "bash", "X" * 55_000)  # >50000 alone
     agent = _make_stub_agent(iface)
@@ -727,12 +727,12 @@ def test_rescan_body_says_dismiss_cannot_bypass():
     assert "large-result cleanup is background context hygiene" in body
     assert "handle the human first" in body
     assert "dismiss" in body
-    assert "cannot" in body
     assert "summarize" in body
-    assert "force" in body
+    # New wording: dismiss is allowed as escape hatch, summarize remains preferred.
+    assert "escape hatch" in body or "preferred" in body
 
 
-def test_rescan_spill_body_says_dismiss_cannot_bypass():
+def test_rescan_spill_body_dismiss_policy_wording():
     """Spill rescan body must also carry the background-hygiene/dismiss policy wording."""
     iface = ChatInterface()
     spill = {
@@ -754,5 +754,323 @@ def test_rescan_spill_body_says_dismiss_cannot_bypass():
     assert "large-result cleanup is background context hygiene" in body
     assert "handle the human first" in body
     assert "dismiss" in body
-    assert "cannot" in body
     assert "summarize" in body
+
+
+# ---------------------------------------------------------------------------
+# 14. Ack mechanism: dismissed reminders are not re-created on next rescan
+# ---------------------------------------------------------------------------
+
+
+def test_rescan_skips_acked_ref_id(tmp_path):
+    """After a large-result reminder is acked, rescan no longer re-emits it."""
+    from lingtai_kernel.notifications import ack_large_result_refs
+
+    iface = ChatInterface()
+    _add_tool_pair(iface, "tc-acked", "bash", "X" * 55_000)
+    agent = _make_stub_agent(iface)
+    agent._summarize_notification_threshold = 5000
+    agent._working_dir = tmp_path
+
+    # First rescan — fires.
+    count1 = _rescan_large_tool_results(agent)
+    assert count1 == 1
+
+    # Simulate a dismiss ack.
+    ack_large_result_refs(tmp_path, {"large_tool_result:tc-acked"})
+
+    # Second rescan — same block still present, but acked — must NOT re-publish.
+    agent._published.clear()
+    count2 = _rescan_large_tool_results(agent)
+    assert count2 == 0
+    assert agent._published == []
+
+
+def test_rescan_new_result_still_fires_after_ack(tmp_path):
+    """A new large result with a different tool_call_id fires even if another is acked."""
+    from lingtai_kernel.notifications import ack_large_result_refs
+
+    iface = ChatInterface()
+    _add_tool_pair(iface, "tc-old", "bash", "X" * 55_000)
+    agent = _make_stub_agent(iface)
+    agent._summarize_notification_threshold = 5000
+    agent._working_dir = tmp_path
+
+    # Ack the first result.
+    ack_large_result_refs(tmp_path, {"large_tool_result:tc-old"})
+
+    # Add a new large result with a different id.
+    _add_tool_pair(iface, "tc-new", "bash", "Y" * 10_000)  # combined > 50000
+
+    count = _rescan_large_tool_results(agent)
+    ref_ids = {p["ref_id"] for p in agent._published}
+    # The new one should fire; the acked one should not.
+    assert "large_tool_result:tc-new" in ref_ids
+    assert "large_tool_result:tc-old" not in ref_ids
+
+
+def test_purge_stale_acks_removes_gone_ref_ids(tmp_path):
+    """Acks for ref_ids no longer in live history are purged on rescan."""
+    from lingtai_kernel.notifications import (
+        ack_large_result_refs,
+        load_large_result_acks,
+    )
+
+    iface = ChatInterface()
+    # No large result blocks in history — just a small one.
+    _add_tool_pair(iface, "tc-small", "bash", "x" * 10)
+    agent = _make_stub_agent(iface)
+    agent._summarize_notification_threshold = 5000
+    agent._working_dir = tmp_path
+
+    # Persist stale ack for a ref that no longer exists in live history.
+    ack_large_result_refs(tmp_path, {"large_tool_result:tc-old-gone"})
+    assert "large_tool_result:tc-old-gone" in load_large_result_acks(tmp_path)
+
+    # Rescan with empty live history should purge the stale ack.
+    _rescan_large_tool_results(agent)
+
+    remaining = load_large_result_acks(tmp_path)
+    assert "large_tool_result:tc-old-gone" not in remaining
+
+
+# ---------------------------------------------------------------------------
+# 15. Stale / pre-molt large-result event can be dismissed
+# ---------------------------------------------------------------------------
+
+
+def test_stale_large_result_event_can_be_dismissed(tmp_path):
+    """A persisted large_tool_result event whose tool_call_id no longer exists
+    in the current session can still be dismissed via dismiss_ref (escape hatch)."""
+    import threading
+    from dataclasses import dataclass, field
+    from typing import Any
+    from lingtai_kernel.notifications import (
+        load_large_result_acks,
+        notification_fingerprint,
+        publish,
+    )
+    from lingtai_kernel.intrinsics import notification as notif_intrinsic
+
+    @dataclass
+    class _StubAgent:
+        _working_dir: Path
+        _logs: list = field(default_factory=list)
+        _notification_fp: tuple = ()
+        _pending_notification_meta: str | None = None
+        _pending_notification_fp: tuple | None = None
+        _system_notification_lock: threading.Lock = field(default_factory=threading.Lock)
+
+        def _log(self, event_type: str, **fields: Any) -> None:
+            self._logs.append((event_type, fields))
+
+    agent = _StubAgent(tmp_path)
+
+    stale_ref = "large_tool_result:toolu_pre_molt_xyz"
+    publish(
+        tmp_path,
+        "system",
+        {
+            "header": "1 system notification",
+            "icon": "🔔",
+            "priority": "normal",
+            "published_at": "2026-06-01T00:00:00Z",
+            "data": {
+                "events": [
+                    {
+                        "event_id": "evt_stale",
+                        "source": "large_tool_result",
+                        "ref_id": stale_ref,
+                        "body": "stale reminder from before molt",
+                    }
+                ]
+            },
+        },
+    )
+    agent._notification_fp = notification_fingerprint(tmp_path)
+
+    res = notif_intrinsic.handle(agent, {"action": "dismiss_ref", "ref_id": stale_ref})
+
+    assert res["status"] == "ok"
+    assert stale_ref in res.get("acked_large_result_refs", [])
+
+    acks = load_large_result_acks(tmp_path)
+    assert stale_ref in acks
+    assert not (tmp_path / ".notification" / "system.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# 16. Large-result metadata hint in tool results
+# ---------------------------------------------------------------------------
+
+
+def test_large_result_hint_in_tool_result(tmp_path):
+    """ToolExecutor injects _large_tool_result hint into large dict results."""
+    from lingtai_kernel.tool_executor import ToolExecutor
+    from lingtai_kernel.loop_guard import LoopGuard
+    from lingtai_kernel.llm.interface import ToolResultBlock as _TRB
+    from lingtai_kernel.llm.base import ToolCall as _TC
+
+    def _dispatch(tc):
+        return {"output": "X" * 5000, "status": "ok"}
+
+    def _make_result(tool_name, content, *, tool_call_id=None):
+        return _TRB(id=tool_call_id, name=tool_name, content=content)
+
+    executor = ToolExecutor(
+        dispatch_fn=_dispatch,
+        make_tool_result_fn=_make_result,
+        guard=LoopGuard(),
+        working_dir=tmp_path,
+    )
+
+    tc = _TC(name="bash", args={}, id="tc-hint-001")
+    results, _, _ = executor.execute([tc], on_result_hook=None)
+
+    assert len(results) == 1
+    content = results[0].content
+    assert isinstance(content, dict), "result content should be a dict"
+    assert "_large_tool_result" in content, "large result hint must be present"
+    hint = content["_large_tool_result"]
+    assert hint["tool_call_id"] == "tc-hint-001"
+    assert hint["tool_name"] == "bash"
+    assert hint["result_chars"] > 3000
+    assert hint["threshold_chars"] == 3000
+    assert "system" in hint["summary_hint"]
+    assert "summarize" in hint["summary_hint"]
+    assert "next step" in hint["summary_hint"]
+
+
+def test_no_hint_for_small_result(tmp_path):
+    """ToolExecutor does NOT inject _large_tool_result hint for small results."""
+    from lingtai_kernel.tool_executor import ToolExecutor
+    from lingtai_kernel.loop_guard import LoopGuard
+    from lingtai_kernel.llm.interface import ToolResultBlock as _TRB
+    from lingtai_kernel.llm.base import ToolCall as _TC
+
+    def _dispatch(tc):
+        return {"output": "tiny", "status": "ok"}
+
+    def _make_result(tool_name, content, *, tool_call_id=None):
+        return _TRB(id=tool_call_id, name=tool_name, content=content)
+
+    executor = ToolExecutor(
+        dispatch_fn=_dispatch,
+        make_tool_result_fn=_make_result,
+        guard=LoopGuard(),
+        working_dir=tmp_path,
+    )
+
+    tc = _TC(name="bash", args={}, id="tc-small-001")
+    results, _, _ = executor.execute([tc], on_result_hook=None)
+
+    content = results[0].content
+    assert "_large_tool_result" not in content, "no hint for small results"
+
+
+def test_no_hint_for_string_result(tmp_path):
+    """ToolExecutor does NOT inject hint into string-type tool results."""
+    from lingtai_kernel.tool_executor import ToolExecutor
+    from lingtai_kernel.loop_guard import LoopGuard
+    from lingtai_kernel.llm.interface import ToolResultBlock as _TRB
+    from lingtai_kernel.llm.base import ToolCall as _TC
+
+    def _dispatch(tc):
+        return "X" * 5000  # string result
+
+    def _make_result(tool_name, content, *, tool_call_id=None):
+        return _TRB(id=tool_call_id, name=tool_name, content=content)
+
+    executor = ToolExecutor(
+        dispatch_fn=_dispatch,
+        make_tool_result_fn=_make_result,
+        guard=LoopGuard(),
+        working_dir=tmp_path,
+    )
+
+    tc = _TC(name="bash", args={}, id="tc-str-001")
+    results, _, _ = executor.execute([tc], on_result_hook=None)
+
+    content = results[0].content
+    assert isinstance(content, str), "string result stays a string"
+
+
+# ---------------------------------------------------------------------------
+# 17. ToolExecutor uses configured threshold, not hardcoded default
+# ---------------------------------------------------------------------------
+
+
+def test_hint_uses_custom_threshold(tmp_path):
+    """ToolExecutor uses its configured summarize_notification_threshold for the hint.
+
+    A result of 600 chars should NOT get a hint when threshold=1000,
+    but SHOULD get a hint when threshold=500 (the configured custom value).
+    """
+    from lingtai_kernel.tool_executor import ToolExecutor
+    from lingtai_kernel.loop_guard import LoopGuard
+    from lingtai_kernel.llm.interface import ToolResultBlock as _TRB
+    from lingtai_kernel.llm.base import ToolCall as _TC
+
+    def _dispatch(tc):
+        return {"output": "X" * 600, "status": "ok"}
+
+    def _make_result(tool_name, content, *, tool_call_id=None):
+        return _TRB(id=tool_call_id, name=tool_name, content=content)
+
+    # With default threshold (3000), 600 chars → no hint
+    executor_default = ToolExecutor(
+        dispatch_fn=_dispatch,
+        make_tool_result_fn=_make_result,
+        guard=LoopGuard(),
+        working_dir=tmp_path,
+    )
+    tc = _TC(name="bash", args={}, id="tc-custom-thresh-001")
+    results, _, _ = executor_default.execute([tc])
+    assert "_large_tool_result" not in results[0].content, (
+        "default threshold (3000): 600-char result must NOT get hint"
+    )
+
+    # With custom threshold=500, 600 chars → hint present
+    executor_custom = ToolExecutor(
+        dispatch_fn=_dispatch,
+        make_tool_result_fn=_make_result,
+        guard=LoopGuard(),
+        working_dir=tmp_path,
+        summarize_notification_threshold=500,
+    )
+    tc2 = _TC(name="bash", args={}, id="tc-custom-thresh-002")
+    results2, _, _ = executor_custom.execute([tc2])
+    content2 = results2[0].content
+    assert "_large_tool_result" in content2, (
+        "custom threshold (500): 600-char result MUST get hint"
+    )
+    assert content2["_large_tool_result"]["threshold_chars"] == 500
+
+
+def test_hint_disabled_when_threshold_zero(tmp_path):
+    """ToolExecutor with summarize_notification_threshold=0 never injects hint."""
+    from lingtai_kernel.tool_executor import ToolExecutor
+    from lingtai_kernel.loop_guard import LoopGuard
+    from lingtai_kernel.llm.interface import ToolResultBlock as _TRB
+    from lingtai_kernel.llm.base import ToolCall as _TC
+
+    def _dispatch(tc):
+        return {"output": "X" * 500_000, "status": "ok"}
+
+    def _make_result(tool_name, content, *, tool_call_id=None):
+        return _TRB(id=tool_call_id, name=tool_name, content=content)
+
+    executor = ToolExecutor(
+        dispatch_fn=_dispatch,
+        make_tool_result_fn=_make_result,
+        guard=LoopGuard(),
+        working_dir=tmp_path,
+        summarize_notification_threshold=0,
+    )
+
+    tc = _TC(name="bash", args={}, id="tc-zero-thresh-001")
+    results, _, _ = executor.execute([tc])
+    content = results[0].content
+    assert "_large_tool_result" not in content, (
+        "threshold=0 disables hint entirely, even for very large results"
+    )

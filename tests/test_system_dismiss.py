@@ -463,85 +463,102 @@ def _publish_large_result_reminder(
     )
 
 
-def test_large_result_reminder_not_cleared_by_whole_channel_dismiss(tmp_path: Path) -> None:
-    """Whole-channel system dismiss must refuse when a large-result reminder is present."""
+def test_large_result_reminder_cleared_by_whole_channel_dismiss(tmp_path: Path) -> None:
+    """Whole-channel system dismiss now acks and clears large-result reminders (escape hatch)."""
+    from lingtai_kernel.notifications import load_large_result_acks
+
     agent = _StubAgent(tmp_path)
     _publish_large_result_reminder(tmp_path)
     _mark_delivered(agent)
 
     res = _dismiss_channel(agent, "system")
 
-    assert res["status"] == "error"
-    assert res["reason"] == "undismissable_large_result_reminder"
-    assert "summarize" in res["message"].lower()
-    events = collect_notifications(tmp_path)["system"]["data"]["events"]
-    assert any(ev["source"] == "large_tool_result" for ev in events)
-    assert _events(agent, "notification_dismiss_refused")[0]["reason"] == \
-        "undismissable_large_result_reminder"
+    assert res["status"] == "ok"
+    assert res["cleared"] is True
+    assert "acked_large_result_refs" in res
+    assert "large_tool_result:toolu_big" in res["acked_large_result_refs"]
+    # The ack is persisted.
+    acks = load_large_result_acks(tmp_path)
+    assert "large_tool_result:toolu_big" in acks
+    # Notification file removed (only event was the large-result one).
+    assert "system" not in collect_notifications(tmp_path)
+    # A dismiss log was emitted (not a refusal).
+    assert _events(agent, "large_result_reminder_dismissed")
+    assert _events(agent, "notification_dismiss_refused") == []
 
 
-def test_large_result_reminder_not_cleared_by_force_whole_channel(tmp_path: Path) -> None:
-    """force=true on a whole-channel system dismiss still cannot clear the reminder."""
+def test_large_result_reminder_cleared_by_force_whole_channel(tmp_path: Path) -> None:
+    """force=true on a whole-channel system dismiss also acks large-result reminders."""
+    from lingtai_kernel.notifications import load_large_result_acks
+
     agent = _StubAgent(tmp_path)
     _publish_large_result_reminder(tmp_path)
     _mark_delivered(agent)
 
     res = _dismiss_channel(agent, "system", force=True)
 
-    assert res["status"] == "error"
-    assert res["reason"] == "undismissable_large_result_reminder"
+    assert res["status"] == "ok"
     assert res["forced"] is True
-    assert (tmp_path / ".notification" / "system.json").exists()
-    events = collect_notifications(tmp_path)["system"]["data"]["events"]
-    assert any(ev["source"] == "large_tool_result" for ev in events)
+    acks = load_large_result_acks(tmp_path)
+    assert "large_tool_result:toolu_big" in acks
+    assert "system" not in collect_notifications(tmp_path)
 
 
-def test_large_result_reminder_not_cleared_by_event_id(tmp_path: Path) -> None:
-    """Targeted event_id dismiss of a large-result reminder is refused."""
+def test_large_result_reminder_cleared_by_event_id(tmp_path: Path) -> None:
+    """Targeted event_id dismiss of a large-result reminder now acks and removes it."""
+    from lingtai_kernel.notifications import load_large_result_acks
+
     agent = _StubAgent(tmp_path)
     _publish_large_result_reminder(tmp_path)
     _mark_delivered(agent)
 
     res = _dismiss_event(agent, event_id="evt_lr")
 
-    assert res["status"] == "error"
-    assert res["reason"] == "undismissable_large_result_reminder"
+    assert res["status"] == "ok"
     assert res["event_id"] == "evt_lr"
-    events = collect_notifications(tmp_path)["system"]["data"]["events"]
-    assert any(ev["event_id"] == "evt_lr" for ev in events)
+    assert "acked_large_result_refs" in res
+    acks = load_large_result_acks(tmp_path)
+    assert "large_tool_result:toolu_big" in acks
+    # Notification file removed.
+    assert "system" not in collect_notifications(tmp_path)
 
 
-def test_large_result_reminder_not_cleared_by_ref_id(tmp_path: Path) -> None:
-    """Targeted ref_id dismiss of a large-result reminder is refused."""
+def test_large_result_reminder_cleared_by_ref_id(tmp_path: Path) -> None:
+    """Targeted ref_id dismiss of a large-result reminder now acks and removes it."""
+    from lingtai_kernel.notifications import load_large_result_acks
+
     agent = _StubAgent(tmp_path)
     _publish_large_result_reminder(tmp_path, tool_call_id="toolu_x")
     _mark_delivered(agent)
 
     res = _dismiss_ref(agent, ref_id="large_tool_result:toolu_x")
 
-    assert res["status"] == "error"
-    assert res["reason"] == "undismissable_large_result_reminder"
+    assert res["status"] == "ok"
     assert res["ref_id"] == "large_tool_result:toolu_x"
-    events = collect_notifications(tmp_path)["system"]["data"]["events"]
-    assert any(ev["ref_id"] == "large_tool_result:toolu_x" for ev in events)
+    acks = load_large_result_acks(tmp_path)
+    assert "large_tool_result:toolu_x" in acks
+    assert "system" not in collect_notifications(tmp_path)
 
 
-def test_large_result_reminder_not_cleared_by_force_ref_id(tmp_path: Path) -> None:
-    """force=true on a targeted ref_id dismiss still cannot clear the reminder."""
+def test_large_result_reminder_cleared_by_force_ref_id(tmp_path: Path) -> None:
+    """force=true on a targeted ref_id dismiss also acks the large-result reminder."""
+    from lingtai_kernel.notifications import load_large_result_acks
+
     agent = _StubAgent(tmp_path)
     _publish_large_result_reminder(tmp_path, tool_call_id="toolu_x")
     _mark_delivered(agent)
 
     res = _dismiss_ref(agent, ref_id="large_tool_result:toolu_x", force=True)
 
-    assert res["status"] == "error"
-    assert res["reason"] == "undismissable_large_result_reminder"
-    events = collect_notifications(tmp_path)["system"]["data"]["events"]
-    assert any(ev["ref_id"] == "large_tool_result:toolu_x" for ev in events)
+    assert res["status"] == "ok"
+    acks = load_large_result_acks(tmp_path)
+    assert "large_tool_result:toolu_x" in acks
 
 
-def test_whole_channel_dismiss_with_reminder_preserves_other_events(tmp_path: Path) -> None:
-    """A refused whole-channel dismiss leaves co-resident non-protected events intact too."""
+def test_whole_channel_dismiss_with_large_result_and_other_events(tmp_path: Path) -> None:
+    """Whole-channel dismiss acks large-result events and clears all events in the channel."""
+    from lingtai_kernel.notifications import load_large_result_acks
+
     agent = _StubAgent(tmp_path)
     _publish_large_result_reminder(
         tmp_path,
@@ -551,11 +568,12 @@ def test_whole_channel_dismiss_with_reminder_preserves_other_events(tmp_path: Pa
 
     res = _dismiss_channel(agent, "system")
 
-    assert res["status"] == "error"
-    events = collect_notifications(tmp_path)["system"]["data"]["events"]
-    sources = {ev["source"] for ev in events}
-    assert "large_tool_result" in sources
-    assert "daemon" in sources
+    # Mixed events: large-result acked, whole channel cleared.
+    assert res["status"] == "ok"
+    acks = load_large_result_acks(tmp_path)
+    assert "large_tool_result:toolu_big" in acks
+    # All events cleared from the channel.
+    assert "system" not in collect_notifications(tmp_path)
 
 
 def test_non_protected_system_event_still_dismissible_by_event_id(tmp_path: Path) -> None:

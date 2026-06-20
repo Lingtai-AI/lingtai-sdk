@@ -66,20 +66,25 @@ _GENERIC_DISMISS_GUARDED: dict[str, str] = {}
 # System-notification event sources that must NOT be cleared via dismiss —
 # neither by whole-channel clear (force or not), nor by targeted event_id/ref_id
 # removal.  These reminders represent unfinished work whose only legitimate
-# clear path is the action that actually resolves the work.  Large-result
-# reminders (``large_tool_result``) are dischargeable only by a *successful*
-# system(action="summarize") of the matching tool_call_id, which clears the
-# reminder automatically; force-dismiss cannot bypass them.
-_UNDISMISSABLE_SYSTEM_EVENT_SOURCES: frozenset[str] = frozenset({"large_tool_result"})
+# clear path is the action that actually resolves the work.
+# NOTE: large_tool_result is intentionally absent here since PR #425 — those
+# reminders may now be dismissed/acknowledged as an escape hatch for stale or
+# pre-molt refs that can no longer be summarized.  Summarization remains the
+# preferred discharge; dismissal prevents re-notification loops for the same
+# tool_call_ids.
+_UNDISMISSABLE_SYSTEM_EVENT_SOURCES: frozenset[str] = frozenset()
 
-# Agent-facing explanation returned when a dismiss is refused because it would
-# clear (or include) a protected large-result reminder.
-_LARGE_RESULT_DISMISS_REFUSAL = (
-    "large_tool_result reminders cannot be cleared by dismiss (force, "
-    "event_id, or ref_id). They are discharged only by a successful "
-    "system(action='summarize') of the matching tool_call_id, which clears "
-    "the reminder automatically. Summarize the pending large result(s) "
-    "instead of dismissing the reminder."
+# Acknowledgement file inside .notification/ where dismissed large-result ref_ids
+# are persisted so the rescan does not immediately recreate them.
+_LARGE_RESULT_ACK_FILE = ".notification/large_result_acks.json"
+
+# Agent-facing note included in the dismiss result to explain preferred path.
+_LARGE_RESULT_DISMISS_NOTE = (
+    "large_tool_result reminder acknowledged and removed. "
+    "Summarization via system(action='summarize') remains the preferred way to "
+    "discharge a large result — it replaces the context-visible payload with your "
+    "own summary and auto-clears the reminder. Dismissal only clears the reminder "
+    "surface; the original large result remains in chat history and events.jsonl."
 )
 
 
@@ -89,6 +94,65 @@ def _is_undismissable_system_event(ev: object) -> bool:
         isinstance(ev, dict)
         and ev.get("source") in _UNDISMISSABLE_SYSTEM_EVENT_SOURCES
     )
+
+
+def _is_large_result_event(ev: object) -> bool:
+    """Return True iff *ev* is a large_tool_result system event."""
+    return isinstance(ev, dict) and ev.get("source") == "large_tool_result"
+
+
+def load_large_result_acks(workdir: Path) -> set[str]:
+    """Load acknowledged large-result ref_ids from the ack file.
+
+    Returns an empty set when the file is absent or malformed.
+    """
+    ack_path = workdir / _LARGE_RESULT_ACK_FILE
+    try:
+        data = json.loads(ack_path.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return {r for r in data if isinstance(r, str)}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        pass
+    return set()
+
+
+def save_large_result_acks(workdir: Path, ref_ids: set[str]) -> None:
+    """Persist the acknowledged large-result ref_ids to the ack file atomically.
+
+    When *ref_ids* is empty the file is deleted (idempotent).
+    """
+    ack_path = workdir / _LARGE_RESULT_ACK_FILE
+    if not ref_ids:
+        try:
+            ack_path.unlink()
+        except (FileNotFoundError, OSError):
+            pass
+        return
+    ack_path.parent.mkdir(exist_ok=True)
+    tmp = ack_path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(sorted(ref_ids), ensure_ascii=False), encoding="utf-8")
+    tmp.rename(ack_path)
+
+
+def ack_large_result_refs(workdir: Path, ref_ids: set[str]) -> None:
+    """Add *ref_ids* to the persistent acknowledgement store (union, not replace)."""
+    existing = load_large_result_acks(workdir)
+    save_large_result_acks(workdir, existing | ref_ids)
+
+
+def purge_stale_large_result_acks(workdir: Path, current_ref_ids: set[str]) -> None:
+    """Remove ack entries that are no longer part of the current large-result set.
+
+    Called by the rescan path after it has determined the live set of pending
+    large-result ref_ids so stale acks do not accumulate without bound.
+    Only keeps acks whose ref_id is still in *current_ref_ids*.
+    """
+    existing = load_large_result_acks(workdir)
+    if not existing:
+        return
+    live = existing & current_ref_ids
+    if live != existing:
+        save_large_result_acks(workdir, live)
 
 
 def validate_channel_name(channel: str) -> None:
@@ -262,11 +326,16 @@ def clear_with_result(workdir: Path, channel: str) -> bool:
 def clear_large_result_reminders(agent, tool_call_ids) -> list[str]:
     """Remove large-result reminder events for *tool_call_ids* from system.json.
 
-    This is the summarize-driven discharge path: a *successful*
+    This is the preferred discharge path: a *successful*
     system(action="summarize") of a tool_call_id clears its matching
-    ``large_tool_result`` reminder automatically. It is the only sanctioned
-    way to clear these reminders — generic dismiss refuses them
-    (see :func:`dismiss_channel`).
+    ``large_tool_result`` reminder automatically and replaces the
+    context-visible payload with the agent's own summary.
+
+    Generic notification dismiss (``dismiss_channel``/``dismiss_ref``) can also
+    acknowledge and clear large-result reminder mirrors as an escape hatch —
+    for stale or pre-molt refs that can no longer be summarized.  Dismissal
+    clears the notification surface only; it does not delete or mutate the
+    original tool result in chat history or events.jsonl.
 
     Matches by the canonical ``ref_id`` (``large_tool_result:{tool_call_id}``)
     AND ``source == "large_tool_result"`` so an unrelated event that happens to
@@ -415,57 +484,93 @@ def _stale_channel_refusal(
     }
 
 
-def _undismissable_system_event_refusal(
+def _ack_and_remove_large_result_events(
     agent,
     channel: str,
     *,
     invoked_by: str,
     force: bool,
-    protected: list,
+    large_events: list,
+    all_events: list,
     event_id: str | None,
     ref_id: str | None,
 ) -> dict:
-    """Refuse a dismiss that would clear protected (large-result) reminders.
+    """Acknowledge and remove large-result reminder events from system.json.
 
-    Returned for whole-channel system clears that contain at least one
-    large-result reminder, and for targeted event_id/ref_id dismisses that
-    match one. The only legitimate clear path is a successful summarize.
+    Called when dismiss would clear one or more large_tool_result events.
+    Persists an acknowledgement so the rescan does not immediately recreate
+    the same reminder for the same tool_call_ids. The original large result
+    remains in chat history and events.jsonl unchanged.
     """
-    protected_ref_ids = [
-        ev.get("ref_id")
-        for ev in protected
-        if isinstance(ev, dict) and ev.get("ref_id")
-    ]
+    large_ref_ids: set[str] = set()
+    for ev in large_events:
+        r = ev.get("ref_id") if isinstance(ev, dict) else None
+        if r:
+            large_ref_ids.add(r)
+
+    # Persist the ack so rescan skips these ref_ids until they change.
+    try:
+        ack_and_remove = ack_large_result_refs
+        ack_and_remove(agent._working_dir, large_ref_ids)
+    except Exception:
+        pass
+
+    # Remove the large-result events (and any other matched events) from the list.
+    kept = [ev for ev in all_events if ev not in large_events]
+
+    try:
+        if kept:
+            from datetime import datetime, timezone
+            current_payload: dict = {}
+            try:
+                target = agent._working_dir / ".notification" / "system.json"
+                current_payload = json.loads(target.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+            current_payload["header"] = (
+                f"{len(kept)} system notification"
+                f"{'s' if len(kept) != 1 else ''}"
+            )
+            from datetime import datetime, timezone
+            current_payload["published_at"] = datetime.now(timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
+            data = current_payload.get("data")
+            if not isinstance(data, dict):
+                data = {}
+            data["events"] = kept
+            current_payload["data"] = data
+            publish(agent._working_dir, "system", current_payload)
+        else:
+            clear_with_result(agent._working_dir, "system")
+    except OSError:
+        pass
+
+    if hasattr(agent, "_pending_notification_meta"):
+        agent._pending_notification_meta = None
+    if hasattr(agent, "_pending_notification_fp"):
+        agent._pending_notification_fp = None
+
     try:
         agent._log(
-            "notification_dismiss_refused",
-            reason="undismissable_large_result_reminder",
+            "large_result_reminder_dismissed",
             channel=channel,
             invoked_by=invoked_by,
             forced=bool(force),
+            acked_ref_ids=sorted(large_ref_ids),
             event_id=event_id,
             ref_id=ref_id,
-            protected_ref_ids=protected_ref_ids,
         )
-        if invoked_by == "system":
-            agent._log(
-                "system_dismiss_refused",
-                reason="undismissable_large_result_reminder",
-                channel=channel,
-                forced=bool(force),
-                event_id=event_id,
-                ref_id=ref_id,
-                protected_ref_ids=protected_ref_ids,
-            )
     except Exception:
         pass
+
     result = {
-        "status": "error",
-        "reason": "undismissable_large_result_reminder",
+        "status": "ok",
         "channel": channel,
+        "cleared": True,
         "forced": bool(force),
-        "protected_ref_ids": protected_ref_ids,
-        "message": _LARGE_RESULT_DISMISS_REFUSAL,
+        "acked_large_result_refs": sorted(large_ref_ids),
+        "note": _LARGE_RESULT_DISMISS_NOTE,
     }
     if event_id:
         result["event_id"] = event_id
@@ -619,38 +724,68 @@ def dismiss_channel(
 
         goal_reminder_cleared_by_whole_system_dismiss = False
         if channel == "system":
-            protected_system_events: list = []
+            large_result_events: list = []
+            all_events: list = []
             try:
                 payload = json.loads((agent._working_dir / ".notification" / "system.json").read_text(encoding="utf-8"))
                 data_obj = payload.get("data") if isinstance(payload, dict) else {}
                 events = data_obj.get("events", []) if isinstance(data_obj, dict) else []
-                events = events if isinstance(events, list) else []
-                protected_system_events = [
-                    ev for ev in events if _is_undismissable_system_event(ev)
+                all_events = events if isinstance(events, list) else []
+                large_result_events = [
+                    ev for ev in all_events if _is_large_result_event(ev)
                 ]
                 goal_reminder_cleared_by_whole_system_dismiss = any(
                     isinstance(ev, dict)
                     and ev.get("source") == "goal.reminder"
                     and str(ev.get("ref_id", "")).startswith("goal:")
-                    for ev in events
+                    for ev in all_events
                 )
             except Exception:
-                protected_system_events = []
+                large_result_events = []
+                all_events = []
                 goal_reminder_cleared_by_whole_system_dismiss = False
 
-            # A whole-channel system clear (force or not) must not wipe out
-            # large-result reminders: they are dischargeable only by a
-            # successful summarize. Refuse and point the agent at summarize.
-            if protected_system_events:
-                return _undismissable_system_event_refusal(
-                    agent,
-                    channel,
-                    invoked_by=invoked_by,
-                    force=force,
-                    protected=protected_system_events,
-                    event_id=None,
-                    ref_id=None,
-                )
+            # A whole-channel system clear that includes large-result reminders
+            # acks those reminders and removes them (rather than refusing).  The
+            # remaining non-large-result events are also cleared by the full
+            # channel dismiss below, but we handle the ack path here so the
+            # rescan does not immediately recreate them.
+            if large_result_events:
+                # Collect all events for the ack-and-remove helper; it removes
+                # only the large-result ones; remaining events follow normal path.
+                non_large = [ev for ev in all_events if not _is_large_result_event(ev)]
+                if not non_large:
+                    # All events were large-result: ack-and-remove handles everything.
+                    return _ack_and_remove_large_result_events(
+                        agent, channel,
+                        invoked_by=invoked_by, force=force,
+                        large_events=large_result_events, all_events=all_events,
+                        event_id=None, ref_id=None,
+                    )
+                # Mixed: ack large-result ones silently then continue to clear the whole channel.
+                try:
+                    ack_large_result_refs(
+                        agent._working_dir,
+                        {ev.get("ref_id") for ev in large_result_events if isinstance(ev, dict) and ev.get("ref_id")},
+                    )
+                    try:
+                        agent._log(
+                            "large_result_reminder_dismissed",
+                            channel=channel,
+                            invoked_by=invoked_by,
+                            forced=bool(force),
+                            acked_ref_ids=sorted(
+                                ev.get("ref_id") for ev in large_result_events
+                                if isinstance(ev, dict) and ev.get("ref_id")
+                            ),
+                            event_id=None,
+                            ref_id=None,
+                        )
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+                # Fall through to clear the full channel (all events, including large-result).
 
         try:
             existed = clear_with_result(agent._working_dir, channel)
@@ -770,20 +905,15 @@ def dismiss_channel(
         kept = [ev for ev in events if not _match(ev)]
         removed = len(removed_events)
 
-        # Targeted event_id/ref_id dismiss must not remove a large-result
-        # reminder either: it is dischargeable only by a successful summarize.
-        protected_matched = [
-            ev for ev in removed_events if _is_undismissable_system_event(ev)
-        ]
-        if protected_matched:
-            return _undismissable_system_event_refusal(
-                agent,
-                channel,
-                invoked_by=invoked_by,
-                force=force,
-                protected=protected_matched,
-                event_id=event_id,
-                ref_id=ref_id,
+        # Targeted event_id/ref_id dismiss that matches large-result reminders:
+        # ack them and proceed with removal instead of refusing.
+        large_matched = [ev for ev in removed_events if _is_large_result_event(ev)]
+        if large_matched:
+            return _ack_and_remove_large_result_events(
+                agent, channel,
+                invoked_by=invoked_by, force=force,
+                large_events=large_matched, all_events=events,
+                event_id=event_id, ref_id=ref_id,
             )
 
         if removed == 0:

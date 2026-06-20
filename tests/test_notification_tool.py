@@ -349,18 +349,23 @@ def test_dismiss_ref_missing_ref_id(tmp_path: Path) -> None:
 
 
 def test_large_result_guard_dismiss_channel(tmp_path: Path) -> None:
+    """large_tool_result reminders can now be dismissed as an escape hatch."""
     agent = _StubAgent(tmp_path)
     _publish_large_result_reminder(tmp_path)
     _mark_delivered(agent)
 
     res = notif_intrinsic.handle(agent, {"action": "dismiss_channel", "channel": "system"})
 
-    assert res["status"] == "error"
-    assert res["reason"] == "undismissable_large_result_reminder"
-    assert (tmp_path / ".notification" / "system.json").exists()
+    assert res["status"] == "ok"
+    assert "acked_large_result_refs" in res
+    # The event is removed from the channel.
+    notifs = collect_notifications(tmp_path)
+    events = notifs.get("system", {}).get("data", {}).get("events", [])
+    assert not any(ev["source"] == "large_tool_result" for ev in events)
 
 
 def test_large_result_guard_dismiss_channel_force(tmp_path: Path) -> None:
+    """large_tool_result reminders can be dismissed with force — same result."""
     agent = _StubAgent(tmp_path)
     _publish_large_result_reminder(tmp_path)
     _mark_delivered(agent)
@@ -369,16 +374,16 @@ def test_large_result_guard_dismiss_channel_force(tmp_path: Path) -> None:
         agent, {"action": "dismiss_channel", "channel": "system", "force": True}
     )
 
-    assert res["status"] == "error"
-    assert res["reason"] == "undismissable_large_result_reminder"
-    assert res["forced"] is True
-    events = collect_notifications(tmp_path)["system"]["data"]["events"]
-    assert any(ev["source"] == "large_tool_result" for ev in events)
+    assert res["status"] == "ok"
+    assert "acked_large_result_refs" in res
+    notifs = collect_notifications(tmp_path)
+    events = notifs.get("system", {}).get("data", {}).get("events", [])
+    assert not any(ev["source"] == "large_tool_result" for ev in events)
 
 
 def test_large_result_guard_every_atomic_action(tmp_path: Path) -> None:
-    """No atomic action — channel/event/ref, with or without force — can clear
-    a large_tool_result reminder. force is not a backdoor."""
+    """All atomic actions — channel/event/ref, with or without force — now succeed
+    for large_tool_result reminders (escape hatch behaviour from issue #425)."""
     cases = [
         {"action": "dismiss_channel", "channel": "system"},
         {"action": "dismiss_channel", "channel": "system", "force": True},
@@ -392,10 +397,11 @@ def test_large_result_guard_every_atomic_action(tmp_path: Path) -> None:
         _publish_large_result_reminder(agent._working_dir)
         _mark_delivered(agent)
         res = notif_intrinsic.handle(agent, kwargs)
-        assert res["status"] == "error", kwargs
-        assert res["reason"] == "undismissable_large_result_reminder", kwargs
-        events = collect_notifications(agent._working_dir)["system"]["data"]["events"]
-        assert any(ev["source"] == "large_tool_result" for ev in events), kwargs
+        assert res["status"] == "ok", (kwargs, res)
+        assert "acked_large_result_refs" in res, (kwargs, res)
+        notifs = collect_notifications(agent._working_dir)
+        events = notifs.get("system", {}).get("data", {}).get("events", [])
+        assert not any(ev["source"] == "large_tool_result" for ev in events), kwargs
 
 
 # ---------------------------------------------------------------------------

@@ -34,6 +34,23 @@ def _resolve_max_result_chars(value: int) -> int:
     return value if type(value) is int and 0 < value <= _DEFAULT_MAX_RESULT_CHARS else _DEFAULT_MAX_RESULT_CHARS
 
 
+def _resolve_hint_threshold(value: int | None) -> int:
+    """Resolve the large-result hint threshold from an optional caller-supplied value.
+
+    ``None`` → default (``DEFAULT_SUMMARIZE_NOTIFICATION_THRESHOLD`` from messaging).
+    ``<= 0`` → 0, meaning the hint is disabled.
+    Non-int or invalid → fall back conservatively to the default.
+    """
+    from .base_agent.messaging import DEFAULT_SUMMARIZE_NOTIFICATION_THRESHOLD
+    if value is None:
+        return DEFAULT_SUMMARIZE_NOTIFICATION_THRESHOLD
+    if not (type(value) is int):
+        return DEFAULT_SUMMARIZE_NOTIFICATION_THRESHOLD
+    if value <= 0:
+        return 0
+    return value
+
+
 class ToolExecutor:
     """Executes tool calls sequentially or in parallel."""
 
@@ -50,6 +67,7 @@ class ToolExecutor:
         working_dir: Path | str | None = None,
         max_result_chars: int = _DEFAULT_MAX_RESULT_CHARS,
         tool_call_guard: ToolCallGuard | None = None,
+        summarize_notification_threshold: int | None = None,
     ) -> None:
         self._dispatch_fn = dispatch_fn
         self._make_tool_result_fn = make_tool_result_fn
@@ -63,6 +81,9 @@ class ToolExecutor:
         self._max_result_chars = _resolve_max_result_chars(max_result_chars)
         self._tool_call_guard = tool_call_guard or ToolCallGuard()
         self._current_api_call_id: str | None = None
+        self._summarize_notification_threshold = _resolve_hint_threshold(
+            summarize_notification_threshold
+        )
 
     def _tool_trace_id(self, tc: ToolCall) -> str:
         """Return the stable trace id for one top-level tool-call execution.
@@ -282,6 +303,75 @@ class ToolExecutor:
             result.update(self._guard.progress_metadata())
         return result
 
+    def _attach_large_result_hint(
+        self,
+        result: Any,
+        *,
+        tool_name: str,
+        tool_call_id: str | None,
+    ) -> Any:
+        """Inject ``_large_tool_result`` metadata hint when a result exceeds the threshold.
+
+        The hint surfaces inline with the result so the model can act on it
+        immediately — digest the result, then call system(action="summarize")
+        on the next step. Only injected for dict-shaped results that exceed the
+        notification threshold.  String results and non-dict payloads are left
+        unchanged to avoid mutating non-kernel-owned schemas.
+
+        Excluded: daemon_tool_result relays, already-summarized blocks, spill
+        manifests (they have their own hint via the spill path).  The hint key
+        is reserved (``_large_tool_result``) and will not collide with normal
+        tool output.
+        """
+        if not isinstance(result, dict):
+            return result
+        if tool_name == "daemon_tool_result":
+            return result
+        # Skip if hint already present (idempotent).
+        if "_large_tool_result" in result:
+            return result
+
+        threshold = self._summarize_notification_threshold
+        if threshold <= 0:
+            return result
+
+        from .tool_result_artifacts import is_spill_manifest
+        from .intrinsics.system.summarize import _is_already_summarized
+
+        if _is_already_summarized(result):
+            return result
+        if is_spill_manifest(result):
+            return result
+
+        import json as _json
+        try:
+            serialized = _json.dumps(result, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            return result
+        result_chars = len(serialized)
+
+        if result_chars <= threshold:
+            return result
+
+        tcid = tool_call_id or "<unknown>"
+        result["_large_tool_result"] = {
+            "tool_call_id": tcid,
+            "tool_name": tool_name,
+            "result_chars": result_chars,
+            "threshold_chars": threshold,
+            "summary_hint": (
+                f"This result ({result_chars} chars) exceeds the large-result threshold "
+                f"({threshold} chars). Digest it, then on the next step you may run "
+                f"system(action=\"summarize\", items=[{{\"tool_call_id\": \"{tcid}\", "
+                f"\"summary\": \"<your summary>\"}}]) in parallel with other independent "
+                f"work to replace the context-visible payload with your own summary. "
+                f"system.summarize can only summarize already-completed prior tool results; "
+                f"it cannot summarize the current result in the same tool batch before that "
+                f"result exists. The full original remains in events.jsonl by tool_call_id."
+            ),
+        }
+        return result
+
     @staticmethod
     def _append_advisory(result: Any, advisory: dict[str, Any] | None) -> Any:
         if not isinstance(result, dict) or not advisory:
@@ -446,6 +536,7 @@ class ToolExecutor:
         and bypass ``ToolExecutor``.
         """
         self._attach_tool_call_progress(result)
+        self._attach_large_result_hint(result, tool_name=tool_name, tool_call_id=tool_call_id)
         capped = _spill_oversized_result(
             result,
             max_chars=self._max_result_chars,

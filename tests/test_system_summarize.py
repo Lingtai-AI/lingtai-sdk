@@ -1052,7 +1052,8 @@ def test_large_result_notification_batch_digest_wording(tmp_path):
 
 
 def test_large_result_notification_body_says_dismiss_cannot_bypass(tmp_path):
-    """Plain large-result notification must say dismiss cannot clear it; summarize does."""
+    """Plain large-result notification must mention dismiss and summarize.
+    Summarize is the preferred discharge; dismiss is now an escape hatch."""
     agent = _make_base_agent_for_notification(tmp_path)
     agent._summarize_notification_threshold = 100
     _stock_pending_large_results(agent, 1, size=51_000)
@@ -1067,9 +1068,8 @@ def test_large_result_notification_body_says_dismiss_cannot_bypass(tmp_path):
     body = published[0]["body"].lower()
     assert "dismiss" in body
     assert "summarize" in body
-    # Must convey that summarize clears and dismiss/force cannot bypass.
-    assert "cannot" in body and "dismiss" in body
-    assert "force" in body
+    # Must convey that summarize is the preferred discharge (escape-hatch language).
+    assert "escape hatch" in body or "preferred" in body
 
 
 def test_large_result_spill_notification_body_says_dismiss_cannot_bypass(tmp_path):
@@ -1412,9 +1412,9 @@ def test_summarize_clear_is_noop_when_no_reminder_present(tmp_path):
 
 
 def test_summarize_then_dismiss_is_unnecessary_end_to_end(tmp_path):
-    """End-to-end: notification dismiss is refused, but system summarize clears
-    the reminder. Dismissal lives on the notification tool now; summarize stays
-    on the system tool."""
+    """End-to-end: notification dismiss now succeeds as an escape hatch (issue #425),
+    and system summarize also clears the reminder. Dismissal is an alternative
+    to summarize, not blocked. Summarize stays on the system tool."""
     from lingtai_kernel.intrinsics import notification as notif_intrinsic
     from lingtai_kernel.notifications import collect_notifications, notification_fingerprint
 
@@ -1424,15 +1424,17 @@ def test_summarize_then_dismiss_is_unnecessary_end_to_end(tmp_path):
     _publish_large_result_event(agent._working_dir, "toolu_big")
     agent._notification_fp = notification_fingerprint(agent._working_dir)
 
-    # Dismiss is refused — through the notification tool, with force.
+    # Dismiss now succeeds — large_tool_result reminders are dismissable as escape hatch.
     dismissed = notif_intrinsic.handle(
         agent, {"action": "dismiss_channel", "channel": "system", "force": True}
     )
-    assert dismissed["status"] == "error"
-    assert dismissed["reason"] == "undismissable_large_result_reminder"
-    assert "system" in collect_notifications(agent._working_dir)
+    assert dismissed["status"] == "ok"
+    assert "acked_large_result_refs" in dismissed
+    assert "system" not in collect_notifications(agent._working_dir)
 
-    # Summarize clears it.
+    # Re-publish the reminder and show summarize also clears it.
+    _publish_large_result_event(agent._working_dir, "toolu_big")
+    agent._notification_fp = notification_fingerprint(agent._working_dir)
     result = _summarize(agent, {
         "action": "summarize",
         "items": [{"tool_call_id": "toolu_big", "summary": "digest"}],

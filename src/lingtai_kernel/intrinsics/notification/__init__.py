@@ -28,12 +28,13 @@ Actions:
 All three dismiss verbs delegate to the single canonical
 :func:`lingtai_kernel.notifications.dismiss_channel` with
 ``invoked_by="notification"``.  The decision logic (allowlist, ``post-molt``
-ack-reason, protected channels, generic-dismiss guard, stale-channel-version
-refusal, and the #424 ``large_tool_result`` undismissable guard) lives there,
-so every guard holds through this tool by construction.  ``force`` is not a
-backdoor: ``large_tool_result`` reminders cannot be cleared by any atomic
-action — their only sanctioned discharge is a *successful*
-``system(action="summarize")`` of the matching ``tool_call_id``.
+ack-reason, protected channels, generic-dismiss guard, and stale-channel-version
+refusal) lives there, so every guard holds through this tool by construction.
+``large_tool_result`` reminders may be dismissed as an escape hatch (e.g. for
+stale or pre-molt refs that can no longer be summarized); doing so acknowledges
+the ref_id so the rescan does not immediately recreate the same notification.
+Summarization via ``system(action="summarize")`` remains the preferred discharge
+and auto-clears the matching reminder.
 """
 from __future__ import annotations
 
