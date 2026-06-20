@@ -115,7 +115,7 @@ def _codex_session_id(anchor: str) -> str:
 #
 # There is no one-shot "temporary id then revert" concept. Once rotated, the new
 # current id stays in force.
-_CODEX_CACHE_AFFINITY_ROTATE_QUEUE_LEN = 8
+_CODEX_CACHE_AFFINITY_ROTATE_QUEUE_LEN = 10
 
 # Codex cache-key request header. Every ordinary Codex API request whose
 # effective prompt key exists carries a Codex-specific, unambiguous cache-key

@@ -191,7 +191,7 @@ def test_header_tracks_prompt_key_after_stalled_cache_rotate():
     clock = lambda: EPOCH0 + 500  # noqa: E731
     start_id = _codex_affinity_id(ANCHOR, EPOCH0)
     session = CodexResponsesSession(
-        client=FakeClient([_completed(7) for _ in range(9)]),
+        client=FakeClient([_completed(7) for _ in range(11)]),
         model="gpt-5.5",
         instructions="system prompt",
         tools=None,
@@ -204,16 +204,16 @@ def test_header_tracks_prompt_key_after_stalled_cache_rotate():
         time_fn=clock,
     )
 
-    for _ in range(9):
+    for _ in range(11):
         session.send("hi")
 
     rotated = _codex_affinity_id(ANCHOR, EPOCH0 + 500)
     assert rotated != start_id
-    # The first eight requests carry the start-id prefix.
-    for sent in session._client.responses.kwargs[:8]:
+    # The first ten requests carry the start-id prefix.
+    for sent in session._client.responses.kwargs[:10]:
         assert _headers(sent)[HEADER] == start_id[:3]
-    # The ninth (post-rotate) request carries the rotated-id prefix.
-    assert _headers(session._client.responses.kwargs[8])[HEADER] == rotated[:3]
+    # The eleventh (post-rotate) request carries the rotated-id prefix.
+    assert _headers(session._client.responses.kwargs[10])[HEADER] == rotated[:3]
 
 
 # ---------------------------------------------------------------------------
