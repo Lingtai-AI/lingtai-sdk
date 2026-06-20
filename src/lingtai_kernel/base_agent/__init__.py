@@ -475,9 +475,9 @@ class BaseAgent:
         # tool result's serialized length exceeds this value, a system-channel
         # notification is published reminding the agent to use
         # system(action="summarize") after digesting the result.
-        # Default: 5000 chars (per Jason's final policy refinement in #340).
-        # Agents may adjust at runtime by writing to this attribute directly.
-        self._summarize_notification_threshold: int = 5000
+        # Default: 3000 chars.  Configurable only via manifest.summarize_notification_threshold
+        # in init.json + refresh — runtime mutation is not supported.
+        self._summarize_notification_threshold: int = 3000
 
         # Lifecycle
         self._shutdown = threading.Event()
@@ -1775,7 +1775,7 @@ class BaseAgent:
         import json as _json
         from ..tool_result_artifacts import is_spill_manifest
 
-        threshold = getattr(self, "_summarize_notification_threshold", 5000)
+        threshold = getattr(self, "_summarize_notification_threshold", 3000)
         if threshold <= 0:
             return
 
@@ -1847,6 +1847,14 @@ class BaseAgent:
             except Exception:
                 pass
 
+        _threshold_policy = (
+            f"The threshold ({threshold} chars) is set via manifest.summarize_notification_threshold "
+            f"in init.json and takes effect after system(action='refresh'). "
+            f"It cannot be changed temporarily at runtime. "
+            f"If you intentionally keep large results visible, you must either: "
+            f"(a) summarize/digest all pending large-result cases in one deliberate batch, or "
+            f"(b) tolerate these repeated reminders until you update the persistent config and refresh."
+        )
         if is_spill and spill_path:
             body = (
                 f"[large tool result — spilled] tool_name={tool_name!r} tool_call_id={tool_call_id}\n"
@@ -1856,8 +1864,10 @@ class BaseAgent:
                 f"Read the sidecar file to access the full content, then call:\n"
                 f"  system(action=\"summarize\", items=[{{\"tool_call_id\": \"{tool_call_id}\", \"summary\": \"<your summary>\"}}])\n"
                 f"to replace the context-visible spill manifest with your own summary.\n"
-                f"Treat this notification as a prompt to act, not just FYI: if the result still matters, digest it now and summarize before continuing deep work.\n"
-                f"If you intentionally need the large payload to remain visible for a while, raise or disable the threshold explicitly and restore it later; otherwise the reminder will return until the result is summarized.\n"
+                f"Treat this notification as a prompt to act, not just FYI: if the result still matters, "
+                f"digest it now and summarize all pending large-result cases in one deliberate batch "
+                f"before continuing deep work; otherwise the reminder will return until the result is summarized.\n"
+                f"{_threshold_policy}\n"
                 f"The full original remains in the sidecar file and in events.jsonl by tool_call_id."
             )
         elif is_spill:
@@ -1870,8 +1880,10 @@ class BaseAgent:
                 f"After reading the sidecar, call:\n"
                 f"  system(action=\"summarize\", items=[{{\"tool_call_id\": \"{tool_call_id}\", \"summary\": \"<your summary>\"}}])\n"
                 f"to replace the context-visible spill manifest with your own summary.\n"
-                f"Treat this notification as a prompt to act, not just FYI: if the result still matters, digest it now and summarize before continuing deep work.\n"
-                f"If you intentionally need the large payload to remain visible for a while, raise or disable the threshold explicitly and restore it later; otherwise the reminder will return until the result is summarized."
+                f"Treat this notification as a prompt to act, not just FYI: if the result still matters, "
+                f"digest it now and summarize all pending large-result cases in one deliberate batch "
+                f"before continuing deep work; otherwise the reminder will return until the result is summarized.\n"
+                f"{_threshold_policy}"
             )
         else:
             body = (
@@ -1879,11 +1891,13 @@ class BaseAgent:
                 f"Result length: {result_len} chars "
                 f"(current summarize notification threshold: {threshold} chars).\n"
                 f"Preview (first 200 chars): {preview_text!r}\n\n"
-                f"After you have digested this result, you may call:\n"
+                f"After you have digested this result, call:\n"
                 f"  system(action=\"summarize\", items=[{{\"tool_call_id\": \"{tool_call_id}\", \"summary\": \"<your summary>\"}}])\n"
                 f"to replace the context-visible payload with your own summary.\n"
-                f"Treat this notification as a prompt to act, not just FYI: if the result still matters, digest it now and summarize before continuing deep work.\n"
-                f"If you intentionally need the large payload to remain visible for a while, raise or disable the threshold explicitly and restore it later; otherwise the reminder will return until the result is summarized.\n"
+                f"Treat this notification as a prompt to act, not just FYI: if the result still matters, "
+                f"digest it now and summarize all pending large-result cases in one deliberate batch "
+                f"before continuing deep work; otherwise the reminder will return until the result is summarized.\n"
+                f"{_threshold_policy}\n"
                 f"The full original remains retrievable from events.jsonl by tool_call_id."
             )
 

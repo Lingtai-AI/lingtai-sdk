@@ -67,11 +67,6 @@ def get_schema(lang: str = "en") -> dict:
                     "required": ["tool_call_id", "summary"],
                 },
             },
-            "notification_threshold_chars": {
-                "type": "integer",
-                "description": t(lang, "system_tool.notification_threshold_chars_description"),
-                "minimum": 0,
-            },
         },
         "required": ["action"],
     }

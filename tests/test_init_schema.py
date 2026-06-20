@@ -91,6 +91,26 @@ def test_wrong_type_manifest_field():
         validate_init(data)
 
 
+def test_summarize_notification_threshold_rejects_negative():
+    data = _valid_init()
+    data["manifest"]["summarize_notification_threshold"] = -1
+    with pytest.raises(ValueError, match="summarize_notification_threshold"):
+        validate_init(data)
+
+
+def test_summarize_notification_threshold_rejects_bool():
+    data = _valid_init()
+    data["manifest"]["summarize_notification_threshold"] = True
+    with pytest.raises(ValueError, match="summarize_notification_threshold"):
+        validate_init(data)
+
+
+def test_summarize_notification_threshold_allows_zero():
+    data = _valid_init()
+    data["manifest"]["summarize_notification_threshold"] = 0
+    validate_init(data)  # 0 intentionally disables large-result notifications.
+
+
 def test_wrong_type_capabilities():
     data = _valid_init()
     data["manifest"]["capabilities"] = ["file", "bash"]

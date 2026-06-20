@@ -1209,6 +1209,14 @@ class Agent(BaseAgent):
         self._soul_delay = max(1.0, self._config.soul_delay)
         self._session._config = self._config
 
+        # Reload large-result notification threshold from init.json.
+        # Default 3000; 0 disables notifications entirely.
+        raw_threshold = m.get("summarize_notification_threshold")
+        if isinstance(raw_threshold, int) and not isinstance(raw_threshold, bool) and raw_threshold >= 0:
+            self._summarize_notification_threshold = raw_threshold
+        else:
+            self._summarize_notification_threshold = 3000
+
         # Reload all prompt sections (covenant, character, principle,
         # procedures, brief, rules, pad, comment) from init.json and disk.
         self._reload_prompt_sections(data)

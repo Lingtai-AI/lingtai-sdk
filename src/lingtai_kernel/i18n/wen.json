@@ -81,5 +81,5 @@
   "system_tool.event_id_description": "配 action='dismiss' 且 channel='system' 可选：只清匹配之 system notification event_id，非清尽 system.json。",
   "system_tool.ref_id_description": "配 action='dismiss' 且 channel='system' 可选：清具此生产者 ref_id 之 system notification events（如 goal:<id>）。",
   "system_tool.items_description": "action='summarize' 必需。待摘之条目列表，每条含 'tool_call_id'（历史工具结果之 id）与 'summary'（器灵自撰摘要）。支持一次处理多条。原文不删，仍可于 events.jsonl 中循 tool_call_id 检索。",
-  "system_tool.notification_threshold_chars_description": "配 action='summarize' 可选。调大型结果通知阈值（字符数）。工具结果超此值则系统发通知，提醒用 system(action='summarize')。设 0 则禁通知。默认 5000。此非上下文容量上限，亦非摘要目标——仅控提醒何时触。可与 'items' 合用，亦可独用。"
+  "system_tool.notification_threshold_chars_description": "已移——大型结果通知阈值不再支持运行时改。须于 init.json 之 manifest.summarize_notification_threshold 配置（默认 3000），经 system(action='refresh') 后生效。向 system(action='summarize') 传此字段将返错误。"
 }

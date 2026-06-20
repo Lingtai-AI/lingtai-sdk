@@ -69,61 +69,39 @@ def _summarize(agent, args: dict) -> dict:
           "items": [
             {"tool_call_id": "toolu_...", "summary": "Agent-authored text ..."},
             ...
-          ],
-          "notification_threshold_chars": 20000  # optional — adjust threshold
+          ]
         }
 
-    ``notification_threshold_chars`` is optional.  When present it must be a
-    non-negative integer; 0 disables notifications entirely.  It may be combined
-    with ``items`` or used alone (with an empty / absent items list) just to
-    adjust the threshold.
-
     Returns a dict with per-item results (``"items"`` list), aggregate counts
-    (``"summarized"``, ``"failed"``), and the current threshold after any
-    adjustment (``"notification_threshold_chars"``).
+    (``"summarized"``, ``"failed"``), and the current threshold
+    (``"notification_threshold_chars"``).
+
+    Note: ``notification_threshold_chars`` is NOT accepted at runtime.  The
+    threshold is set exclusively via ``manifest.summarize_notification_threshold``
+    in init.json and takes effect after a refresh.  Passing this field returns
+    an error so callers discover the policy change loudly.
     """
-    # --- Adjust notification threshold if requested ---
-    notification_threshold_chars = args.get("notification_threshold_chars")
-    threshold_error: str | None = None
-    if notification_threshold_chars is not None:
-        if not isinstance(notification_threshold_chars, int) or isinstance(notification_threshold_chars, bool):
-            threshold_error = (
-                f"notification_threshold_chars must be a non-negative integer, "
-                f"got {notification_threshold_chars!r}."
-            )
-        elif notification_threshold_chars < 0:
-            threshold_error = (
-                f"notification_threshold_chars must be >= 0 (0 = disabled), "
-                f"got {notification_threshold_chars!r}."
-            )
-        else:
-            agent._summarize_notification_threshold = notification_threshold_chars
+    current_threshold = getattr(agent, "_summarize_notification_threshold", 3000)
 
-    current_threshold = getattr(agent, "_summarize_notification_threshold", 5000)
-
-    if threshold_error:
+    # --- Reject runtime threshold mutation ---
+    if args.get("notification_threshold_chars") is not None:
         return {
             "status": "error",
-            "reason": "invalid_notification_threshold",
-            "message": threshold_error,
+            "reason": "runtime_threshold_change_not_supported",
+            "message": (
+                "The summarize notification threshold cannot be changed at runtime. "
+                "It is configured via manifest.summarize_notification_threshold in "
+                "init.json and takes effect after system(action='refresh'). "
+                "To handle pending large-result notifications without changing the "
+                "threshold: summarize/digest all pending large-result cases in one "
+                "deliberate batch using system(action='summarize', items=[...]), or "
+                "tolerate the repeated reminders until you update the persistent "
+                "config and refresh."
+            ),
             "notification_threshold_chars": current_threshold,
         }
 
     items_arg = args.get("items")
-
-    # Threshold-only call (no items or empty items) is valid.
-    if notification_threshold_chars is not None and (not items_arg):
-        return {
-            "status": "ok",
-            "summarized": 0,
-            "failed": 0,
-            "items": [],
-            "notification_threshold_chars": current_threshold,
-            "message": (
-                f"Notification threshold updated to {current_threshold} chars. "
-                f"No items to summarize."
-            ),
-        }
 
     if not isinstance(items_arg, list) or len(items_arg) == 0:
         return {

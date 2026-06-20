@@ -555,3 +555,61 @@ def test_process_response_rescans_after_tool_loop_continuation_round():
     agent._session.send.assert_called_once_with([tool_result])
     agent._sync_notifications.assert_called()
     agent._rescan_large_tool_results.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# 12. Rescan body wording: no raise/disable threshold; batch-digest guidance
+# ---------------------------------------------------------------------------
+
+
+def test_rescan_body_no_raise_disable_threshold_wording():
+    """Rescan notification body must NOT instruct agents to raise or disable the threshold."""
+    iface = ChatInterface()
+    _add_tool_pair(iface, "tc-wording", "bash", "X" * 6000)
+    agent = _make_stub_agent(iface)
+    agent._summarize_notification_threshold = 5000
+
+    _rescan_large_tool_results(agent)
+    assert len(agent._published) == 1
+    body = agent._published[0]["body"]
+    assert "raise or disable the threshold" not in body, (
+        "rescan body must not say 'raise or disable the threshold'"
+    )
+
+
+def test_rescan_body_batch_digest_or_tolerate_wording():
+    """Rescan notification body must mention batch-digest all pending or tolerate reminders."""
+    iface = ChatInterface()
+    _add_tool_pair(iface, "tc-batch", "bash", "Y" * 6000)
+    agent = _make_stub_agent(iface)
+    agent._summarize_notification_threshold = 5000
+
+    _rescan_large_tool_results(agent)
+    assert len(agent._published) == 1
+    body = agent._published[0]["body"]
+    # Must mention config/init as the only way to change threshold
+    assert "init" in body.lower() or "config" in body.lower() or "refresh" in body.lower(), (
+        "rescan body must mention init/config/refresh as the only way to change threshold"
+    )
+
+
+def test_rescan_spill_body_no_raise_disable_threshold_wording():
+    """Spill rescan notification body must NOT instruct agents to raise or disable threshold."""
+    iface = ChatInterface()
+    spill = {
+        "artifact": ARTIFACT_MARKER,
+        "status": "spilled",
+        "spill_path": "tmp/tool-results/wording-test.txt",
+        "cap_chars": 100_000,
+        "original_char_count": 50_000,
+    }
+    _add_tool_pair(iface, "tc-spill-wording", "bash", spill)
+    agent = _make_stub_agent(iface)
+    agent._summarize_notification_threshold = 5000
+
+    _rescan_large_tool_results(agent)
+    assert len(agent._published) == 1
+    body = agent._published[0]["body"]
+    assert "raise or disable the threshold" not in body, (
+        "spill rescan body must not say 'raise or disable the threshold'"
+    )

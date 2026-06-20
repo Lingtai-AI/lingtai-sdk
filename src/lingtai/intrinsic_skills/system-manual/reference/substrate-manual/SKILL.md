@@ -114,9 +114,15 @@ Use after digesting a large tool result to replace the context-visible copy
 with your own agent-authored summary, while preserving the full original in
 `logs/events.jsonl` for later retrieval.
 
-**Why:** large tool results accumulate in context and consume token budget.
-Once you have extracted the key facts, replacing the raw payload with a short
-summary frees context without losing forensic access to the original.
+**Why:** `summarize` is a consumption step, not deletion. Treat a large
+result like raw intake: read it, understand it, then convert it into the actual
+input your future reasoning needs. The context-visible copy becomes your
+agent-authored understanding, while the exact original remains available in
+`logs/events.jsonl` for audit or re-reading.
+
+Large tool results accumulate in context and consume token budget. Once you have
+extracted the key facts, replacing the raw payload with a short summary frees
+context without losing forensic access to the original.
 
 **When to use:**
 - After reading a large command output, file listing, or API response that
@@ -150,23 +156,39 @@ understanding at the time of summarization and may be incomplete or inaccurate.
 If you need the exact original later, retrieve it from events.jsonl.
 
 **Large-result notifications:** When a main-agent tool result exceeds the
-configurable summarize notification threshold (default: 5,000 chars), the
-kernel publishes a system-channel notification showing the result's id,
-length, a 200-char preview, and the current active threshold. For spill
-manifests (results too large for the context window), the notification uses
-the original content size and includes the sidecar file path. This is a
-reminder only — you are not required to summarize immediately.
+summarize notification threshold (default: 3,000 chars), the kernel publishes
+a system-channel notification showing the result's id, length, a 200-char
+preview, and the current active threshold. For spill manifests (results too
+large for the context window), the notification uses the original content size
+and includes the sidecar file path. This is a reminder — but treat it as a
+prompt to act, not just FYI.
 
-**Adjusting the threshold at runtime:**
+**When you receive a large-result notification:**
+
+Summarize/digest all pending large-result cases in **one deliberate batch**
+before continuing deep work — do not dismiss or ignore one at a time, as
+that causes recursive notification noise. Prefer piggybacking this batch onto
+the next `system` call you already need to make, instead of creating repeated
+"summarize-only" calls whose large tool results produce more reminders:
 
 ```json
-system(action="summarize", notification_threshold_chars=20000)
+system(action="summarize", items=[
+  {"tool_call_id": "toolu_abc123", "summary": "..."},
+  {"tool_call_id": "toolu_def456", "summary": "..."}
+])
 ```
 
-Pass `notification_threshold_chars` with (or without) `items` to update the
-threshold for this session. `0` disables notifications entirely. The current
-threshold is always returned in the `notification_threshold_chars` field of
-every summarize response.
+If you intentionally keep large results visible, you **cannot** temporarily
+raise or disable the threshold. Your only options are:
+- Summarize/digest all pending large-result cases in one batch (above), or
+- Tolerate the repeated reminders until you update persistent config and refresh.
+
+**Configuring the threshold (persistent, config-only):**
+
+The threshold is set via `manifest.summarize_notification_threshold` in
+`init.json`. Change it there and call `system(action="refresh")` to apply.
+`0` disables notifications entirely. Passing `notification_threshold_chars`
+to `system(action="summarize")` at runtime returns an error.
 
 ### Sleep, lull, interrupt, suspend, CPR, clear, nirvana
 

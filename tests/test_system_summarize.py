@@ -393,9 +393,9 @@ def _make_base_agent_for_notification(tmp_path):
 
 
 def test_large_result_notification_default_threshold(tmp_path):
-    """Default threshold must be 5000."""
+    """Default threshold must be 3000."""
     agent = _make_base_agent_for_notification(tmp_path)
-    assert agent._summarize_notification_threshold == 5000
+    assert agent._summarize_notification_threshold == 3000
 
 
 def test_large_result_notification_fires_above_threshold(tmp_path):
@@ -431,7 +431,7 @@ def test_large_result_notification_threshold_in_text(tmp_path):
     body = published[0]["body"]
     assert "7500" in body, f"threshold 7500 not found in notification body:\n{body}"
     assert "Treat this notification as a prompt to act, not just FYI" in body
-    assert "digest it now and summarize before continuing deep work" in body
+    assert "summarize all pending large-result cases in one deliberate batch" in body
     assert "otherwise the reminder will return until the result is summarized" in body
 
 
@@ -479,7 +479,7 @@ def test_large_result_notification_spill_manifest_original_over_threshold(tmp_pa
     body = published[0]["body"]
     assert "spill" in body.lower() or "sidecar" in body.lower()
     assert "Treat this notification as a prompt to act, not just FYI" in body
-    assert "digest it now and summarize before continuing deep work" in body
+    assert "summarize all pending large-result cases in one deliberate batch" in body
     assert "otherwise the reminder will return until the result is summarized" in body
 
 
@@ -704,7 +704,7 @@ def test_large_result_notification_spill_manifest_over_threshold(tmp_path):
     body = published[0]["body"]
     assert "spill" in body.lower() or "sidecar" in body.lower()
     assert "Treat this notification as a prompt to act, not just FYI" in body
-    assert "digest it now and summarize before continuing deep work" in body
+    assert "summarize all pending large-result cases in one deliberate batch" in body
     assert "otherwise the reminder will return until the result is summarized" in body
     assert "toolu_spill_001" in body
     assert "60000" in body or "60,000" in body or "5000" in body
@@ -781,103 +781,58 @@ def test_large_result_notification_excludes_daemon_tool_result(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Fix #5: dynamic notification threshold via summarize
+# Policy: notification_threshold_chars is config-only, not runtime-mutable
 # ---------------------------------------------------------------------------
 
 
-def test_summarize_notification_threshold_update(tmp_path):
-    """notification_threshold_chars in summarize args must update the agent attribute."""
+def test_summarize_runtime_threshold_change_rejected(tmp_path):
+    """Passing notification_threshold_chars at runtime must return an error.
+
+    The threshold is config-only (init.json + refresh). Runtime mutation is
+    no longer supported so agents discover the policy change loudly.
+    """
     from lingtai_kernel.intrinsics.system.summarize import _summarize
 
     agent = _make_base_agent_for_notification(tmp_path)
-    assert agent._summarize_notification_threshold == 5000
+    original_threshold = agent._summarize_notification_threshold
 
     result = _summarize(agent, {
         "action": "summarize",
         "notification_threshold_chars": 20000,
     })
 
-    assert result["status"] == "ok"
-    assert result["notification_threshold_chars"] == 20000
-    assert agent._summarize_notification_threshold == 20000
+    assert result["status"] == "error"
+    assert result["reason"] == "runtime_threshold_change_not_supported"
+    # Threshold must NOT have been updated
+    assert agent._summarize_notification_threshold == original_threshold
 
 
-def test_summarize_notification_threshold_zero_disables(tmp_path):
-    """notification_threshold_chars=0 must disable notifications."""
+def test_summarize_runtime_threshold_zero_rejected(tmp_path):
+    """Passing notification_threshold_chars=0 at runtime must also be rejected."""
     from lingtai_kernel.intrinsics.system.summarize import _summarize
 
     agent = _make_base_agent_for_notification(tmp_path)
+    original_threshold = agent._summarize_notification_threshold
 
     result = _summarize(agent, {
         "action": "summarize",
         "notification_threshold_chars": 0,
     })
 
-    assert result["status"] == "ok"
-    assert result["notification_threshold_chars"] == 0
-    assert agent._summarize_notification_threshold == 0
-
-
-def test_summarize_notification_threshold_invalid(tmp_path):
-    """Non-integer notification_threshold_chars must return error."""
-    from lingtai_kernel.intrinsics.system.summarize import _summarize
-
-    agent = _make_base_agent_for_notification(tmp_path)
-
-    result = _summarize(agent, {
-        "action": "summarize",
-        "notification_threshold_chars": "not-a-number",
-    })
-
     assert result["status"] == "error"
-    assert result["reason"] == "invalid_notification_threshold"
-    # Threshold must NOT have been updated
-    assert agent._summarize_notification_threshold == 5000
+    assert result["reason"] == "runtime_threshold_change_not_supported"
+    assert agent._summarize_notification_threshold == original_threshold
 
 
-def test_summarize_notification_threshold_negative(tmp_path):
-    """Negative notification_threshold_chars must return error."""
-    from lingtai_kernel.intrinsics.system.summarize import _summarize
-
-    agent = _make_base_agent_for_notification(tmp_path)
-
-    result = _summarize(agent, {
-        "action": "summarize",
-        "notification_threshold_chars": -1,
-    })
-
-    assert result["status"] == "error"
-    assert result["reason"] == "invalid_notification_threshold"
-    assert agent._summarize_notification_threshold == 5000
-
-
-def test_summarize_threshold_only_no_items(tmp_path):
-    """Threshold-only call with no items is valid and returns ok with no item results."""
-    from lingtai_kernel.intrinsics.system.summarize import _summarize
-
-    agent = _make_base_agent_for_notification(tmp_path)
-
-    result = _summarize(agent, {
-        "action": "summarize",
-        "notification_threshold_chars": 10000,
-    })
-
-    assert result["status"] == "ok"
-    assert result["summarized"] == 0
-    assert result["failed"] == 0
-    assert result["items"] == []
-    assert result["notification_threshold_chars"] == 10000
-    assert agent._summarize_notification_threshold == 10000
-
-
-def test_summarize_threshold_combined_with_items(tmp_path):
-    """Threshold adjustment combined with item summarization works together."""
+def test_summarize_runtime_threshold_with_items_rejected(tmp_path):
+    """notification_threshold_chars combined with items is also rejected."""
     from lingtai_kernel.intrinsics.system.summarize import _summarize
 
     iface = ChatInterface()
     _add_tool_pair(iface, "tc-combo", "bash", "X" * 500)
     agent = _make_base_agent_for_notification(tmp_path)
     agent._chat = type("C", (), {"interface": iface})()
+    original_threshold = agent._summarize_notification_threshold
 
     result = _summarize(agent, {
         "action": "summarize",
@@ -885,10 +840,10 @@ def test_summarize_threshold_combined_with_items(tmp_path):
         "items": [{"tool_call_id": "tc-combo", "summary": "combined summary"}],
     })
 
-    assert result["status"] == "ok"
-    assert result["summarized"] == 1
-    assert result["notification_threshold_chars"] == 8000
-    assert agent._summarize_notification_threshold == 8000
+    # Entire call must be rejected; items must NOT be summarized
+    assert result["status"] == "error"
+    assert result["reason"] == "runtime_threshold_change_not_supported"
+    assert agent._summarize_notification_threshold == original_threshold
 
 
 def test_summarize_result_always_contains_threshold(tmp_path):
@@ -910,3 +865,192 @@ def test_summarize_result_always_contains_threshold(tmp_path):
         "items": [{"tool_call_id": "tc-ok", "summary": "s"}],
     })
     assert "notification_threshold_chars" in result
+
+
+def test_schema_does_not_include_notification_threshold_chars():
+    """notification_threshold_chars must NOT appear in the system tool schema."""
+    from lingtai_kernel.intrinsics.system.schema import get_schema
+    schema = get_schema("en")
+    assert "notification_threshold_chars" not in schema["properties"], (
+        "notification_threshold_chars must be removed from the schema — "
+        "threshold is config-only (init.json + refresh), not runtime-mutable"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Notification wording: no "raise/disable threshold" instruction
+# ---------------------------------------------------------------------------
+
+
+def test_large_result_notification_no_raise_disable_wording(tmp_path):
+    """Notification body must NOT instruct agents to raise or disable the threshold."""
+    agent = _make_base_agent_for_notification(tmp_path)
+    agent._summarize_notification_threshold = 100
+
+    published = []
+    agent._enqueue_system_notification = MagicMock(
+        side_effect=lambda **kw: published.append(kw)
+    )
+
+    agent._maybe_notify_large_tool_result("bash", "X" * 200)
+    assert len(published) == 1
+    body = published[0]["body"]
+    assert "raise or disable the threshold" not in body, (
+        "notification body must not instruct agents to raise/disable threshold at runtime"
+    )
+    assert "raise" not in body.lower() or "threshold" not in body.lower(), (
+        "notification body must not say 'raise ... threshold'"
+    )
+
+
+def test_large_result_notification_batch_digest_wording(tmp_path):
+    """Notification body must mention batch-digest all pending cases or tolerate reminders."""
+    agent = _make_base_agent_for_notification(tmp_path)
+    agent._summarize_notification_threshold = 100
+
+    published = []
+    agent._enqueue_system_notification = MagicMock(
+        side_effect=lambda **kw: published.append(kw)
+    )
+
+    agent._maybe_notify_large_tool_result("bash", "X" * 200)
+    assert len(published) == 1
+    body = published[0]["body"]
+    # Must mention config/init path as only way to change threshold
+    assert "init" in body.lower() or "config" in body.lower() or "refresh" in body.lower(), (
+        "notification body must mention init/config/refresh as the only way to change threshold"
+    )
+    # Must mention batch-digesting or tolerating reminders
+    assert "batch" in body.lower() or "all pending" in body.lower() or "tolerate" in body.lower(), (
+        "notification body must mention batch-digest or tolerate-reminders guidance"
+    )
+
+
+def test_large_result_notification_spill_no_raise_disable_wording(tmp_path):
+    """Spill notification body must NOT instruct agents to raise or disable threshold."""
+    from lingtai_kernel.tool_result_artifacts import ARTIFACT_MARKER
+
+    agent = _make_base_agent_for_notification(tmp_path)
+    agent._summarize_notification_threshold = 100
+
+    published = []
+    agent._enqueue_system_notification = MagicMock(
+        side_effect=lambda **kw: published.append(kw)
+    )
+
+    spill = {
+        "artifact": ARTIFACT_MARKER,
+        "status": "spilled",
+        "spill_path": "tmp/tool-results/foo.txt",
+        "cap_chars": 100,
+        "original_char_count": 50000,
+    }
+    agent._maybe_notify_large_tool_result("bash", spill)
+    assert len(published) == 1
+    body = published[0]["body"]
+    assert "raise or disable the threshold" not in body, (
+        "spill notification body must not instruct agents to raise/disable threshold"
+    )
+
+
+# ---------------------------------------------------------------------------
+# init.json config path for threshold
+# ---------------------------------------------------------------------------
+
+
+def test_base_agent_threshold_init_from_config(tmp_path):
+    """Agent applies summarize_notification_threshold from init.json manifest data.
+
+    Tests the logic that _setup_from_init uses to load the field, without
+    constructing a full LLM adapter. We directly simulate the manifest dict
+    that _setup_from_init receives from _read_init().
+    """
+    from lingtai_kernel.base_agent import BaseAgent
+    from unittest.mock import MagicMock
+
+    svc = MagicMock()
+    svc.get_adapter.return_value = MagicMock()
+    svc.provider = "gemini"
+    svc.model = "gemini-test"
+
+    agent = BaseAgent(service=svc, agent_name="cfg-test", working_dir=tmp_path / "ag")
+    assert agent._summarize_notification_threshold == 3000  # default
+
+    # Simulate what _setup_from_init does after reading manifest
+    manifest = {
+        "llm": {"provider": "gemini", "model": "gemini-test"},
+        "summarize_notification_threshold": 1500,
+    }
+    raw_threshold = manifest.get("summarize_notification_threshold")
+    if isinstance(raw_threshold, int) and not isinstance(raw_threshold, bool) and raw_threshold >= 0:
+        agent._summarize_notification_threshold = raw_threshold
+    else:
+        agent._summarize_notification_threshold = 3000
+
+    assert agent._summarize_notification_threshold == 1500, (
+        f"Expected threshold=1500 from manifest, got {agent._summarize_notification_threshold}"
+    )
+
+
+def test_base_agent_threshold_config_accepts_zero(tmp_path):
+    """summarize_notification_threshold=0 in manifest disables notifications."""
+    from lingtai_kernel.base_agent import BaseAgent
+    from unittest.mock import MagicMock
+
+    svc = MagicMock()
+    svc.get_adapter.return_value = MagicMock()
+    svc.provider = "gemini"
+    svc.model = "gemini-test"
+
+    agent = BaseAgent(service=svc, agent_name="cfg-zero", working_dir=tmp_path / "ag")
+
+    manifest = {
+        "llm": {"provider": "gemini", "model": "gemini-test"},
+        "summarize_notification_threshold": 0,
+    }
+    raw_threshold = manifest.get("summarize_notification_threshold")
+    if isinstance(raw_threshold, int) and not isinstance(raw_threshold, bool) and raw_threshold >= 0:
+        agent._summarize_notification_threshold = raw_threshold
+    else:
+        agent._summarize_notification_threshold = 3000
+
+    assert agent._summarize_notification_threshold == 0
+
+
+def test_base_agent_threshold_config_rejects_bool(tmp_path):
+    """bool values for summarize_notification_threshold fall back to default 3000."""
+    from lingtai_kernel.base_agent import BaseAgent
+    from unittest.mock import MagicMock
+
+    svc = MagicMock()
+    svc.get_adapter.return_value = MagicMock()
+    svc.provider = "gemini"
+    svc.model = "gemini-test"
+
+    agent = BaseAgent(service=svc, agent_name="cfg-bool", working_dir=tmp_path / "ag")
+
+    manifest = {
+        "llm": {"provider": "gemini", "model": "gemini-test"},
+        "summarize_notification_threshold": True,  # bool should be rejected
+    }
+    raw_threshold = manifest.get("summarize_notification_threshold")
+    if isinstance(raw_threshold, int) and not isinstance(raw_threshold, bool) and raw_threshold >= 0:
+        agent._summarize_notification_threshold = raw_threshold
+    else:
+        agent._summarize_notification_threshold = 3000
+
+    assert agent._summarize_notification_threshold == 3000
+
+
+def test_base_agent_threshold_default_when_not_in_config(tmp_path):
+    """BaseAgent uses default 3000 when init.json has no summarize_notification_threshold."""
+    from lingtai_kernel.base_agent import BaseAgent
+    from unittest.mock import MagicMock
+
+    svc = MagicMock()
+    svc.get_adapter.return_value = MagicMock()
+    svc.provider = "gemini"
+    svc.model = "gemini-test"
+
+    agent = BaseAgent(service=svc, agent_name="default-test", working_dir=tmp_path / "ag")
+    assert agent._summarize_notification_threshold == 3000

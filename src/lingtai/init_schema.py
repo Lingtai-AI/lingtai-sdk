@@ -70,6 +70,11 @@ MANIFEST_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     "timezone_awareness": bool,
     "pseudo_agent_subscriptions": list,
     "preset": dict,
+    # Large-result notification threshold.  When a tool result's serialized
+    # length exceeds this value, a system-channel notification fires.
+    # Default: 3000.  0 disables notifications.  Runtime mutation via the
+    # system tool is not supported — change this field and refresh.
+    "summarize_notification_threshold": int,
 }
 
 MANIFEST_KNOWN: set[str] = set(MANIFEST_REQUIRED) | set(MANIFEST_OPTIONAL)
@@ -216,6 +221,17 @@ def validate_init(data: dict) -> list[str]:
     for key in manifest:
         if key not in MANIFEST_KNOWN:
             warnings.append(f"unknown field: manifest.{key}")
+
+    if "summarize_notification_threshold" in manifest:
+        summarize_threshold = manifest["summarize_notification_threshold"]
+        if isinstance(summarize_threshold, bool):
+            raise ValueError(
+                "manifest.summarize_notification_threshold: expected non-negative int, got bool"
+            )
+        if summarize_threshold < 0:
+            raise ValueError(
+                "manifest.summarize_notification_threshold: expected non-negative int"
+            )
 
     soul = manifest.get("soul")
     if soul is not None:
