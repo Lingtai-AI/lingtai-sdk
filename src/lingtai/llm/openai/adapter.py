@@ -117,6 +117,21 @@ def _codex_session_id(anchor: str) -> str:
 # current id stays in force.
 _CODEX_CACHE_AFFINITY_ROTATE_QUEUE_LEN = 8
 
+# Codex cache-key request header. Every ordinary Codex API request whose
+# effective prompt key exists carries a Codex-specific, unambiguous cache-key
+# header:
+#
+#     codex-cache-key: xyz
+#
+# where ``xyz`` is the first ``_CODEX_CACHE_KEY_HEADER_LEN`` characters of the
+# current prompt key (the request-body ``prompt_cache_key``). This ties the
+# backend prompt cache to the prompt key: when the prompt key changes, the
+# header changes and the old prompt cache breaks. There is no threshold / streak
+# / after-N-hits gating — the header is used on every request whenever a prompt
+# key exists.
+_CODEX_CACHE_KEY_HEADER = "codex-cache-key"
+_CODEX_CACHE_KEY_HEADER_LEN = 3
+
 
 def _codex_affinity_id(anchor: str, epoch_seconds: float) -> str:
     """Derive the epoch-stamped Codex *current* affinity id.
@@ -1695,6 +1710,18 @@ class CodexResponsesSession(OpenAIResponsesSession):
             headers["thread-id"] = self._thread_id
         return headers
 
+    def _cache_key_header(self, cache_key: str | None) -> dict[str, str]:
+        """Return the Codex-specific cache-key header for ``cache_key``, if any.
+
+        The header value is the first ``_CODEX_CACHE_KEY_HEADER_LEN`` characters
+        of the current prompt key. It is ALWAYS sent on ordinary Codex requests
+        whenever a prompt key exists (no threshold / streak / after-N-hits
+        gating). An empty/absent prompt key promotes no header.
+        """
+        if not cache_key:
+            return {}
+        return {_CODEX_CACHE_KEY_HEADER: cache_key[:_CODEX_CACHE_KEY_HEADER_LEN]}
+
     def _effective_affinity(self) -> tuple[str | None, dict[str, str]]:
         """Resolve this request's effective (prompt_cache_key, headers) pair.
 
@@ -1877,10 +1904,17 @@ class CodexResponsesSession(OpenAIResponsesSession):
                 kwargs["prompt_cache_key"] = effective_cache_key
             # REST cache-affinity headers (issue #378). Sent as HTTP headers via
             # the SDK's per-request ``extra_headers``, never as request-body
-            # fields. Omitted entirely when neither id is set.
-            if affinity_headers:
+            # fields. ``session-id`` / ``thread-id`` route the per-agent cache slot;
+            # ``codex-cache-key`` is a Codex-specific cache breaker derived from
+            # the current prompt key and sent on every request whenever a prompt
+            # key exists (no threshold / streak / after-N-hits gating).
+            extra_headers = {
+                **affinity_headers,
+                **self._cache_key_header(effective_cache_key),
+            }
+            if extra_headers:
                 kwargs["extra_headers"] = {
-                    **affinity_headers,
+                    **extra_headers,
                     **kwargs.get("extra_headers", {}),
                 }
             acc = StreamingAccumulator()

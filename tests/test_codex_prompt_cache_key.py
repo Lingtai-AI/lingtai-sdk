@@ -160,7 +160,13 @@ def test_lone_prompt_cache_key_stays_body_only_no_headers():
 
     sent = session._client.responses.kwargs[0]
     assert sent["prompt_cache_key"] == "custom-key:v2"
-    assert "extra_headers" not in sent
+    # The carve-out is about the per-agent slot routers: no session-id / thread-id.
+    headers = sent.get("extra_headers") or {}
+    assert "session-id" not in headers
+    assert "thread-id" not in headers
+    # The Codex-specific cache-key header still rides on every request with a
+    # prompt key, but it does not route a shared per-agent slot.
+    assert headers.get("codex-cache-key") == "cus"
 
 
 def test_responses_session_omits_cache_key_when_unset():
