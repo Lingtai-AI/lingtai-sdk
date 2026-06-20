@@ -16,7 +16,7 @@
 [![License](https://img.shields.io/github/license/Lingtai-AI/lingtai-kernel?color=%237dab8f)](LICENSE)
 [![Blog](https://img.shields.io/badge/blog-lingtai.ai-%23d4a853)](https://lingtai.ai)
 
-[lingtai.ai](https://lingtai.ai)
+[lingtai.ai](https://lingtai.ai) · [简体中文](docs/readmes/README.zh.md) · [文言](docs/readmes/README.wen.md)
 
 </div>
 
@@ -132,7 +132,7 @@ Read the full manifesto at [lingtai.ai](https://lingtai.ai).
 
 ## Acknowledgements
 
-See [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md).
+See [docs/references/acknowledgements.md](docs/references/acknowledgements.md).
 
 ## License
 

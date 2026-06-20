@@ -1,6 +1,6 @@
 # lingtai-kernel 灵台内核
 
-> [English](README.md) | [中文](README.zh.md) | [文言](README.wen.md)
+> [English](../../README.md) | [中文](README.zh.md) | [文言](README.wen.md)
 
 > *灵台者有持，而不知其所持，而不可持者也。*
 > — 庄子·庚桑楚
@@ -18,7 +18,7 @@
 - **一切皆文件。** 智能体的身份就是其目录路径。没有抽象 ID——路径即地址、即锁、即真实。
 - **内核只定义协议，不定义实现。** `LLMService` 和 `ChatSession` 是抽象接口。如何实现——适配器、API 密钥、速率限制——是调用者的事。
 - **每个智能体都是独立进程。** 独立的目录、独立的 LLM 服务、独立的信箱、独立的日志。智能体之间通过文件系统信件通信，而非共享内存。
-- **内核是最小的。** 思考（LLM）、通信（信件）、手记（手记）、承载工具。能力、文件读写、编排——这些在 [lingtai](https://github.com/user/lingtai) 中。
+- **内核是最小的。** 思考（LLM）、通信（信件）、手记（手记）、承载工具。能力、文件读写、编排——这些在 [lingtai](https://github.com/Lingtai-AI/lingtai) 中。
 
 ## 安装
 
@@ -82,4 +82,4 @@ agent.stop()
 
 ## 许可
 
-MIT
+Apache-2.0

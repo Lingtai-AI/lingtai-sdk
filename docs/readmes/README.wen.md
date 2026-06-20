@@ -1,6 +1,6 @@
 # 灵台内核
 
-> [English](README.md) | [中文](README.zh.md) | [文言](README.wen.md)
+> [English](../../README.md) | [中文](README.zh.md) | [文言](README.wen.md)
 
 > *灵台者有持，而不知其所持，而不可持者也。*
 > — 庄子·庚桑楚
@@ -18,7 +18,7 @@
 - **万物皆文卷。** 器灵之身份即其目录路径。无抽象之号——路径即地址、即锁、即真。
 - **内核定规矩，不定实现。** `LLMService` 与 `ChatSession` 皆抽象之约。何以实现——适配之器、密钥、流量之限——皆调用者之事。
 - **一灵一进程。** 独立之目录、独立之语言服务、独立之书信、独立之日志。器灵之间以文件系统传书通信，非共享内存。
-- **内核至简。** 思（LLM）、通（传书）、简（手简）、承器。能力、文卷读写、编排——皆在 [lingtai](https://github.com/user/lingtai) 中。
+- **内核至简。** 思（LLM）、通（传书）、简（手简）、承器。能力、文卷读写、编排——皆在 [lingtai](https://github.com/Lingtai-AI/lingtai) 中。
 
 ## 安装
 
@@ -82,4 +82,4 @@ agent.stop()
 
 ## 许可
 
-MIT
+Apache-2.0
