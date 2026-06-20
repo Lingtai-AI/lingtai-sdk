@@ -24,10 +24,6 @@ class TestT:
         result = t("wen", "system.current_time", time="2026-03-19T00:00:00Z", ctx="CTX")
         assert "2026-03-19T00:00:00Z" in result
 
-    def test_wen_template(self):
-        result = t("wen", "system.current_time", time="2026-03-19T00:00:00Z", ctx="CTX")
-        assert "此时" in result
-
     def test_unknown_lang_falls_back_to_en(self):
         result = t("xx", "system.current_time", time="now", ctx="CTX")
         assert "now" in result
@@ -42,31 +38,61 @@ class TestContextBreakdownKeys:
         result = t("en", "system.context_breakdown", pct="7.1%", sys=4720, ctx=9450)
         assert result == "7.1% (sys 4720 + ctx 9450)"
 
-    def test_context_breakdown_zh(self):
-        result = t("zh", "system.context_breakdown", pct="7.1%", sys=4720, ctx=9450)
-        assert result == "7.1% (系统 4720 + 对话 9450)"
-
-    def test_context_breakdown_wen(self):
-        result = t("wen", "system.context_breakdown", pct="7.1%", sys=4720, ctx=9450)
-        assert result == "7.1% (系统 4720 + 对话 9450)"
-
     def test_context_unknown_en(self):
         assert t("en", "system.context_unknown") == "unavailable"
-
-    def test_context_unknown_zh(self):
-        assert t("zh", "system.context_unknown") == "未知"
-
-    def test_context_unknown_wen(self):
-        assert t("wen", "system.context_unknown") == "未知"
 
     def test_current_time_en_extended(self):
         result = t("en", "system.current_time", time="T", ctx="CTX")
         assert result == "[Current time: T | context: CTX]"
 
-    def test_current_time_zh_extended(self):
-        result = t("zh", "system.current_time", time="T", ctx="CTX")
-        assert result == "[此时：T | 上下文：CTX]"
 
-    def test_current_time_wen_extended(self):
-        result = t("wen", "system.current_time", time="T", ctx="CTX")
-        assert result == "[此时：T | 上下文：CTX]"
+class TestFallbackToEnglish:
+    """Tool-schema / operating-instruction keys fall back to English."""
+
+    def test_zh_falls_back_for_notification_tool(self):
+        result = t("zh", "notification_tool.action_description")
+        assert result == t("en", "notification_tool.action_description")
+
+    def test_wen_falls_back_for_notification_tool(self):
+        result = t("wen", "notification_tool.action_description")
+        assert result == t("en", "notification_tool.action_description")
+
+    def test_zh_falls_back_for_system_tool(self):
+        result = t("zh", "system_tool.action_description")
+        assert result == t("en", "system_tool.action_description")
+
+    def test_wen_falls_back_for_system_tool(self):
+        result = t("wen", "system_tool.action_description")
+        assert result == t("en", "system_tool.action_description")
+
+    def test_zh_falls_back_for_email_schema(self):
+        result = t("zh", "email.description")
+        assert result == t("en", "email.description")
+
+    def test_wen_falls_back_for_email_schema(self):
+        result = t("wen", "email.description")
+        assert result == t("en", "email.description")
+
+    def test_zh_falls_back_for_psyche_schema(self):
+        result = t("zh", "psyche.object_description")
+        assert result == t("en", "psyche.object_description")
+
+    def test_wen_falls_back_for_psyche_schema(self):
+        result = t("wen", "psyche.object_description")
+        assert result == t("en", "psyche.object_description")
+
+    def test_zh_falls_back_for_soul_schema(self):
+        result = t("zh", "soul.action_description")
+        assert result == t("en", "soul.action_description")
+
+    def test_wen_falls_back_for_soul_schema(self):
+        result = t("wen", "soul.action_description")
+        assert result == t("en", "soul.action_description")
+
+    def test_zh_falls_back_for_tool_reasoning_schema(self):
+        result = t("zh", "tool.reasoning_description")
+        assert result == t("en", "tool.reasoning_description")
+
+    def test_wen_falls_back_for_tool_reasoning_schema(self):
+        result = t("wen", "tool.reasoning_description")
+        assert result == t("en", "tool.reasoning_description")
