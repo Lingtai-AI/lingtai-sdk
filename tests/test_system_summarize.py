@@ -430,6 +430,9 @@ def test_large_result_notification_threshold_in_text(tmp_path):
     assert len(published) == 1
     body = published[0]["body"]
     assert "7500" in body, f"threshold 7500 not found in notification body:\n{body}"
+    assert "Treat this notification as a prompt to act, not just FYI" in body
+    assert "digest it now and summarize before continuing deep work" in body
+    assert "otherwise the reminder will return until the result is summarized" in body
 
 
 def test_large_result_notification_not_fired_below_threshold(tmp_path):
@@ -475,6 +478,9 @@ def test_large_result_notification_spill_manifest_original_over_threshold(tmp_pa
     )
     body = published[0]["body"]
     assert "spill" in body.lower() or "sidecar" in body.lower()
+    assert "Treat this notification as a prompt to act, not just FYI" in body
+    assert "digest it now and summarize before continuing deep work" in body
+    assert "otherwise the reminder will return until the result is summarized" in body
 
 
 def test_large_result_notification_source_field(tmp_path):
@@ -697,6 +703,9 @@ def test_large_result_notification_spill_manifest_over_threshold(tmp_path):
     assert len(published) == 1
     body = published[0]["body"]
     assert "spill" in body.lower() or "sidecar" in body.lower()
+    assert "Treat this notification as a prompt to act, not just FYI" in body
+    assert "digest it now and summarize before continuing deep work" in body
+    assert "otherwise the reminder will return until the result is summarized" in body
     assert "toolu_spill_001" in body
     assert "60000" in body or "60,000" in body or "5000" in body
 

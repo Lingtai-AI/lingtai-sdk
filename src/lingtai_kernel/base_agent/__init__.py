@@ -1856,6 +1856,8 @@ class BaseAgent:
                 f"Read the sidecar file to access the full content, then call:\n"
                 f"  system(action=\"summarize\", items=[{{\"tool_call_id\": \"{tool_call_id}\", \"summary\": \"<your summary>\"}}])\n"
                 f"to replace the context-visible spill manifest with your own summary.\n"
+                f"Treat this notification as a prompt to act, not just FYI: if the result still matters, digest it now and summarize before continuing deep work.\n"
+                f"If you intentionally need the large payload to remain visible for a while, raise or disable the threshold explicitly and restore it later; otherwise the reminder will return until the result is summarized.\n"
                 f"The full original remains in the sidecar file and in events.jsonl by tool_call_id."
             )
         elif is_spill:
@@ -1867,7 +1869,9 @@ class BaseAgent:
                 f"Check the spill manifest in your conversation history for the path.\n"
                 f"After reading the sidecar, call:\n"
                 f"  system(action=\"summarize\", items=[{{\"tool_call_id\": \"{tool_call_id}\", \"summary\": \"<your summary>\"}}])\n"
-                f"to replace the context-visible spill manifest with your own summary."
+                f"to replace the context-visible spill manifest with your own summary.\n"
+                f"Treat this notification as a prompt to act, not just FYI: if the result still matters, digest it now and summarize before continuing deep work.\n"
+                f"If you intentionally need the large payload to remain visible for a while, raise or disable the threshold explicitly and restore it later; otherwise the reminder will return until the result is summarized."
             )
         else:
             body = (
@@ -1878,6 +1882,8 @@ class BaseAgent:
                 f"After you have digested this result, you may call:\n"
                 f"  system(action=\"summarize\", items=[{{\"tool_call_id\": \"{tool_call_id}\", \"summary\": \"<your summary>\"}}])\n"
                 f"to replace the context-visible payload with your own summary.\n"
+                f"Treat this notification as a prompt to act, not just FYI: if the result still matters, digest it now and summarize before continuing deep work.\n"
+                f"If you intentionally need the large payload to remain visible for a while, raise or disable the threshold explicitly and restore it later; otherwise the reminder will return until the result is summarized.\n"
                 f"The full original remains retrievable from events.jsonl by tool_call_id."
             )
 
