@@ -76,10 +76,10 @@ def _add_tool_pair(iface: ChatInterface, call_id: str, tool_name: str, result_co
 
 # Large-result notifications are total-length-gated: they only fire once the
 # COMBINED effective length of all pending large-result cases (each above the
-# per-result threshold) is strictly greater than 20000 chars
+# per-result threshold) is strictly greater than 50000 chars
 # (LARGE_RESULT_TOTAL_LEN_GATE).  Tests that want the rescan to fire stock
 # enough pending large-result text to clear it.
-TOTAL_GATE = 20000
+TOTAL_GATE = 50000
 
 
 def _add_synthesized_tool_pair(iface: ChatInterface, call_id: str, tool_name: str, result_content):
@@ -94,9 +94,9 @@ def _add_synthesized_tool_pair(iface: ChatInterface, call_id: str, tool_name: st
 
 
 def test_rescan_fires_for_single_block_over_total_gate():
-    """A single pending result whose length exceeds 20000 chars triggers by itself."""
+    """A single pending result whose length exceeds 50000 chars triggers by itself."""
     iface = ChatInterface()
-    _add_tool_pair(iface, "tc-large", "bash", "X" * 25_000)  # >20000 by itself
+    _add_tool_pair(iface, "tc-large", "bash", "X" * 55_000)  # >50000 by itself
     agent = _make_stub_agent(iface)
     agent._summarize_notification_threshold = 5000
 
@@ -111,64 +111,64 @@ def test_rescan_fires_for_single_block_over_total_gate():
 
 
 def test_rescan_no_fire_when_total_at_or_below_gate():
-    """Pending long-result total <= 20000 must NOT fire (e.g. 3 x 6000 = 18000)."""
+    """Pending long-result total <= 50000 must NOT fire (e.g. 3 x 6000 = 18000)."""
     iface = ChatInterface()
     _add_tool_pair(iface, "tc-1", "bash", "A" * 6000)
     _add_tool_pair(iface, "tc-2", "bash", "B" * 6000)
-    _add_tool_pair(iface, "tc-3", "bash", "C" * 6000)  # total = 18000 <= 20000
+    _add_tool_pair(iface, "tc-3", "bash", "C" * 6000)  # total = 18000 <= 50000
     agent = _make_stub_agent(iface)
     agent._summarize_notification_threshold = 5000
 
     count = _rescan_large_tool_results(agent)
-    assert count == 0, "total 18000 <= 20000 must not fire"
+    assert count == 0, "total 18000 <= 50000 must not fire"
     assert agent._published == []
 
 
 def test_rescan_no_fire_when_total_exactly_at_gate():
-    """Pending total EXACTLY 20000 must NOT fire (gate is strictly > 20000)."""
+    """Pending total EXACTLY 50000 must NOT fire (gate is strictly > 50000)."""
     iface = ChatInterface()
-    # Two 6000-char + one 8000-char long results = 20000 exactly.
-    _add_tool_pair(iface, "tc-1", "bash", "A" * 6000)
-    _add_tool_pair(iface, "tc-2", "bash", "B" * 6000)
-    _add_tool_pair(iface, "tc-3", "bash", "C" * 8000)
+    # Two 15000-char + one 20000-char long results = 50000 exactly.
+    _add_tool_pair(iface, "tc-1", "bash", "A" * 15000)
+    _add_tool_pair(iface, "tc-2", "bash", "B" * 15000)
+    _add_tool_pair(iface, "tc-3", "bash", "C" * 20000)
     agent = _make_stub_agent(iface)
     agent._summarize_notification_threshold = 5000
 
     count = _rescan_large_tool_results(agent)
-    assert count == 0, "total exactly 20000 must not fire (strictly > gate)"
+    assert count == 0, "total exactly 50000 must not fire (strictly > gate)"
     assert agent._published == []
 
 
 def test_rescan_no_fire_for_many_smaller_long_results_under_total():
     """Many long results (more than the old >5 count) below the total gate must NOT fire.
 
-    Jason's example: 6 x 3001 chars (each a long result at the 3000 default
-    threshold) sums to 18006 <= 20000, so it must stay quiet — proving the gate
+    Jason's example: 6 x 8001 chars (each a long result at the 3000 default
+    threshold) sums to 48006 <= 50000, so it must stay quiet — proving the gate
     is on total length, not count.
     """
     iface = ChatInterface()
     for i in range(6):
-        _add_tool_pair(iface, f"tc-{i}", "bash", "X" * 3001)  # total = 18006
+        _add_tool_pair(iface, f"tc-{i}", "bash", "X" * 8001)  # total = 48006
     agent = _make_stub_agent(iface)
     agent._summarize_notification_threshold = 3000  # default
 
     count = _rescan_large_tool_results(agent)
-    assert count == 0, "6 x 3001 = 18006 <= 20000 must not fire despite 6 cases"
+    assert count == 0, "6 x 8001 = 48006 <= 50000 must not fire despite 6 cases"
     assert agent._published == []
 
 
 def test_rescan_fires_once_total_exceeds_gate_across_multiple():
-    """Several pending long results fire once their combined total exceeds 20000."""
+    """Several pending long results fire once their combined total exceeds 50000."""
     iface = ChatInterface()
-    # 4 x 5500 = 22000 > 20000 — fires; count (4) is irrelevant to the gate.
-    for i in range(4):
-        _add_tool_pair(iface, f"tc-{i}", "bash", "X" * 5500)
+    # 7 x 8000 = 56000 > 50000 — fires; count (7) is irrelevant to the gate.
+    for i in range(7):
+        _add_tool_pair(iface, f"tc-{i}", "bash", "X" * 8000)
     agent = _make_stub_agent(iface)
     agent._summarize_notification_threshold = 5000
 
     count = _rescan_large_tool_results(agent)
-    assert count == 4  # one notification per pending case
-    assert len(agent._published) == 4
+    assert count == 7  # one notification per pending case
+    assert len(agent._published) == 7
 
 
 def test_rescan_no_fire_for_small_block():
@@ -186,11 +186,11 @@ def test_rescan_no_fire_for_small_block():
 def test_rescan_fires_for_multiple_large_blocks():
     """Once the total gate is cleared, multiple large blocks each fire a separate notification."""
     iface = ChatInterface()
-    # 4 x 6000 = 24000 > 20000 — clears the total-length gate.
-    _add_tool_pair(iface, "tc-a", "bash", "A" * 6000)
-    _add_tool_pair(iface, "tc-b", "read", "B" * 6000)
-    _add_tool_pair(iface, "tc-c", "bash", "C" * 6000)
-    _add_tool_pair(iface, "tc-d", "read", "D" * 6000)
+    # 4 x 13000 = 52000 > 50000 — clears the total-length gate.
+    _add_tool_pair(iface, "tc-a", "bash", "A" * 13000)
+    _add_tool_pair(iface, "tc-b", "read", "B" * 13000)
+    _add_tool_pair(iface, "tc-c", "bash", "C" * 13000)
+    _add_tool_pair(iface, "tc-d", "read", "D" * 13000)
     agent = _make_stub_agent(iface)
     agent._summarize_notification_threshold = 5000
 
@@ -237,9 +237,9 @@ def test_rescan_spill_over_threshold_triggers():
         "status": "spilled",
         "spill_path": "tmp/tool-results/foo.txt",
         "cap_chars": 100_000,
-        "original_char_count": 50_000,
+        "original_char_count": 55_000,
     }
-    _add_tool_pair(iface, "tc-spill", "bash", spill)  # original 50000 > 20000 alone
+    _add_tool_pair(iface, "tc-spill", "bash", spill)  # original 55000 > 50000 alone
     agent = _make_stub_agent(iface)
     agent._summarize_notification_threshold = 5000
 
@@ -299,7 +299,7 @@ def test_rescan_spill_no_original_count_skipped():
 def test_rescan_does_not_duplicate_existing_notification():
     """If notifications for ref_ids already present, rescan does not publish again."""
     iface = ChatInterface()
-    _add_tool_pair(iface, "tc-dup", "bash", "X" * 25_000)  # >20000 alone
+    _add_tool_pair(iface, "tc-dup", "bash", "X" * 55_000)  # >50000 alone
     agent = _make_stub_agent(iface)
     agent._summarize_notification_threshold = 5000
 
@@ -317,7 +317,7 @@ def test_rescan_does_not_duplicate_existing_notification():
 def test_rescan_re_emits_after_notification_dismissed():
     """After dismissal (notifications removed from published list), rescan re-emits."""
     iface = ChatInterface()
-    _add_tool_pair(iface, "tc-dismissed", "bash", "X" * 25_000)  # >20000 alone
+    _add_tool_pair(iface, "tc-dismissed", "bash", "X" * 55_000)  # >50000 alone
     agent = _make_stub_agent(iface)
     agent._summarize_notification_threshold = 5000
 
@@ -401,7 +401,7 @@ def test_rescan_excludes_daemon_tool_result():
 def test_rescan_includes_bare_daemon_tool():
     """Bare 'daemon' tool (not daemon_tool_result) is NOT excluded."""
     iface = ChatInterface()
-    _add_tool_pair(iface, "tc-daemon-bare", "daemon", "X" * 25_000)  # >20000 alone
+    _add_tool_pair(iface, "tc-daemon-bare", "daemon", "X" * 55_000)  # >50000 alone
     agent = _make_stub_agent(iface)
     agent._summarize_notification_threshold = 5000
 
@@ -445,11 +445,11 @@ def test_base_agent_rescan_with_chat_session(tmp_path):
     agent._summarize_notification_threshold = 100
 
     # Build a chat session with a large tool result whose length alone exceeds
-    # the 20000-char total-length gate.
+    # the 50000-char total-length gate.
     from lingtai_kernel.llm.interface import ChatInterface, ToolCallBlock, ToolResultBlock
     iface = ChatInterface()
     iface.add_assistant_message([ToolCallBlock(id="tc-real-001", name="bash", args={})])
-    iface.add_tool_results([ToolResultBlock(id="tc-real-001", name="bash", content="X" * 25_000)])
+    iface.add_tool_results([ToolResultBlock(id="tc-real-001", name="bash", content="X" * 55_000)])
 
     class _FakeChat:
         interface = iface
@@ -576,7 +576,7 @@ def test_rescan_no_chat_session_is_noop():
 def test_rescan_body_preview_is_bounded():
     """Notification body for non-spill results includes only first 200 chars as preview."""
     iface = ChatInterface()
-    large_content = "Z" * 25_000  # >20000 alone, clears the total-length gate
+    large_content = "Z" * 55_000  # >50000 alone, clears the total-length gate
     _add_tool_pair(iface, "tc-preview", "read", large_content)
     agent = _make_stub_agent(iface)
     agent._summarize_notification_threshold = 100
@@ -645,7 +645,7 @@ def test_process_response_rescans_after_tool_loop_continuation_round():
 def test_rescan_body_no_raise_disable_threshold_wording():
     """Rescan notification body must NOT instruct agents to raise or disable the threshold."""
     iface = ChatInterface()
-    _add_tool_pair(iface, "tc-wording", "bash", "X" * 25_000)  # >20000 alone
+    _add_tool_pair(iface, "tc-wording", "bash", "X" * 55_000)  # >50000 alone
     agent = _make_stub_agent(iface)
     agent._summarize_notification_threshold = 5000
 
@@ -662,7 +662,7 @@ def test_rescan_body_no_raise_disable_threshold_wording():
 def test_rescan_body_batch_digest_or_tolerate_wording():
     """Rescan notification body must mention batch-digest all pending or tolerate reminders."""
     iface = ChatInterface()
-    _add_tool_pair(iface, "tc-batch", "bash", "Y" * 25_000)  # >20000 alone
+    _add_tool_pair(iface, "tc-batch", "bash", "Y" * 55_000)  # >50000 alone
     agent = _make_stub_agent(iface)
     agent._summarize_notification_threshold = 5000
 
@@ -679,8 +679,8 @@ def test_rescan_body_batch_digest_or_tolerate_wording():
     assert "batched" in body.lower() or "pending" in body.lower(), (
         "rescan body must explain the batch / pending-total gate"
     )
-    # Must reference the 20000-char total-length gate, not a count gate
-    assert "20000" in body, "rescan body must state the 20000-char total-length gate"
+    # Must reference the 50000-char total-length gate, not a count gate
+    assert "50000" in body, "rescan body must state the 50000-char total-length gate"
 
 
 def test_rescan_spill_body_no_raise_disable_threshold_wording():
@@ -691,9 +691,9 @@ def test_rescan_spill_body_no_raise_disable_threshold_wording():
         "status": "spilled",
         "spill_path": "tmp/tool-results/wording-test.txt",
         "cap_chars": 100_000,
-        "original_char_count": 50_000,
+        "original_char_count": 55_000,
     }
-    _add_tool_pair(iface, "tc-spill-wording", "bash", spill)  # original 50000 > 20000
+    _add_tool_pair(iface, "tc-spill-wording", "bash", spill)  # original 55000 > 50000
     agent = _make_stub_agent(iface)
     agent._summarize_notification_threshold = 5000
 

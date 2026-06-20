@@ -9,7 +9,7 @@ Covers:
 - history persistence: _save_chat_history called after mutation
 - large-result notification: per-result threshold (default 3000) shown in text
 - large-result notification: total-length gate — fires only when the combined
-  length of pending large-result cases exceeds 20000 chars
+  length of pending large-result cases exceeds 50000 chars
 - large-result notification: excludes daemon-named tools
 - large-result notification: skips spill manifests
 """
@@ -399,7 +399,7 @@ def _stock_pending_large_results(agent, n, *, size=10_000):
 
     Large-result notifications are total-length-gated: they only fire once the
     combined effective length of pending cases above the threshold is strictly
-    greater than 20000 chars.  Per-result tests that assert a notification fires
+    greater than 50000 chars.  Per-result tests that assert a notification fires
     must first stock enough pending length (``n * size`` chars) to clear the gate.
     """
     from lingtai_kernel.llm.interface import (
@@ -436,8 +436,8 @@ def test_large_result_notification_fires_above_threshold(tmp_path):
     """A result exceeding the threshold publishes a notification once the gate is met."""
     agent = _make_base_agent_for_notification(tmp_path)
     agent._summarize_notification_threshold = 100
-    # Clear the >20000-char total-length gate first (3 x 7000 = 21000 in history).
-    _stock_pending_large_results(agent, 3, size=7000)
+    # Clear the >50000-char total-length gate first (3 x 17000 = 51000 in history).
+    _stock_pending_large_results(agent, 3, size=17000)
 
     published = []
     agent._enqueue_system_notification = MagicMock(
@@ -456,7 +456,7 @@ def test_large_result_notification_threshold_in_text(tmp_path):
     """Notification body must explicitly show the current active threshold."""
     agent = _make_base_agent_for_notification(tmp_path)
     agent._summarize_notification_threshold = 7500
-    _stock_pending_large_results(agent, 6, size=8000)
+    _stock_pending_large_results(agent, 6, size=9000)
 
     published = []
     agent._enqueue_system_notification = MagicMock(
@@ -487,7 +487,7 @@ def test_large_result_notification_not_fired_below_threshold(tmp_path):
 
 
 def test_large_result_notification_gated_when_total_at_or_below_gate(tmp_path):
-    """Per-result emitter stays silent while pending total <= 20000 chars.
+    """Per-result emitter stays silent while pending total <= 50000 chars.
 
     Even with many (>5) pending cases, the emitter must stay quiet until their
     combined length exceeds the gate — proving the gate is total-length, not count.
@@ -500,14 +500,14 @@ def test_large_result_notification_gated_when_total_at_or_below_gate(tmp_path):
         side_effect=lambda **kw: published.append(kw)
     )
 
-    # 6 pending cases of 3001 chars each = 18006 in history (<= 20000).
-    _stock_pending_large_results(agent, 6, size=3001)
-    agent._maybe_notify_large_tool_result("bash", "A" * 3001, tool_call_id="id-x")
-    assert published == [], "must stay silent: 6 x 3001 = 18006 <= 20000 (count is irrelevant)"
+    # 6 pending cases of 8001 chars each = 48006 in history (<= 50000).
+    _stock_pending_large_results(agent, 6, size=8001)
+    agent._maybe_notify_large_tool_result("bash", "A" * 8001, tool_call_id="id-x")
+    assert published == [], "must stay silent: 6 x 8001 = 48006 <= 50000 (count is irrelevant)"
 
 
 def test_large_result_notification_gated_when_total_exactly_at_gate(tmp_path):
-    """Pending total EXACTLY 20000 must NOT fire (gate is strictly > 20000)."""
+    """Pending total EXACTLY 50000 must NOT fire (gate is strictly > 50000)."""
     agent = _make_base_agent_for_notification(tmp_path)
     agent._summarize_notification_threshold = 3000
 
@@ -516,18 +516,18 @@ def test_large_result_notification_gated_when_total_exactly_at_gate(tmp_path):
         side_effect=lambda **kw: published.append(kw)
     )
 
-    # 4 x 5000 = 20000 exactly in history.
-    _stock_pending_large_results(agent, 4, size=5000)
+    # 10 x 5000 = 50000 exactly in history.
+    _stock_pending_large_results(agent, 10, size=5000)
     agent._maybe_notify_large_tool_result("bash", "A" * 5000, tool_call_id="id-eq")
-    assert published == [], "total exactly 20000 must not fire (strictly > gate)"
+    assert published == [], "total exactly 50000 must not fire (strictly > gate)"
 
 
 def test_large_result_notification_fires_once_total_exceeds_gate(tmp_path):
-    """Per-result emitter fires once the pending total in history exceeds 20000 chars."""
+    """Per-result emitter fires once the pending total in history exceeds 50000 chars."""
     agent = _make_base_agent_for_notification(tmp_path)
     agent._summarize_notification_threshold = 100
-    # 3 x 7000 = 21000 in history > 20000 — count (3) is irrelevant to the gate.
-    _stock_pending_large_results(agent, 3, size=7000)
+    # 3 x 17000 = 51000 in history > 50000 — count (3) is irrelevant to the gate.
+    _stock_pending_large_results(agent, 3, size=17000)
 
     published = []
     agent._enqueue_system_notification = MagicMock(
@@ -540,11 +540,11 @@ def test_large_result_notification_fires_once_total_exceeds_gate(tmp_path):
 
 
 def test_large_result_notification_fires_for_single_result_over_gate(tmp_path):
-    """A single pending result whose length alone exceeds 20000 triggers by itself."""
+    """A single pending result whose length alone exceeds 50000 triggers by itself."""
     agent = _make_base_agent_for_notification(tmp_path)
     agent._summarize_notification_threshold = 3000
-    # One 25000-char pending result in history clears the gate on its own.
-    _stock_pending_large_results(agent, 1, size=25_000)
+    # One 55000-char pending result in history clears the gate on its own.
+    _stock_pending_large_results(agent, 1, size=55_000)
 
     published = []
     agent._enqueue_system_notification = MagicMock(
@@ -566,7 +566,7 @@ def test_large_result_notification_spill_manifest_original_over_threshold(tmp_pa
 
     agent = _make_base_agent_for_notification(tmp_path)
     agent._summarize_notification_threshold = 100
-    _stock_pending_large_results(agent, 1, size=21_000)  # clears >20000 total gate
+    _stock_pending_large_results(agent, 1, size=51_000)  # clears >50000 total gate
 
     published = []
     agent._enqueue_system_notification = MagicMock(
@@ -578,7 +578,7 @@ def test_large_result_notification_spill_manifest_original_over_threshold(tmp_pa
         "status": "spilled",
         "spill_path": "tmp/tool-results/foo.txt",
         "cap_chars": 100,
-        "original_char_count": 50000,  # well above threshold of 100
+        "original_char_count": 55_000,  # well above threshold of 100
     }
     agent._maybe_notify_large_tool_result("bash", spill)
     assert len(published) == 1, (
@@ -595,7 +595,7 @@ def test_large_result_notification_source_field(tmp_path):
     """Notification must use source='large_tool_result'."""
     agent = _make_base_agent_for_notification(tmp_path)
     agent._summarize_notification_threshold = 10
-    _stock_pending_large_results(agent, 1, size=21_000)  # clears >20000 total gate
+    _stock_pending_large_results(agent, 1, size=51_000)  # clears >50000 total gate
 
     published = []
     agent._enqueue_system_notification = MagicMock(
@@ -629,7 +629,7 @@ def test_large_result_notification_uses_explicit_tool_call_id(tmp_path):
     """When tool_call_id is passed explicitly, the notification body uses it."""
     agent = _make_base_agent_for_notification(tmp_path)
     agent._summarize_notification_threshold = 10
-    _stock_pending_large_results(agent, 1, size=21_000)  # clears >20000 total gate
+    _stock_pending_large_results(agent, 1, size=51_000)  # clears >50000 total gate
 
     published = []
     agent._enqueue_system_notification = MagicMock(
@@ -652,7 +652,7 @@ def test_large_result_notification_fallback_when_no_id(tmp_path):
     """
     agent = _make_base_agent_for_notification(tmp_path)
     agent._summarize_notification_threshold = 10
-    _stock_pending_large_results(agent, 1, size=21_000)  # clears >20000 total gate
+    _stock_pending_large_results(agent, 1, size=51_000)  # clears >50000 total gate
 
     published = []
     agent._enqueue_system_notification = MagicMock(
@@ -688,7 +688,7 @@ def test_hook_called_with_id_for_multiple_same_name_calls(tmp_path):
     """Different tool_call_ids for same tool name are each forwarded correctly."""
     agent = _make_base_agent_for_notification(tmp_path)
     agent._summarize_notification_threshold = 10
-    _stock_pending_large_results(agent, 1, size=21_000)  # clears >20000 total gate
+    _stock_pending_large_results(agent, 1, size=51_000)  # clears >50000 total gate
 
     published = []
     agent._enqueue_system_notification = MagicMock(
@@ -802,7 +802,7 @@ def test_large_result_notification_spill_manifest_over_threshold(tmp_path):
 
     agent = _make_base_agent_for_notification(tmp_path)
     agent._summarize_notification_threshold = 5000
-    _stock_pending_large_results(agent, 6, size=6000)
+    _stock_pending_large_results(agent, 6, size=9000)
 
     published = []
     agent._enqueue_system_notification = MagicMock(
@@ -882,7 +882,7 @@ def test_large_result_notification_excludes_daemon_tool_result(tmp_path):
     """daemon_tool_result must be excluded; bare 'daemon' tool must NOT be excluded."""
     agent = _make_base_agent_for_notification(tmp_path)
     agent._summarize_notification_threshold = 10
-    _stock_pending_large_results(agent, 1, size=21_000)  # clears >20000 total gate
+    _stock_pending_large_results(agent, 1, size=51_000)  # clears >50000 total gate
 
     published = []
     agent._enqueue_system_notification = MagicMock(
@@ -916,7 +916,7 @@ def test_summarize_runtime_threshold_change_rejected(tmp_path):
 
     result = _summarize(agent, {
         "action": "summarize",
-        "notification_threshold_chars": 20000,
+        "notification_threshold_chars": 50000,
     })
 
     assert result["status"] == "error"
@@ -1004,7 +1004,7 @@ def test_large_result_notification_no_raise_disable_wording(tmp_path):
     """Notification body must NOT instruct agents to raise or disable the threshold."""
     agent = _make_base_agent_for_notification(tmp_path)
     agent._summarize_notification_threshold = 100
-    _stock_pending_large_results(agent, 1, size=21_000)  # clears >20000 total gate
+    _stock_pending_large_results(agent, 1, size=51_000)  # clears >50000 total gate
 
     published = []
     agent._enqueue_system_notification = MagicMock(
@@ -1026,7 +1026,7 @@ def test_large_result_notification_batch_digest_wording(tmp_path):
     """Notification body must mention batch-digest all pending cases or tolerate reminders."""
     agent = _make_base_agent_for_notification(tmp_path)
     agent._summarize_notification_threshold = 100
-    _stock_pending_large_results(agent, 1, size=21_000)  # clears >20000 total gate
+    _stock_pending_large_results(agent, 1, size=51_000)  # clears >50000 total gate
 
     published = []
     agent._enqueue_system_notification = MagicMock(
@@ -1052,7 +1052,7 @@ def test_large_result_notification_spill_no_raise_disable_wording(tmp_path):
 
     agent = _make_base_agent_for_notification(tmp_path)
     agent._summarize_notification_threshold = 100
-    _stock_pending_large_results(agent, 1, size=21_000)  # clears >20000 total gate
+    _stock_pending_large_results(agent, 1, size=51_000)  # clears >50000 total gate
 
     published = []
     agent._enqueue_system_notification = MagicMock(
@@ -1064,7 +1064,7 @@ def test_large_result_notification_spill_no_raise_disable_wording(tmp_path):
         "status": "spilled",
         "spill_path": "tmp/tool-results/foo.txt",
         "cap_chars": 100,
-        "original_char_count": 50000,
+        "original_char_count": 55_000,
     }
     agent._maybe_notify_large_tool_result("bash", spill)
     assert len(published) == 1

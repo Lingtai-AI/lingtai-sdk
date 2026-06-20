@@ -475,7 +475,7 @@ class BaseAgent:
         # tool result's serialized length exceeds this value, it becomes a
         # pending large-result case.  A system-channel notification reminding
         # the agent to use system(action="summarize") is only published once
-        # the combined length of all pending large-result cases exceeds 20000
+        # the combined length of all pending large-result cases exceeds 50000
         # chars (the total-length gate; see
         # base_agent/messaging.py:LARGE_RESULT_TOTAL_LEN_GATE).
         # Default: 3000 chars.  Configurable only via manifest.summarize_notification_threshold
@@ -1827,7 +1827,7 @@ class BaseAgent:
 
         # Total-length gate: suppress the notification until the combined
         # effective length of all pending large-result cases above the threshold
-        # is strictly greater than LARGE_RESULT_TOTAL_LEN_GATE (>20000 chars).
+        # is strictly greater than LARGE_RESULT_TOTAL_LEN_GATE (>50000 chars).
         # Below that total this stays quiet to avoid repeated wasteful
         # interruptions; the per-turn rescan (_rescan_large_tool_results) is the
         # authoritative emitter and will fire the whole batch once the gate is

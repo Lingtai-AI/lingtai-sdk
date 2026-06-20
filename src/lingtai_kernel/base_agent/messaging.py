@@ -16,7 +16,7 @@ DEFAULT_SUMMARIZE_NOTIFICATION_THRESHOLD = 3000
 # result over the gate triggers by itself; several smaller long results trigger
 # once their sum exceeds the gate, regardless of how many there are.  This
 # replaces the earlier count-based (>5 pending) gate.
-LARGE_RESULT_TOTAL_LEN_GATE = 20000
+LARGE_RESULT_TOTAL_LEN_GATE = 50000
 
 
 def _pending_large_result_len(block, threshold: int):
@@ -80,7 +80,7 @@ def _pending_large_result_total_len(agent) -> int:
     (<= 0) or there is no chat session yet.
 
     Used to gate large-result system notifications: they are only published once
-    this total is strictly greater than ``LARGE_RESULT_TOTAL_LEN_GATE`` (>20000).
+    this total is strictly greater than ``LARGE_RESULT_TOTAL_LEN_GATE`` (>50000).
     """
     threshold = getattr(
         agent, "_summarize_notification_threshold", DEFAULT_SUMMARIZE_NOTIFICATION_THRESHOLD
@@ -328,7 +328,7 @@ def _rescan_large_tool_results(agent) -> int:
       - The whole batch of notifications is suppressed until the *combined*
         effective length of all pending large-result cases above the size
         threshold is *strictly greater than* ``LARGE_RESULT_TOTAL_LEN_GATE``
-        (>20000 chars).  Below that total nothing fires; once the total exceeds
+        (>50000 chars).  Below that total nothing fires; once the total exceeds
         the gate, all pending cases are (re-)notified in one sweep.  A single
         pending result over the gate triggers by itself.  This avoids repeated
         wasteful interruptions for a small amount of pending large-result text.
@@ -370,7 +370,7 @@ def _rescan_large_tool_results(agent) -> int:
 
     # Total-length gate: suppress until the combined effective length of all
     # pending large-result cases is strictly greater than
-    # LARGE_RESULT_TOTAL_LEN_GATE (>20000 chars).  Below that total, stay quiet.
+    # LARGE_RESULT_TOTAL_LEN_GATE (>50000 chars).  Below that total, stay quiet.
     pending_total = _pending_large_result_total_len(agent)
     if pending_total <= LARGE_RESULT_TOTAL_LEN_GATE:
         return 0
