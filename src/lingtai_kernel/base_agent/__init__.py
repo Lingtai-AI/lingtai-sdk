@@ -13,6 +13,7 @@ Key concepts:
 
 from __future__ import annotations
 
+import copy
 import json
 import queue
 import threading
@@ -1407,7 +1408,47 @@ class BaseAgent:
             summary=summary_text,
             meta=meta,
         )
+        self._log_notification_block_injected(
+            notifications_with_guidance,
+            mode="synthetic_notification_pair",
+            call_id=call_id,
+            meta=meta,
+        )
         return True
+
+    def _log_notification_block_injected(
+        self,
+        payload: dict,
+        *,
+        mode: str,
+        call_id: str | None = None,
+        meta: dict | None = None,
+    ) -> None:
+        """Persist a durable notification_block_injected event capturing the
+        actual canonical block the model saw.
+
+        Best-effort: any exception is swallowed so callers are never broken
+        by a logging failure.  ``payload`` is the dict returned by
+        ``build_notification_payload`` — ``{"_notification_guidance": ...,
+        "notifications": {...}}``.  A deep copy is stored so later
+        in-place skeletonization or nested mutation of the live holder does not
+        corrupt the logged snapshot.
+        """
+        try:
+            sources = sorted(payload.get("notifications", {}).keys())
+            self._log(
+                "notification_block_injected",
+                mode=mode,
+                call_id=call_id or "",
+                sources=sources,
+                payload={
+                    "_notification_guidance": payload.get("_notification_guidance", ""),
+                    "notifications": copy.deepcopy(payload.get("notifications", {})),
+                },
+                meta=meta or {},
+            )
+        except Exception:
+            pass
 
     def _persist_soul_entry(self, result: dict, mode: str = "flow", source: str = "agent") -> None:
         from ..intrinsics.soul.flow import _persist_soul_entry

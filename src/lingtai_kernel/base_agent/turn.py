@@ -1396,11 +1396,40 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
                 from ..meta_block import skeletonize_notification_holder
                 skeletonize_notification_holder(agent)
         else:
+            _prior_holder = agent._notification_live_holder
             agent._notification_live_holder = attach_active_notifications(
                 agent,
                 tool_results,
-                prior_holder=agent._notification_live_holder,
+                prior_holder=_prior_holder,
             )
+            # Log the actual canonical block that was stamped onto the tool
+            # result so the TUI /notification command can show real snapshots.
+            # Only log when a genuinely new holder was established (changed and
+            # is not None), i.e. when stamping actually happened this batch.
+            _new_holder = agent._notification_live_holder
+            if (
+                _new_holder is not None
+                and _new_holder is not _prior_holder
+                and "notifications" in _new_holder
+            ):
+                try:
+                    _carrier_call_id = ""
+                    for _result in tool_results:
+                        if getattr(_result, "content", None) is _new_holder:
+                            _carrier_call_id = str(getattr(_result, "id", "") or "")
+                            break
+                    _block_payload = {
+                        "_notification_guidance": _new_holder.get("_notification_guidance", ""),
+                        "notifications": _new_holder.get("notifications", {}),
+                    }
+                    agent._log_notification_block_injected(
+                        _block_payload,
+                        mode="active_tool_result",
+                        call_id=_carrier_call_id,
+                        meta=build_meta(agent),
+                    )
+                except Exception:
+                    pass
 
         if intercepted:
             if tool_results and agent._chat:

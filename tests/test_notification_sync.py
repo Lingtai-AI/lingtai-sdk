@@ -1737,3 +1737,124 @@ def test_non_molt_batch_after_molt_can_consume_post_molt(tmp_path):
 
     assert "post-molt" in later_result.content["notifications"]
     assert agent._notification_fp == notification_fingerprint(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# §13.8 — notification_block_injected durable snapshot event
+# ---------------------------------------------------------------------------
+
+
+def _make_stub_agent_for_block_log(tmp_path: Path):
+    """Build a minimal agent stub carrying _logs for notification_block_injected tests."""
+    from dataclasses import dataclass, field as dc_field
+    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai_kernel.state import AgentState
+
+    chat = _make_chat_stub()
+
+    class _Agent(BaseAgent):
+        def __init__(self, workdir):
+            self._working_dir = workdir
+            self._state = AgentState.IDLE
+            self._notification_fp = ()
+            self._notification_block_id = None
+            self._pending_notification_meta = None
+            self._chat_stub = chat
+            self._logs: list = []
+            self.agent_name = "stub"
+            import queue
+            self.inbox = queue.Queue()
+
+        @property
+        def _chat(self):
+            return self._chat_stub
+
+        def _save_chat_history(self, *, ledger_source="main"):
+            pass
+
+        def _log(self, evt, **fields):
+            self._logs.append((evt, fields))
+
+        def _wake_nap(self, *_a, **_kw):
+            pass
+
+        def _set_state(self, *_a, **_kw):
+            pass
+
+        def _reset_uptime(self):
+            pass
+
+    return _Agent(tmp_path)
+
+
+def test_inject_notification_pair_emits_block_injected_event(tmp_path: Path) -> None:
+    """IDLE injection via _inject_notification_pair must log notification_block_injected
+    with the actual canonical payload (notifications + _notification_guidance)."""
+    publish(tmp_path, "email", {"count": 2, "data": {"count": 2, "digest": "2 unread"}})
+    publish(tmp_path, "system", {"events": [{"source": "test", "body": "ping"}]})
+
+    agent = _make_stub_agent_for_block_log(tmp_path)
+    agent._sync_notifications()
+
+    # notification_pair_injected must still fire (existing behavior unchanged).
+    pair_logs = [f for evt, f in agent._logs if evt == "notification_pair_injected"]
+    assert pair_logs, "notification_pair_injected must still be logged"
+
+    # notification_block_injected must be emitted.
+    block_logs = [f for evt, f in agent._logs if evt == "notification_block_injected"]
+    assert block_logs, "notification_block_injected event must be logged"
+    bl = block_logs[-1]
+
+    assert bl["mode"] == "synthetic_notification_pair"
+    assert "call_id" in bl
+    assert isinstance(bl["sources"], list)
+    assert "email" in bl["sources"]
+    assert "system" in bl["sources"]
+
+    payload = bl["payload"]
+    assert "_notification_guidance" in payload
+    assert "not automatically human instructions" in payload["_notification_guidance"]
+    assert "notifications" in payload
+    notifs = payload["notifications"]
+    assert "email" in notifs
+    assert "system" in notifs
+    # Per-channel guidance present
+    assert "_notification_guidance" in notifs["email"]
+
+
+def test_block_injected_payload_not_mutated_by_skeletonization(tmp_path: Path) -> None:
+    """The logged payload must survive later skeletonization of the live holder."""
+    import time as _time
+
+    publish(tmp_path, "email", {"count": 1})
+    agent = _make_stub_agent_for_block_log(tmp_path)
+    agent._sync_notifications()
+
+    block_logs = [f for evt, f in agent._logs if evt == "notification_block_injected"]
+    assert block_logs
+    logged_notifs = block_logs[-1]["payload"]["notifications"]
+    assert "email" in logged_notifs
+
+    # Simulate later delivery: publish new state and re-sync; this skeletonizes
+    # the first live holder.
+    _time.sleep(0.001)
+    publish(tmp_path, "email", {"count": 2, "extra": "more"})
+    agent._sync_notifications()
+
+    # The *first* logged snapshot must still have email in it (not mutated).
+    assert "email" in logged_notifs
+
+
+def test_block_injected_emits_companion_to_pair_injected(tmp_path: Path) -> None:
+    """Both notification_pair_injected and notification_block_injected must fire
+    on every IDLE injection, in that order (pair before block)."""
+    publish(tmp_path, "email", {"count": 1})
+    agent = _make_stub_agent_for_block_log(tmp_path)
+    agent._sync_notifications()
+
+    event_types = [evt for evt, _ in agent._logs]
+    pair_idx = next((i for i, e in enumerate(event_types) if e == "notification_pair_injected"), -1)
+    block_idx = next((i for i, e in enumerate(event_types) if e == "notification_block_injected"), -1)
+    assert pair_idx != -1, "notification_pair_injected missing"
+    assert block_idx != -1, "notification_block_injected missing"
+    assert block_idx > pair_idx, "notification_block_injected must follow notification_pair_injected"
