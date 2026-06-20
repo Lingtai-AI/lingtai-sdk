@@ -7,6 +7,7 @@ Naming convention:
 
 from __future__ import annotations
 
+import copy
 import json
 from typing import Any
 
@@ -292,7 +293,24 @@ def to_responses_input(iface: ChatInterface) -> list[dict]:
                 if isinstance(block, TextBlock):
                     text_parts.append(block.text)
                 elif isinstance(block, ThinkingBlock):
-                    if block.text:
+                    raw_item = block.provider_data.get("openai_responses_reasoning_item")
+                    encrypted_content = (
+                        raw_item.get("encrypted_content")
+                        if isinstance(raw_item, dict) else None
+                    )
+                    if (
+                        isinstance(raw_item, dict)
+                        and raw_item.get("type") == "reasoning"
+                        and isinstance(encrypted_content, str)
+                        and encrypted_content != "<REDACTED:secret>"
+                    ):
+                        # The OpenAI SDK/request pipeline may normalize or mutate
+                        # request dictionaries. Replay a deep copy so the
+                        # persisted provider_data raw reasoning state remains an
+                        # immutable cache anchor across turns. If durable history
+                        # redacted the opaque provider blob, fall back to summary_text.
+                        reasoning_items.append(copy.deepcopy(raw_item))
+                    elif block.text:
                         reasoning_items.append({
                             "type": "reasoning",
                             "summary": [

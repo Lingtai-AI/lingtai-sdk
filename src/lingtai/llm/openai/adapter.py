@@ -1905,6 +1905,18 @@ class CodexResponsesSession(OpenAIResponsesSession):
                 "store": False,
                 **self._extra_kwargs,
             }
+            # Ensure reasoning.encrypted_content is requested so the raw
+            # reasoning item can be preserved for prompt-cache-stable replay.
+            existing_include = kwargs.get("include") or []
+            if isinstance(existing_include, str):
+                existing_include = [existing_include]
+            else:
+                try:
+                    existing_include = list(existing_include)
+                except TypeError:
+                    existing_include = [existing_include]
+            if "reasoning.encrypted_content" not in existing_include:
+                kwargs["include"] = existing_include + ["reasoning.encrypted_content"]
             if self._instructions:
                 kwargs["instructions"] = self._instructions
             if self._tools:
@@ -1946,6 +1958,8 @@ class CodexResponsesSession(OpenAIResponsesSession):
             response_id = None
             usage = UsageMetadata()
             seen_reasoning_summary_items: set[str] = set()
+            # Raw reasoning item dicts for replay, in provider output order.
+            raw_reasoning_items: list[dict[str, Any]] = []
             trace_path = _codex_responses_trace_path()
 
             stream = self._client.responses.create(**kwargs)
@@ -1967,6 +1981,42 @@ class CodexResponsesSession(OpenAIResponsesSession):
                     trace_path=trace_path,
                 )
                 if accepted_reasoning:
+                    # Capture raw reasoning item when output_item.done carries
+                    # encrypted_content, so it can be replayed verbatim next turn.
+                    if (
+                        event.type == "response.output_item.done"
+                        and getattr(event.item, "type", None) == "reasoning"
+                    ):
+                        enc = getattr(event.item, "encrypted_content", None)
+                        if enc:
+                            item_id = getattr(event.item, "id", None) or ""
+                            summaries = []
+                            for s in getattr(event.item, "summary", None) or []:
+                                summaries.append({
+                                    "type": getattr(s, "type", None),
+                                    "text": getattr(s, "text", None),
+                                })
+                            content = []
+                            for c in getattr(event.item, "content", None) or []:
+                                if hasattr(c, "model_dump"):
+                                    content.append(c.model_dump(exclude_none=True))
+                                elif isinstance(c, dict):
+                                    content.append(c)
+                                else:
+                                    logger.warning(
+                                        "codex.responses.reasoning_content_ignored",
+                                        extra={
+                                            "item_id": item_id,
+                                            "content_type": type(c).__name__,
+                                        },
+                                    )
+                            raw_reasoning_items.append({
+                                "type": "reasoning",
+                                "id": item_id,
+                                "summary": summaries,
+                                "content": content,
+                                "encrypted_content": enc,
+                            })
                     continue
                 if event.type == "response.output_text.delta":
                     acc.add_text(event.delta)
@@ -2028,9 +2078,31 @@ class CodexResponsesSession(OpenAIResponsesSession):
         # the next request. Without this, the stateless backend would never
         # see the assistant's own prior turns.
         blocks: list = []
-        if result.thoughts:
+        raw_items = raw_reasoning_items
+        if result.thoughts or raw_items:
             joined = "\n".join(t for t in result.thoughts if t)
-            if joined:
+            if raw_items:
+                # Attach every raw reasoning item (with encrypted_content), even
+                # when the provider returned no summary_text. Codex commonly
+                # returns summary=[] with encrypted_content; dropping the block
+                # in that case would lose the cache-stable replay state.
+                for idx, raw_item in enumerate(raw_items):
+                    item_summary_text = "\n".join(
+                        str(s.get("text"))
+                        for s in raw_item.get("summary", [])
+                        if isinstance(s, dict)
+                        and s.get("type") == "summary_text"
+                        and s.get("text")
+                    )
+                    blocks.append(
+                        ThinkingBlock(
+                            text=item_summary_text or (joined if idx == 0 else ""),
+                            provider_data={
+                                "openai_responses_reasoning_item": raw_item,
+                            },
+                        )
+                    )
+            elif joined:
                 blocks.append(ThinkingBlock(text=joined))
         if result.text:
             blocks.append(TextBlock(text=result.text))
