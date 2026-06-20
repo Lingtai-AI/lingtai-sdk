@@ -7,14 +7,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from lingtai.agent import Agent
+from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
 
-def make_mock_service():
-    svc = MagicMock()
-    svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
-    return svc
 
 
 def test_file_sugar_expands_to_five(tmp_path):

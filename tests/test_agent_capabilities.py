@@ -6,14 +6,9 @@ from unittest.mock import MagicMock
 from lingtai.agent import Agent
 from lingtai.services.vision import VisionService
 from lingtai.services.websearch import SearchService, SearchResult
+from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
 
-def make_mock_service():
-    svc = MagicMock()
-    svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
-    return svc
 
 
 class FakeVisionService(VisionService):

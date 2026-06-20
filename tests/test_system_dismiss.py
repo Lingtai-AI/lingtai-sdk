@@ -17,11 +17,8 @@ semantics.
 from __future__ import annotations
 
 import json
-import threading
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -33,18 +30,13 @@ from lingtai_kernel.notifications import (
     publish,
 )
 
-
-@dataclass
-class _StubAgent:
-    _working_dir: Path
-    _logs: list[tuple[str, dict]] = field(default_factory=list)
-    _notification_fp: tuple = ()
-    _pending_notification_meta: str | None = "stale"
-    _pending_notification_fp: tuple | None = (("soul.json", 1, 2),)
-    _system_notification_lock: threading.Lock = field(default_factory=threading.Lock)
-
-    def _log(self, event_type: str, **fields: Any) -> None:
-        self._logs.append((event_type, fields))
+# Shared with test_notification_tool.py — see tests/_notification_helpers.py.
+from tests._notification_helpers import (
+    StubAgent as _StubAgent,
+    events as _events,
+    mark_delivered as _mark_delivered,
+    publish_large_result_reminder as _publish_large_result_reminder,
+)
 
 
 class _RecordingLock:
@@ -57,14 +49,6 @@ class _RecordingLock:
 
     def __exit__(self, *_exc) -> None:
         return None
-
-
-def _events(agent: _StubAgent, name: str) -> list[dict]:
-    return [fields for event, fields in agent._logs if event == name]
-
-
-def _mark_delivered(agent: _StubAgent) -> None:
-    agent._notification_fp = notification_fingerprint(agent._working_dir)
 
 
 def _dismiss_channel(agent, channel, **kwargs):
@@ -431,36 +415,6 @@ def test_system_event_dismiss_by_ref_id_clears_file_when_last_event(tmp_path: Pa
     assert result["removed"] == 1
     assert result["remaining"] == 0
     assert not (tmp_path / ".notification" / "system.json").exists()
-
-
-def _publish_large_result_reminder(
-    tmp_path: Path,
-    *,
-    tool_call_id: str = "toolu_big",
-    extra_events: list[dict] | None = None,
-) -> None:
-    """Publish a system.json containing one large_tool_result reminder."""
-    events = [
-        {
-            "event_id": "evt_lr",
-            "source": "large_tool_result",
-            "ref_id": f"large_tool_result:{tool_call_id}",
-            "body": "summarize me",
-        }
-    ]
-    if extra_events:
-        events = list(extra_events) + events
-    publish(
-        tmp_path,
-        "system",
-        {
-            "header": f"{len(events)} system notifications",
-            "icon": "🔔",
-            "priority": "normal",
-            "published_at": "2026-06-20T00:00:00Z",
-            "data": {"events": events},
-        },
-    )
 
 
 def test_large_result_reminder_cleared_by_whole_channel_dismiss(tmp_path: Path) -> None:

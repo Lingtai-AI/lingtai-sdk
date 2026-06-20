@@ -9,13 +9,9 @@ from lingtai_kernel.base_agent import BaseAgent
 from lingtai_kernel.message import Message, _make_message, MSG_REQUEST, MSG_USER_INPUT
 from lingtai_kernel.state import AgentState
 from lingtai_kernel.types import UnknownToolError
+from tests._service_helpers import make_tool_result_mock_service as make_mock_service
 
 
-def make_mock_service():
-    svc = MagicMock()
-    svc.model = "test-model"
-    svc.make_tool_result.return_value = {"role": "tool", "content": "ok"}
-    return svc
 
 
 def test_agent_no_name(tmp_path):

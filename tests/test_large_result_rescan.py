@@ -88,6 +88,47 @@ def _add_synthesized_tool_pair(iface: ChatInterface, call_id: str, tool_name: st
     iface.add_tool_results([ToolResultBlock(id=call_id, name=tool_name, content=result_content, synthesized=True)])
 
 
+def _run_executor_metadata(
+    tmp_path: Path,
+    *,
+    output,
+    tool_name: str = "bash",
+    tool_call_id: str = "tc-001",
+    threshold: int | None = None,
+):
+    """Run one tool call through a real ToolExecutor and return its result content.
+
+    Centralises the ToolExecutor + dispatch/make_result boilerplate that the
+    ``_tool_result_metadata`` tests below would otherwise each copy verbatim.
+    *output* is wrapped in the standard ``{"output": ..., "status": "ok"}`` dict
+    result; pass *threshold* to override ``summarize_notification_threshold``.
+    """
+    from lingtai_kernel.tool_executor import ToolExecutor
+    from lingtai_kernel.loop_guard import LoopGuard
+    from lingtai_kernel.llm.interface import ToolResultBlock as _TRB
+    from lingtai_kernel.llm.base import ToolCall as _TC
+
+    def _dispatch(tc):
+        return {"output": output, "status": "ok"}
+
+    def _make_result(name, content, *, tool_call_id=None):
+        return _TRB(id=tool_call_id, name=name, content=content)
+
+    kwargs = {}
+    if threshold is not None:
+        kwargs["summarize_notification_threshold"] = threshold
+    executor = ToolExecutor(
+        dispatch_fn=_dispatch,
+        make_tool_result_fn=_make_result,
+        guard=LoopGuard(),
+        working_dir=tmp_path,
+        **kwargs,
+    )
+    tc = _TC(name=tool_name, args={}, id=tool_call_id)
+    results, _, _ = executor.execute([tc])
+    return results[0].content
+
+
 # ---------------------------------------------------------------------------
 # 1. Existing large ToolResultBlock triggers notification on rescan
 # ---------------------------------------------------------------------------
@@ -708,7 +749,8 @@ def test_rescan_spill_body_no_raise_disable_threshold_wording():
 
 
 # ---------------------------------------------------------------------------
-# 13. Rescan body wording: summarize clears the reminder; dismiss cannot bypass
+# 13. Rescan body wording: summarize is the preferred discharge; dismiss is an
+#     allowed escape hatch (#430).
 # ---------------------------------------------------------------------------
 
 
@@ -944,28 +986,7 @@ def test_large_result_hint_in_tool_result(tmp_path):
 
 def test_no_hint_for_small_result(tmp_path):
     """ToolExecutor injects _tool_result_metadata with long_tool_result=False for small results."""
-    from lingtai_kernel.tool_executor import ToolExecutor
-    from lingtai_kernel.loop_guard import LoopGuard
-    from lingtai_kernel.llm.interface import ToolResultBlock as _TRB
-    from lingtai_kernel.llm.base import ToolCall as _TC
-
-    def _dispatch(tc):
-        return {"output": "tiny", "status": "ok"}
-
-    def _make_result(tool_name, content, *, tool_call_id=None):
-        return _TRB(id=tool_call_id, name=tool_name, content=content)
-
-    executor = ToolExecutor(
-        dispatch_fn=_dispatch,
-        make_tool_result_fn=_make_result,
-        guard=LoopGuard(),
-        working_dir=tmp_path,
-    )
-
-    tc = _TC(name="bash", args={}, id="tc-small-001")
-    results, _, _ = executor.execute([tc], on_result_hook=None)
-
-    content = results[0].content
+    content = _run_executor_metadata(tmp_path, output="tiny", tool_call_id="tc-small-001")
     assert "_tool_result_metadata" in content, "_tool_result_metadata is always present"
     assert content["_tool_result_metadata"]["long_tool_result"] is False, (
         "small result must have long_tool_result=False"
@@ -1000,122 +1021,20 @@ def test_no_hint_for_string_result(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 17. ToolExecutor uses configured threshold, not hardcoded default
-# ---------------------------------------------------------------------------
-
-
-def test_hint_uses_custom_threshold(tmp_path):
-    """ToolExecutor uses its configured summarize_notification_threshold in _tool_result_metadata.
-
-    A result of 600 chars should have long_tool_result=False with threshold=3000 (default),
-    but long_tool_result=True when threshold=500 (the configured custom value).
-    """
-    from lingtai_kernel.tool_executor import ToolExecutor
-    from lingtai_kernel.loop_guard import LoopGuard
-    from lingtai_kernel.llm.interface import ToolResultBlock as _TRB
-    from lingtai_kernel.llm.base import ToolCall as _TC
-
-    def _dispatch(tc):
-        return {"output": "X" * 600, "status": "ok"}
-
-    def _make_result(tool_name, content, *, tool_call_id=None):
-        return _TRB(id=tool_call_id, name=tool_name, content=content)
-
-    # With default threshold (3000), 600 chars → long_tool_result=False
-    executor_default = ToolExecutor(
-        dispatch_fn=_dispatch,
-        make_tool_result_fn=_make_result,
-        guard=LoopGuard(),
-        working_dir=tmp_path,
-    )
-    tc = _TC(name="bash", args={}, id="tc-custom-thresh-001")
-    results, _, _ = executor_default.execute([tc])
-    meta = results[0].content["_tool_result_metadata"]
-    assert meta["long_tool_result"] is False, (
-        "default threshold (3000): 600-char result must have long_tool_result=False"
-    )
-
-    # With custom threshold=500, 600 chars → long_tool_result=True
-    executor_custom = ToolExecutor(
-        dispatch_fn=_dispatch,
-        make_tool_result_fn=_make_result,
-        guard=LoopGuard(),
-        working_dir=tmp_path,
-        summarize_notification_threshold=500,
-    )
-    tc2 = _TC(name="bash", args={}, id="tc-custom-thresh-002")
-    results2, _, _ = executor_custom.execute([tc2])
-    meta2 = results2[0].content["_tool_result_metadata"]
-    assert meta2["long_tool_result"] is True, (
-        "custom threshold (500): 600-char result must have long_tool_result=True"
-    )
-    assert meta2["threshold_chars"] == 500
-
-
-def test_hint_disabled_when_threshold_zero(tmp_path):
-    """ToolExecutor with summarize_notification_threshold=0: metadata present but long_tool_result=False."""
-    from lingtai_kernel.tool_executor import ToolExecutor
-    from lingtai_kernel.loop_guard import LoopGuard
-    from lingtai_kernel.llm.interface import ToolResultBlock as _TRB
-    from lingtai_kernel.llm.base import ToolCall as _TC
-
-    def _dispatch(tc):
-        # Use a size within spill cap so result is not spilled (spill manifests are excluded).
-        return {"output": "X" * 5000, "status": "ok"}
-
-    def _make_result(tool_name, content, *, tool_call_id=None):
-        return _TRB(id=tool_call_id, name=tool_name, content=content)
-
-    executor = ToolExecutor(
-        dispatch_fn=_dispatch,
-        make_tool_result_fn=_make_result,
-        guard=LoopGuard(),
-        working_dir=tmp_path,
-        summarize_notification_threshold=0,
-    )
-
-    tc = _TC(name="bash", args={}, id="tc-zero-thresh-001")
-    results, _, _ = executor.execute([tc])
-    content = results[0].content
-    assert "_tool_result_metadata" in content, (
-        "threshold=0 disables long-result hinting but _tool_result_metadata must still be present"
-    )
-    meta = content["_tool_result_metadata"]
-    assert meta["long_tool_result"] is False, (
-        "threshold=0 means long-result hinting is disabled; long_tool_result must be False"
-    )
-    assert meta["threshold_chars"] == 0
-
-
-# ---------------------------------------------------------------------------
-# 18. _tool_result_metadata always present (Jason's PR #430 requirement)
+# 17. _tool_result_metadata always present (Jason's PR #430 requirement), and
+#     long_tool_result honours the configured threshold (default / custom / zero).
+#
+# The custom-threshold and threshold-zero cases below prove the executor uses its
+# *configured* summarize_notification_threshold rather than a hardcoded default,
+# subsuming the earlier standalone "hint_*" tests.
 # ---------------------------------------------------------------------------
 
 
 def test_tool_result_metadata_always_present_for_small_result(tmp_path):
     """Every dict result gets _tool_result_metadata even when below the large-result threshold."""
-    from lingtai_kernel.tool_executor import ToolExecutor
-    from lingtai_kernel.loop_guard import LoopGuard
-    from lingtai_kernel.llm.interface import ToolResultBlock as _TRB
-    from lingtai_kernel.llm.base import ToolCall as _TC
-
-    def _dispatch(tc):
-        return {"output": "tiny result", "status": "ok"}
-
-    def _make_result(tool_name, content, *, tool_call_id=None):
-        return _TRB(id=tool_call_id, name=tool_name, content=content)
-
-    executor = ToolExecutor(
-        dispatch_fn=_dispatch,
-        make_tool_result_fn=_make_result,
-        guard=LoopGuard(),
-        working_dir=tmp_path,
+    content = _run_executor_metadata(
+        tmp_path, output="tiny result", tool_call_id="tc-meta-small-001"
     )
-
-    tc = _TC(name="bash", args={}, id="tc-meta-small-001")
-    results, _, _ = executor.execute([tc], on_result_hook=None)
-
-    content = results[0].content
     assert isinstance(content, dict), "result should be a dict"
     assert "_tool_result_metadata" in content, "_tool_result_metadata must always be present"
     meta = content["_tool_result_metadata"]
@@ -1130,28 +1049,9 @@ def test_tool_result_metadata_always_present_for_small_result(tmp_path):
 
 def test_tool_result_metadata_long_result_has_true_flag(tmp_path):
     """_tool_result_metadata.long_tool_result is True when result exceeds threshold."""
-    from lingtai_kernel.tool_executor import ToolExecutor
-    from lingtai_kernel.loop_guard import LoopGuard
-    from lingtai_kernel.llm.interface import ToolResultBlock as _TRB
-    from lingtai_kernel.llm.base import ToolCall as _TC
-
-    def _dispatch(tc):
-        return {"output": "X" * 5000, "status": "ok"}
-
-    def _make_result(tool_name, content, *, tool_call_id=None):
-        return _TRB(id=tool_call_id, name=tool_name, content=content)
-
-    executor = ToolExecutor(
-        dispatch_fn=_dispatch,
-        make_tool_result_fn=_make_result,
-        guard=LoopGuard(),
-        working_dir=tmp_path,
+    content = _run_executor_metadata(
+        tmp_path, output="X" * 5000, tool_name="read", tool_call_id="tc-meta-large-001"
     )
-
-    tc = _TC(name="read", args={}, id="tc-meta-large-001")
-    results, _, _ = executor.execute([tc], on_result_hook=None)
-
-    content = results[0].content
     assert "_tool_result_metadata" in content, "_tool_result_metadata must always be present"
     meta = content["_tool_result_metadata"]
     assert meta["tool_call_id"] == "tc-meta-large-001"
@@ -1166,42 +1066,21 @@ def test_tool_result_metadata_long_result_has_true_flag(tmp_path):
 
 
 def test_tool_result_metadata_custom_threshold(tmp_path):
-    """_tool_result_metadata reflects the custom threshold and correct long_tool_result flag."""
-    from lingtai_kernel.tool_executor import ToolExecutor
-    from lingtai_kernel.loop_guard import LoopGuard
-    from lingtai_kernel.llm.interface import ToolResultBlock as _TRB
-    from lingtai_kernel.llm.base import ToolCall as _TC
+    """Executor uses its *configured* threshold, not a hardcoded default.
 
-    def _dispatch(tc):
-        return {"output": "X" * 600, "status": "ok"}
-
-    def _make_result(tool_name, content, *, tool_call_id=None):
-        return _TRB(id=tool_call_id, name=tool_name, content=content)
-
-    # With default threshold (3000): 600-char result → long_tool_result: false
-    executor_default = ToolExecutor(
-        dispatch_fn=_dispatch,
-        make_tool_result_fn=_make_result,
-        guard=LoopGuard(),
-        working_dir=tmp_path,
-    )
-    tc = _TC(name="bash", args={}, id="tc-meta-thresh-001")
-    results, _, _ = executor_default.execute([tc])
-    meta = results[0].content["_tool_result_metadata"]
+    A 600-char result is below the default (3000) but above a custom 500 — the
+    metadata's long_tool_result flag and threshold_chars track whichever
+    threshold the executor was built with.  (Subsumes the former test_hint_* pair.)
+    """
+    meta = _run_executor_metadata(
+        tmp_path, output="X" * 600, tool_call_id="tc-meta-thresh-001"
+    )["_tool_result_metadata"]
     assert meta["long_tool_result"] is False
     assert meta["threshold_chars"] == 3000
 
-    # With custom threshold=500: 600-char result → long_tool_result: true
-    executor_custom = ToolExecutor(
-        dispatch_fn=_dispatch,
-        make_tool_result_fn=_make_result,
-        guard=LoopGuard(),
-        working_dir=tmp_path,
-        summarize_notification_threshold=500,
-    )
-    tc2 = _TC(name="bash", args={}, id="tc-meta-thresh-002")
-    results2, _, _ = executor_custom.execute([tc2])
-    meta2 = results2[0].content["_tool_result_metadata"]
+    meta2 = _run_executor_metadata(
+        tmp_path, output="X" * 600, tool_call_id="tc-meta-thresh-002", threshold=500
+    )["_tool_result_metadata"]
     assert meta2["long_tool_result"] is True
     assert meta2["threshold_chars"] == 500
 
@@ -1209,32 +1088,12 @@ def test_tool_result_metadata_custom_threshold(tmp_path):
 def test_tool_result_metadata_threshold_zero_still_present(tmp_path):
     """With threshold=0 (disabled), _tool_result_metadata is still present but long_tool_result=False.
 
-    Use a result large enough to exceed threshold 0 semantically (any non-zero size) but
-    small enough that it is not spilled to a sidecar file (spill manifests are excluded).
+    The 5000-char output is a "would-be" long result, but well within the spill
+    cap so it is not spilled to a sidecar (spill manifests are excluded).
     """
-    from lingtai_kernel.tool_executor import ToolExecutor
-    from lingtai_kernel.loop_guard import LoopGuard
-    from lingtai_kernel.llm.interface import ToolResultBlock as _TRB
-    from lingtai_kernel.llm.base import ToolCall as _TC
-
-    def _dispatch(tc):
-        # Large enough to be a "would-be" long result, but well within the spill cap.
-        return {"output": "X" * 5000, "status": "ok"}
-
-    def _make_result(tool_name, content, *, tool_call_id=None):
-        return _TRB(id=tool_call_id, name=tool_name, content=content)
-
-    executor = ToolExecutor(
-        dispatch_fn=_dispatch,
-        make_tool_result_fn=_make_result,
-        guard=LoopGuard(),
-        working_dir=tmp_path,
-        summarize_notification_threshold=0,
+    content = _run_executor_metadata(
+        tmp_path, output="X" * 5000, tool_call_id="tc-meta-zero-001", threshold=0
     )
-
-    tc = _TC(name="bash", args={}, id="tc-meta-zero-001")
-    results, _, _ = executor.execute([tc])
-    content = results[0].content
     assert "_tool_result_metadata" in content, (
         "threshold=0 disables long-result hinting but metadata itself must still be present"
     )

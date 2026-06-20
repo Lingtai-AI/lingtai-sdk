@@ -6,14 +6,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from lingtai_kernel.base_agent import BaseAgent
+from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
 
-def make_mock_service():
-    svc = MagicMock()
-    svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
-    return svc
 
 
 def test_override_intrinsic_removes_from_dict(tmp_path):

@@ -11,14 +11,9 @@ from unittest.mock import MagicMock
 
 from lingtai.agent import Agent
 from lingtai_kernel.intrinsics import email as email_mod
+from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
 
-def make_mock_service():
-    svc = MagicMock()
-    svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
-    return svc
 
 
 def _make_agent(tmp_path, *, agent_name="alice", admin=None):

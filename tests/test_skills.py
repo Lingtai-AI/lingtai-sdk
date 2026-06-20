@@ -9,14 +9,9 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from lingtai.agent import Agent
+from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
 
-def make_mock_service():
-    svc = MagicMock()
-    svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
-    return svc
 
 
 def _mk_agent(tmp_path: Path, skills_cfg: dict | None = None):

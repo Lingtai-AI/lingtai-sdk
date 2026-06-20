@@ -1047,11 +1047,12 @@ def test_large_result_notification_batch_digest_wording(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Requirement #3: notification text — summarize clears, dismiss cannot bypass
+# Notification text — summarize is the preferred discharge; dismiss is an
+# allowed escape hatch (#430).
 # ---------------------------------------------------------------------------
 
 
-def test_large_result_notification_body_says_dismiss_cannot_bypass(tmp_path):
+def test_large_result_notification_body_prefers_summarize_over_dismiss(tmp_path):
     """Plain large-result notification must mention dismiss and summarize.
     Summarize is the preferred discharge; dismiss is now an escape hatch."""
     agent = _make_base_agent_for_notification(tmp_path)
@@ -1072,8 +1073,8 @@ def test_large_result_notification_body_says_dismiss_cannot_bypass(tmp_path):
     assert "escape hatch" in body or "preferred" in body
 
 
-def test_large_result_spill_notification_body_says_dismiss_cannot_bypass(tmp_path):
-    """Spill large-result notification must carry the same dismiss-cannot-bypass wording."""
+def test_large_result_spill_notification_body_prefers_summarize_over_dismiss(tmp_path):
+    """Spill large-result notification must carry the same prefer-summarize wording."""
     from lingtai_kernel.tool_result_artifacts import ARTIFACT_MARKER
 
     agent = _make_base_agent_for_notification(tmp_path)

@@ -15,9 +15,11 @@ compatibility aliases.  Dismissal is **atomic**:
 
 ``summarize`` is NOT here — it stays a ``system`` action.
 
-#424 semantics (``large_tool_result`` reminders undismissable; only a
-successful ``system(action="summarize")`` clears them) must hold through every
-atomic notification action, including ``force``.
+``large_tool_result`` reminders are dismissable as an escape hatch (#430,
+superseding the original #424 "undismissable" rule): every atomic notification
+action — with or without ``force`` — clears such a reminder and acks its
+``ref_id``.  ``system(action="summarize")`` remains the preferred discharge and
+still auto-clears the matching reminder on success.
 """
 from __future__ import annotations
 
@@ -38,61 +40,13 @@ from lingtai_kernel.notifications import (
     publish,
 )
 
-
-# ---------------------------------------------------------------------------
-# Stub agent — mirrors the one used by test_system_dismiss.py.
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class _StubAgent:
-    _working_dir: Path
-    _logs: list[tuple[str, dict]] = field(default_factory=list)
-    _notification_fp: tuple = ()
-    _pending_notification_meta: str | None = "stale"
-    _pending_notification_fp: tuple | None = (("soul.json", 1, 2),)
-    _system_notification_lock: threading.Lock = field(default_factory=threading.Lock)
-
-    def _log(self, event_type: str, **fields: Any) -> None:
-        self._logs.append((event_type, fields))
-
-
-def _events(agent: _StubAgent, name: str) -> list[dict]:
-    return [fields for event, fields in agent._logs if event == name]
-
-
-def _mark_delivered(agent: _StubAgent) -> None:
-    agent._notification_fp = notification_fingerprint(agent._working_dir)
-
-
-def _publish_large_result_reminder(
-    tmp_path: Path,
-    *,
-    tool_call_id: str = "toolu_big",
-    extra_events: list[dict] | None = None,
-) -> None:
-    tmp_path.mkdir(parents=True, exist_ok=True)
-    events = [
-        {
-            "event_id": "evt_lr",
-            "source": "large_tool_result",
-            "ref_id": f"large_tool_result:{tool_call_id}",
-            "body": "summarize me",
-        }
-    ]
-    if extra_events:
-        events = list(extra_events) + events
-    publish(
-        tmp_path,
-        "system",
-        {
-            "header": f"{len(events)} system notifications",
-            "icon": "🔔",
-            "priority": "normal",
-            "published_at": "2026-06-20T00:00:00Z",
-            "data": {"events": events},
-        },
-    )
+# Shared with test_system_dismiss.py — see tests/_notification_helpers.py.
+from tests._notification_helpers import (
+    StubAgent as _StubAgent,
+    events as _events,
+    mark_delivered as _mark_delivered,
+    publish_large_result_reminder as _publish_large_result_reminder,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -344,46 +298,18 @@ def test_dismiss_ref_missing_ref_id(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# #424: large_tool_result guard via EVERY atomic action, including force.
+# large_tool_result escape hatch (#430): every atomic dismiss action — with or
+# without force — now clears a large_tool_result reminder and acks its ref_id.
+# (Supersedes the original #424 "undismissable" guard.)  The per-action matrix
+# below is the single source of truth; there are no per-action singletons.
 # ---------------------------------------------------------------------------
-
-
-def test_large_result_guard_dismiss_channel(tmp_path: Path) -> None:
-    """large_tool_result reminders can now be dismissed as an escape hatch."""
-    agent = _StubAgent(tmp_path)
-    _publish_large_result_reminder(tmp_path)
-    _mark_delivered(agent)
-
-    res = notif_intrinsic.handle(agent, {"action": "dismiss_channel", "channel": "system"})
-
-    assert res["status"] == "ok"
-    assert "acked_large_result_refs" in res
-    # The event is removed from the channel.
-    notifs = collect_notifications(tmp_path)
-    events = notifs.get("system", {}).get("data", {}).get("events", [])
-    assert not any(ev["source"] == "large_tool_result" for ev in events)
-
-
-def test_large_result_guard_dismiss_channel_force(tmp_path: Path) -> None:
-    """large_tool_result reminders can be dismissed with force — same result."""
-    agent = _StubAgent(tmp_path)
-    _publish_large_result_reminder(tmp_path)
-    _mark_delivered(agent)
-
-    res = notif_intrinsic.handle(
-        agent, {"action": "dismiss_channel", "channel": "system", "force": True}
-    )
-
-    assert res["status"] == "ok"
-    assert "acked_large_result_refs" in res
-    notifs = collect_notifications(tmp_path)
-    events = notifs.get("system", {}).get("data", {}).get("events", [])
-    assert not any(ev["source"] == "large_tool_result" for ev in events)
 
 
 def test_large_result_guard_every_atomic_action(tmp_path: Path) -> None:
     """All atomic actions — channel/event/ref, with or without force — now succeed
-    for large_tool_result reminders (escape hatch behaviour from issue #425)."""
+    for large_tool_result reminders (escape-hatch behaviour from #430): each
+    returns status=ok, reports ``acked_large_result_refs``, and removes the
+    reminder from the channel."""
     cases = [
         {"action": "dismiss_channel", "channel": "system"},
         {"action": "dismiss_channel", "channel": "system", "force": True},

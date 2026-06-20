@@ -15,13 +15,9 @@ Both cases used to be invisible to the heartbeat-only liveness check.
 import json
 import time
 from unittest.mock import MagicMock
+from tests._service_helpers import make_tool_result_mock_service as make_mock_service
 
 
-def make_mock_service():
-    svc = MagicMock()
-    svc.model = "test-model"
-    svc.make_tool_result.return_value = {"role": "tool", "content": "ok"}
-    return svc
 
 
 class TestProgressBookkeeping:

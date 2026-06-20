@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 from lingtai.core.avatar import AvatarManager
 
 import pytest
+from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
 
 def _fake_launch_return(pid: int = 12345):
@@ -145,12 +146,6 @@ class TestRulesHeartbeatWatch:
         assert (wd / ".rules").is_file()
 
 
-def make_mock_service():
-    svc = MagicMock()
-    svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
-    return svc
 
 
 class TestAvatarRulesAction:

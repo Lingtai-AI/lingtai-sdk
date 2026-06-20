@@ -1,13 +1,9 @@
 """Tests for heartbeat — always-on agent health monitor with AED timeout."""
 import time
 from unittest.mock import MagicMock
+from tests._service_helpers import make_tool_result_mock_service as make_mock_service
 
 
-def make_mock_service():
-    svc = MagicMock()
-    svc.model = "test-model"
-    svc.make_tool_result.return_value = {"role": "tool", "content": "ok"}
-    return svc
 
 
 class TestHeartbeatInit:

@@ -7,14 +7,9 @@ import pytest
 
 from lingtai.core.bash import BashManager
 from lingtai.core.avatar import AvatarManager, setup as setup_avatar
+from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
 
-def make_mock_service():
-    svc = MagicMock()
-    svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
-    return svc
 
 
 @pytest.fixture

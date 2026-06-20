@@ -13,14 +13,9 @@ import pytest
 
 from lingtai_kernel.base_agent import BaseAgent
 from lingtai_kernel.config import AgentConfig
+from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
 
-def make_mock_service():
-    svc = MagicMock()
-    svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
-    return svc
 
 
 def _git_enabled_config() -> AgentConfig:

@@ -22,14 +22,9 @@ from unittest.mock import MagicMock
 from lingtai.agent import Agent
 from lingtai_kernel.config import AgentConfig
 from lingtai_kernel.services.mail import FilesystemMailService
+from tests._service_helpers import make_gemini_mock_service as _make_mock_service
 
 
-def _make_mock_service():
-    svc = MagicMock()
-    svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
-    return svc
 
 
 def _setup_agent_dir(path: Path) -> None:

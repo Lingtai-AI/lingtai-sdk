@@ -20,6 +20,7 @@ from lingtai.agent import Agent
 from lingtai_kernel.intrinsics.psyche._session_journal import (
     validate_session_journal_path,
 )
+from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
 
 # ---------------------------------------------------------------------------
@@ -27,12 +28,6 @@ from lingtai_kernel.intrinsics.psyche._session_journal import (
 # ---------------------------------------------------------------------------
 
 
-def make_mock_service():
-    svc = MagicMock()
-    svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
-    return svc
 
 
 VALID_JOURNAL = """\

@@ -21,14 +21,9 @@ from lingtai.core.mcp import (
     read_registry,
     validate_record,
 )
+from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
 
-def make_mock_service():
-    svc = MagicMock()
-    svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
-    return svc
 
 
 def _mk_agent(tmp_path: Path, *, addons=None, capabilities=None):

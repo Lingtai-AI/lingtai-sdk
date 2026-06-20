@@ -13,6 +13,7 @@ from lingtai_kernel.services.logging import (
     query_sqlite_event_index,
     rebuild_sqlite_event_index,
 )
+from tests._service_helpers import make_tool_result_mock_service as make_mock_service
 
 
 class TestJSONLLoggingService:
@@ -118,11 +119,6 @@ from lingtai_kernel.llm import ToolCall
 from lingtai_kernel.loop_guard import LoopGuard
 
 
-def make_mock_service():
-    svc = MagicMock()
-    svc.model = "test-model"
-    svc.make_tool_result.return_value = {"role": "tool", "content": "ok"}
-    return svc
 
 
 class TestBaseAgentLoggingIntegration:

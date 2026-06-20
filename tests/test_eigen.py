@@ -6,40 +6,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from lingtai_kernel.base_agent import BaseAgent
-
-
-def make_mock_service():
-    svc = MagicMock()
-    svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
-    return svc
-
-
-_VALID_SESSION_JOURNAL = """\
----
-name: 2026-06-19-molt-1-test
-description: A test session journal entry for the molt gate.
-date: 2026-06-19
-molt_count: 1
-type: session-journal
----
-
-## What this segment was about
-Testing.
-
-## Accomplishments
-Wrote a valid session journal.
-"""
-
-
-def _write_session_journal(agent, rel="knowledge/session-journal/2026-06-19-molt-1-test/KNOWLEDGE.md"):
-    """Write a valid session-journal entry so an agent-initiated molt passes
-    the session-journal gate (issue #350). Returns the workdir-relative path."""
-    path = agent._working_dir / rel
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(_VALID_SESSION_JOURNAL, encoding="utf-8")
-    return rel
+from tests._service_helpers import make_gemini_mock_service as make_mock_service
+from tests._molt_helpers import write_session_journal as _write_session_journal
 
 
 # ---------------------------------------------------------------------------

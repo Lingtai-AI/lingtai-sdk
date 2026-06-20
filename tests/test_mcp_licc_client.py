@@ -38,6 +38,7 @@ from lingtai.core.mcp.inbox import (
     _scan_once,
     validate_event,
 )
+from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
 
 # ---------------------------------------------------------------------------
@@ -62,12 +63,6 @@ def _read_event(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def make_mock_service():
-    svc = MagicMock()
-    svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
-    return svc
 
 
 def _mk_agent(tmp_path: Path):

@@ -8,14 +8,9 @@ import pytest
 from lingtai.agent import Agent
 from lingtai.capabilities.web_search import WebSearchManager
 from lingtai.services.websearch import SearchResult, SearchService, create_search_service
+from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
 
-def make_mock_service():
-    svc = MagicMock()
-    svc.get_adapter.return_value = MagicMock()
-    svc.provider = "gemini"
-    svc.model = "gemini-test"
-    return svc
 
 
 def test_web_search_added_by_capability(tmp_path):
