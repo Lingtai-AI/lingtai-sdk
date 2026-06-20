@@ -13,6 +13,7 @@ parameter``). These tests assert the wire kwargs the session sends:
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -20,6 +21,7 @@ from lingtai.llm.openai.adapter import (
     CodexOpenAIAdapter,
     CodexResponsesSession,
     OpenAIResponsesSession,
+    _lingtai_user_agent,
 )
 from lingtai_kernel.llm.base import FunctionSchema
 
@@ -118,10 +120,24 @@ def test_codex_request_sends_honest_lingtai_identity_headers():
 
     headers = session._client.responses.kwargs[0]["extra_headers"]
     assert headers["originator"] == "lingtai"
-    assert headers["User-Agent"].startswith("LingTai")
+    # Normal case resolves the installed package version: ``LingTai/<version>``.
+    ua = headers["User-Agent"]
+    assert re.fullmatch(r"LingTai/\d+\.\d+.*", ua), f"unexpected User-Agent: {ua!r}"
     # We do NOT impersonate the official Codex CLI.
-    assert "codex_exec" not in headers.get("User-Agent", "")
+    assert "codex_exec" not in ua
     assert headers["originator"] != "codex_exec"
+
+
+def test_lingtai_user_agent_falls_back_when_version_unresolvable(monkeypatch):
+    """If the package version can't be resolved, the UA degrades to a bare
+    ``LingTai`` token rather than raising (#436)."""
+    import importlib.metadata as md
+
+    def _boom(_name):
+        raise md.PackageNotFoundError("lingtai")
+
+    monkeypatch.setattr(md, "version", _boom)
+    assert _lingtai_user_agent() == "LingTai"
 
 
 def test_codex_request_omits_prompt_cache_retention():
