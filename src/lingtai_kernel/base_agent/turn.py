@@ -921,6 +921,15 @@ def _handle_request(agent, msg: Message) -> None:
     except Exception:
         pass
 
+    # Rescan live chat history for large unsummarized tool results that were
+    # already in context before this turn (e.g. after a refresh, notification
+    # dismissed, or history migration).  Uses skip_if_ref_id_exists so no
+    # duplicate notifications are published for results already tracked.
+    try:
+        agent._rescan_large_tool_results()
+    except Exception:
+        pass
+
     prefix = render_meta(agent, meta)
     if prefix:
         content = f"{prefix}\n\n{content}"
@@ -1083,6 +1092,11 @@ def _handle_tc_wake(agent, msg: Message) -> None:
         # _handle_request; delivery happens at the next IDLE boundary.
         try:
             agent._sync_notifications()
+        except Exception:
+            pass
+        # Rescan for large unsummarized results in chat history.
+        try:
+            agent._rescan_large_tool_results()
         except Exception:
             pass
     except Exception as e:
@@ -1462,6 +1476,15 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         # _handle_request; delivery happens at the next IDLE boundary.
         try:
             agent._sync_notifications()
+        except Exception:
+            pass
+        # Keep summarize reminders in sync across tool-loop LLM rounds too.
+        # New tool results are handled by the executor hook, but old live
+        # results (or dismissed reminders for still-unsummarized results) must
+        # be rediscovered after each continuation round, not only at external
+        # request / notification-wake boundaries.
+        try:
+            agent._rescan_large_tool_results()
         except Exception:
             pass
 

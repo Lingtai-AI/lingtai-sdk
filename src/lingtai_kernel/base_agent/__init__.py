@@ -825,13 +825,30 @@ class BaseAgent:
         from .messaging import _on_normal_mail
         _on_normal_mail(self, payload)
 
-    def _enqueue_system_notification(self, *, source: str, ref_id: str, body: str) -> str:
+    def _enqueue_system_notification(
+        self,
+        *,
+        source: str,
+        ref_id: str,
+        body: str,
+        skip_if_ref_id_exists: bool = False,
+    ) -> str:
         from .messaging import _enqueue_system_notification
-        return _enqueue_system_notification(self, source=source, ref_id=ref_id, body=body)
+        return _enqueue_system_notification(
+            self,
+            source=source,
+            ref_id=ref_id,
+            body=body,
+            skip_if_ref_id_exists=skip_if_ref_id_exists,
+        )
 
     def notify(self, sender: str, text: str) -> None:
         from .messaging import _notify
         _notify(self, sender, text)
+
+    def _rescan_large_tool_results(self) -> int:
+        from .messaging import _rescan_large_tool_results
+        return _rescan_large_tool_results(self)
 
     # ------------------------------------------------------------------
     # Soul (pass-throughs to soul_flow.py)

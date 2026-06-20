@@ -116,7 +116,14 @@ def _rerender_unread_digest(agent) -> str | None:
     return "email"
 
 
-def _enqueue_system_notification(agent, *, source: str, ref_id: str, body: str) -> str:
+def _enqueue_system_notification(
+    agent,
+    *,
+    source: str,
+    ref_id: str,
+    body: str,
+    skip_if_ref_id_exists: bool = False,
+) -> str:
     """Append a system event to ``.notification/system.json``.
 
     The system intrinsic owns this single file and multiplexes its
@@ -136,11 +143,16 @@ def _enqueue_system_notification(agent, *, source: str, ref_id: str, body: str) 
         source: "email", "email.bounce", "daemon", "mcp.<name>", etc.
         ref_id: External reference (mail_id for email arrival, etc.).
         body: The localized prose for the agent to read.
+        skip_if_ref_id_exists: When True, skip publishing if an event with
+            the same ref_id already exists in system.json.  Used by the
+            large-result rescan path to avoid duplicate notifications.
+            Returns "" (empty string) when skipped.
 
     Returns:
         An identifier for the event (for logging and back-compat with
         callers that expected a notif_id; not actually used for any
-        per-id lifecycle under the new model).
+        per-id lifecycle under the new model).  Returns "" when skipped
+        due to skip_if_ref_id_exists.
     """
     import secrets
     from datetime import datetime, timezone
@@ -155,6 +167,11 @@ def _enqueue_system_notification(agent, *, source: str, ref_id: str, body: str) 
     with lock:
         current = collect_notifications(agent._working_dir).get("system", {})
         events = list(current.get("data", {}).get("events", []))
+
+        if skip_if_ref_id_exists:
+            for ev in events:
+                if ev.get("ref_id") == ref_id:
+                    return ""
 
         events.append({
             "event_id": event_id,
@@ -195,6 +212,172 @@ def _enqueue_system_notification(agent, *, source: str, ref_id: str, body: str) 
         )
 
     return event_id
+
+
+def _rescan_large_tool_results(agent) -> int:
+    """Scan live chat history for large unsummarized tool results and notify.
+
+    Called at every turn/round boundary so existing oversized
+    ``ToolResultBlock``s in context — blocks that arrived before a refresh,
+    after a notification was dismissed, or from a history migration — can
+    trigger a ``large_tool_result`` system notification even though no new
+    tool execution has happened.
+
+    Skips:
+      - threshold <= 0 (disabled)
+      - ``daemon_tool_result`` tool names (child-daemon relays)
+      - blocks already summarized (``artifact == SUMMARIZE_MARKER``)
+      - synthesized blocks (``block.synthesized == True``)
+      - spill manifests whose ``original_char_count`` is missing or <= threshold
+
+    Dedup:
+      - Uses ``skip_if_ref_id_exists=True`` in ``_enqueue_system_notification``
+        so an already-present notification (same ``ref_id``) is never duplicated.
+      - If the notification was previously dismissed (no longer in system.json),
+        the rescan will re-emit it on the next turn — by design (requirement §3).
+
+    Returns the count of notifications published (0 when nothing fired or
+    threshold is disabled).
+    """
+    from ..llm.interface import ToolResultBlock
+    from ..intrinsics.system.summarize import _is_already_summarized
+    from ..tool_result_artifacts import is_spill_manifest
+
+    threshold = getattr(agent, "_summarize_notification_threshold", 5000)
+    if threshold <= 0:
+        return 0
+
+    chat = getattr(agent, "_chat", None)
+    if chat is None:
+        return 0
+    iface = getattr(chat, "interface", None)
+    if iface is None:
+        return 0
+    entries = getattr(iface, "_entries", [])
+
+    published = 0
+    for entry in entries:
+        if entry.role != "user":
+            continue
+        for block in entry.content:
+            if not isinstance(block, ToolResultBlock):
+                continue
+
+            # Skip synthesized heal / notification placeholder blocks.
+            if getattr(block, "synthesized", False):
+                continue
+
+            # Exclude daemon child result relays.
+            if block.name == "daemon_tool_result":
+                continue
+
+            # Skip already-summarized blocks.
+            if _is_already_summarized(block.content):
+                continue
+
+            content = block.content
+            tool_call_id = block.id or "<unknown>"
+
+            # Determine effective length — mirrors _maybe_notify_large_tool_result.
+            is_spill = is_spill_manifest(content)
+            if is_spill:
+                original_char_count = (
+                    content.get("original_char_count")
+                    if isinstance(content, dict)
+                    else None
+                )
+                if not isinstance(original_char_count, int) or original_char_count <= threshold:
+                    continue
+                result_len = original_char_count
+                spill_path = content.get("spill_path") if isinstance(content, dict) else None
+                preview_text = None
+            else:
+                import json as _json
+                if isinstance(content, str):
+                    result_len = len(content)
+                    preview_text = content[:200]
+                else:
+                    try:
+                        serialized = _json.dumps(content, ensure_ascii=False, default=str)
+                    except (TypeError, ValueError):
+                        serialized = str(content)
+                    result_len = len(serialized)
+                    preview_text = serialized[:200]
+
+                if result_len <= threshold:
+                    continue
+                spill_path = None
+
+            # Build notification body — same templates as _maybe_notify_large_tool_result.
+            if is_spill and spill_path:
+                body = (
+                    f"[large tool result — spilled] tool_name={block.name!r} tool_call_id={tool_call_id}\n"
+                    f"Original result length: {result_len} chars "
+                    f"(current summarize notification threshold: {threshold} chars).\n"
+                    f"The result was too large for the context window and was written to: {spill_path!r}\n"
+                    f"Read the sidecar file to access the full content, then call:\n"
+                    f"  system(action=\"summarize\", items=[{{\"tool_call_id\": \"{tool_call_id}\", \"summary\": \"<your summary>\"}}])\n"
+                    f"to replace the context-visible spill manifest with your own summary.\n"
+                    f"Treat this notification as a prompt to act, not just FYI: if the result still matters, digest it now and summarize before continuing deep work.\n"
+                    f"If you intentionally need the large payload to remain visible for a while, raise or disable the threshold explicitly and restore it later; otherwise the reminder will return until the result is summarized.\n"
+                    f"The full original remains in the sidecar file and in events.jsonl by tool_call_id."
+                )
+            elif is_spill:
+                body = (
+                    f"[large tool result — spilled] tool_name={block.name!r} tool_call_id={tool_call_id}\n"
+                    f"Original result length: {result_len} chars "
+                    f"(current summarize notification threshold: {threshold} chars).\n"
+                    f"The result was spilled to a sidecar file (path not available). "
+                    f"Check the spill manifest in your conversation history for the path.\n"
+                    f"After reading the sidecar, call:\n"
+                    f"  system(action=\"summarize\", items=[{{\"tool_call_id\": \"{tool_call_id}\", \"summary\": \"<your summary>\"}}])\n"
+                    f"to replace the context-visible spill manifest with your own summary.\n"
+                    f"Treat this notification as a prompt to act, not just FYI: if the result still matters, digest it now and summarize before continuing deep work.\n"
+                    f"If you intentionally need the large payload to remain visible for a while, raise or disable the threshold explicitly and restore it later; otherwise the reminder will return until the result is summarized."
+                )
+            else:
+                body = (
+                    f"[large tool result] tool_name={block.name!r} tool_call_id={tool_call_id}\n"
+                    f"Result length: {result_len} chars "
+                    f"(current summarize notification threshold: {threshold} chars).\n"
+                    f"Preview (first 200 chars): {preview_text!r}\n\n"
+                    f"After you have digested this result, you may call:\n"
+                    f"  system(action=\"summarize\", items=[{{\"tool_call_id\": \"{tool_call_id}\", \"summary\": \"<your summary>\"}}])\n"
+                    f"to replace the context-visible payload with your own summary.\n"
+                    f"Treat this notification as a prompt to act, not just FYI: if the result still matters, digest it now and summarize before continuing deep work.\n"
+                    f"If you intentionally need the large payload to remain visible for a while, raise or disable the threshold explicitly and restore it later; otherwise the reminder will return until the result is summarized.\n"
+                    f"The full original remains retrievable from events.jsonl by tool_call_id."
+                )
+
+            try:
+                enqueue_fn = getattr(agent, "_enqueue_system_notification", None)
+                if enqueue_fn is None:
+                    continue
+                event_id = enqueue_fn(
+                    source="large_tool_result",
+                    ref_id=f"large_tool_result:{tool_call_id}",
+                    body=body,
+                    skip_if_ref_id_exists=True,
+                )
+                if event_id:
+                    agent._log(
+                        "large_tool_result_rescan_notification_published",
+                        tool_name=block.name,
+                        tool_call_id=tool_call_id,
+                        result_len=result_len,
+                        threshold=threshold,
+                        is_spill=is_spill,
+                    )
+                    published += 1
+            except Exception as exc:
+                agent._log(
+                    "large_tool_result_rescan_notification_failed",
+                    tool_name=block.name,
+                    tool_call_id=tool_call_id,
+                    error=str(exc),
+                )
+
+    return published
 
 
 def _notify(agent, sender: str, text: str) -> None:
