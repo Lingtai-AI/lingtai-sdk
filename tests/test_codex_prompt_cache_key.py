@@ -128,6 +128,25 @@ def test_codex_request_sends_honest_lingtai_identity_headers():
     assert headers["originator"] != "codex_exec"
 
 
+def test_codex_caller_headers_override_identity_headers():
+    """Caller-supplied ``extra_headers`` override the honest identity defaults
+    (identity headers are the base layer; caller wins). Audit gap (#436/#437)."""
+    session = CodexResponsesSession(
+        client=FakeClient([_completed()]),
+        model="gpt-5.5",
+        instructions="system",
+        tools=None,
+        tool_choice=None,
+        extra_kwargs={"extra_headers": {"originator": "caller", "User-Agent": "Caller/1"}},
+    )
+
+    session.send("hi")
+
+    headers = session._client.responses.kwargs[0]["extra_headers"]
+    assert headers["originator"] == "caller"
+    assert headers["User-Agent"] == "Caller/1"
+
+
 def test_lingtai_user_agent_falls_back_when_version_unresolvable(monkeypatch):
     """If the package version can't be resolved, the UA degrades to a bare
     ``LingTai`` token rather than raising (#436)."""
