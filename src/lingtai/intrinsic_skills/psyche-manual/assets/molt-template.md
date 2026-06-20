@@ -41,15 +41,19 @@ Fill every section. Write `None` rather than omitting a section. This template i
 
 ## Pre-molt verification checklist
 
-Before you call `psyche(object="context", action="molt", ...)`, verify:
+Before you call `psyche(object="context", action="molt", summary=..., session_journal_path=...)`, verify:
 
 - The just-finished session segment is recorded as a session-journal child
   (your molt history) — sub-knowledge under the routing parent
   `knowledge/session-journal/KNOWLEDGE.md`, at
-  `knowledge/session-journal/<YYYY-MM-DD>-molt-<molt-count>-<slug>/`, written
-  from `assets/session-journal-entry-template.md`, before the summary. It is NOT
-  a top-level knowledge entry. The parent index has a new one-line, relative-path
-  hook for it, and the summary points at the child's path.
+  `knowledge/session-journal/<YYYY-MM-DD>-molt-<molt-count>-<slug>/KNOWLEDGE.md`,
+  written from `assets/session-journal-entry-template.md`, before the summary. It
+  is NOT a top-level knowledge entry. **Its frontmatter carries the
+  `type: session-journal` marker and its path is the required
+  `session_journal_path` argument — the kernel validates it and refuses the molt
+  (before shedding any context) if it is missing, mislocated, or unmarked.** The
+  parent index has a new one-line, relative-path hook for it, and the summary
+  points at the child's path.
 - Pad, lingtai/character, knowledge, skills, and session journal were updated where needed before writing the summary.
 - Every outstanding task has an action checklist entry.
 - Every action names who/where and what exact content or command is needed.

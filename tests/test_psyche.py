@@ -22,6 +22,32 @@ def _call(agent, args: dict) -> dict:
     return agent._intrinsics["psyche"](args)
 
 
+_VALID_JOURNAL = """\
+---
+name: 2026-06-19-molt-1-test
+description: A test session journal entry for the molt gate.
+date: 2026-06-19
+molt_count: 1
+type: session-journal
+---
+
+## What this segment was about
+Testing.
+
+## Accomplishments
+Wrote a valid session journal.
+"""
+
+
+def _write_session_journal(agent, rel="knowledge/session-journal/2026-06-19-molt-1-test/KNOWLEDGE.md"):
+    """Write a valid session-journal entry so an agent-initiated molt passes
+    the session-journal gate (issue #350). Returns the workdir-relative path."""
+    path = agent._working_dir / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_VALID_JOURNAL, encoding="utf-8")
+    return rel
+
+
 # ---------------------------------------------------------------------------
 # Setup / registration
 # ---------------------------------------------------------------------------
@@ -248,13 +274,17 @@ def test_molt_returns_faint_memory(tmp_path):
         agent._session._chat.interface.add_user_message("Hello")
         agent._session._chat.interface.add_assistant_message([TextBlock(text="Hi there.")])
 
+        journal_path = _write_session_journal(agent)
         molt_wire_id = "toolu_test_molt_001"
         molt_summary = "Key findings: X=42. Current task: analyze dataset Z."
         agent._session._chat.interface.add_assistant_message([
             ToolCallBlock(
                 id=molt_wire_id,
                 name="psyche",
-                args={"object": "context", "action": "molt", "summary": molt_summary},
+                args={
+                    "object": "context", "action": "molt", "summary": molt_summary,
+                    "session_journal_path": journal_path,
+                },
             ),
         ])
 
@@ -263,6 +293,7 @@ def test_molt_returns_faint_memory(tmp_path):
             "action": "molt",
             "summary": molt_summary,
             "_tc_id": molt_wire_id,
+            "session_journal_path": journal_path,
         })
 
         assert result["status"] == "ok"
@@ -344,6 +375,16 @@ def test_psyche_schema_has_files_field():
     assert "files" in SCHEMA["properties"]
 
 
+def test_psyche_schema_has_session_journal_path_field():
+    """Issue #350: molt requires a structured session_journal_path arg."""
+    from lingtai_kernel.intrinsics.psyche import get_schema
+    SCHEMA = get_schema("en")
+    prop = SCHEMA["properties"].get("session_journal_path")
+    assert prop is not None
+    assert prop["type"] == "string"
+    assert prop["description"]
+
+
 # ---------------------------------------------------------------------------
 # Error handling
 # ---------------------------------------------------------------------------
@@ -408,13 +449,17 @@ def test_molt_writes_summary_file_for_agent_path(tmp_path):
         agent._session._chat.interface.add_user_message("Hello")
         agent._session._chat.interface.add_assistant_message([TextBlock(text="Hi.")])
 
+        journal_path = _write_session_journal(agent)
         molt_id = "toolu_test_summary_001"
         molt_summary = "Worked on dataset Z analysis. Found anomaly in column foo."
         agent._session._chat.interface.add_assistant_message([
             ToolCallBlock(
                 id=molt_id,
                 name="psyche",
-                args={"object": "context", "action": "molt", "summary": molt_summary},
+                args={
+                    "object": "context", "action": "molt", "summary": molt_summary,
+                    "session_journal_path": journal_path,
+                },
             ),
         ])
 
@@ -423,6 +468,7 @@ def test_molt_writes_summary_file_for_agent_path(tmp_path):
             "action": "molt",
             "summary": molt_summary,
             "_tc_id": molt_id,
+            "session_journal_path": journal_path,
         })
 
         assert result["status"] == "ok"
@@ -505,11 +551,15 @@ def test_summary_write_failure_does_not_block_molt(tmp_path, monkeypatch):
         agent._session._chat.interface.add_user_message("Hello")
         agent._session._chat.interface.add_assistant_message([TextBlock(text="Hi.")])
 
+        journal_path = _write_session_journal(agent)
         molt_id = "toolu_test_failguard_001"
         agent._session._chat.interface.add_assistant_message([
             ToolCallBlock(
                 id=molt_id, name="psyche",
-                args={"object": "context", "action": "molt", "summary": "test"},
+                args={
+                    "object": "context", "action": "molt", "summary": "test",
+                    "session_journal_path": journal_path,
+                },
             ),
         ])
 
@@ -518,6 +568,7 @@ def test_summary_write_failure_does_not_block_molt(tmp_path, monkeypatch):
             "action": "molt",
             "summary": "test",
             "_tc_id": molt_id,
+            "session_journal_path": journal_path,
         })
 
         # Molt succeeded

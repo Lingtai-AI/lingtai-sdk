@@ -23,6 +23,7 @@ def _write_molt_summary(
     molt_count: int,
     before_tokens: int,
     after_tokens: int,
+    session_journal_path: str | None = None,
 ) -> Path | None:
     """Persist the molt summary to system/summaries/ as a durable retrospective.
 
@@ -51,12 +52,18 @@ def _write_molt_summary(
         created_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         agent_name = getattr(agent, "agent_name", None) or ""
 
+        journal_line = (
+            f"session_journal_path: {session_journal_path}\n"
+            if session_journal_path
+            else ""
+        )
         frontmatter = (
             "---\n"
             f"molt_count: {molt_count}\n"
             f"created_at: {created_at}\n"
             f"source: {source}\n"
             f"agent_name: {agent_name}\n"
+            f"{journal_line}"
             f"before_tokens: {before_tokens}\n"
             f"after_tokens: {after_tokens}\n"
             f"tokens_shed: {max(0, before_tokens - after_tokens)}\n"

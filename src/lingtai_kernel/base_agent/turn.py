@@ -783,9 +783,11 @@ def _handle_message(agent, msg: Message) -> None:
 _MOLT_WARNING_GENTLE = (
     "[system] Context at {pressure} — consider molt. See 'Performing a Molt' "
     "in your procedures for the recipe (tend pad / lingtai / knowledge / "
-    "skills / session journal, then `psyche(object=context, action=molt, "
-    "summary=...)`). Molt is yours to perform — do it deliberately while "
-    "context is still cheap."
+    "skills, write the session-journal entry, then `psyche(object=context, "
+    "action=molt, summary=..., session_journal_path=...)`). The journal path "
+    "is required — molt is refused before any context is shed without a valid "
+    "one. Molt is yours to perform — do it deliberately while context is still "
+    "cheap."
 )
 
 _MOLT_WARNING_URGENT = (
@@ -795,9 +797,10 @@ _MOLT_WARNING_URGENT = (
     "the request outright — at which point the kernel's overflow recovery "
     "kicks in and silently trims history to retry, which can discard data "
     "you would have wanted to keep. Wrap up the current sub-step if you "
-    "must, then tend the stores (pad / lingtai / knowledge / skills / "
-    "session journal) and call `psyche(object=context, action=molt, "
-    "summary=...)`. The kernel will not molt you — this is yours to do, "
+    "must, then tend the stores (pad / lingtai / knowledge / skills), write "
+    "the session-journal entry, and call `psyche(object=context, action=molt, "
+    "summary=..., session_journal_path=...)` — the journal path is required or "
+    "the molt is refused. The kernel will not molt you — this is yours to do, "
     "and the longer you wait the more cramped the molt becomes. See "
     "'Performing a Molt' in your procedures."
 )

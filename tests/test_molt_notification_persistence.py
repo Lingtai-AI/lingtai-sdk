@@ -13,6 +13,30 @@ import json
 from unittest.mock import MagicMock, patch
 
 
+_VALID_SESSION_JOURNAL = """\
+---
+name: 2026-06-19-molt-1-test
+description: A test session journal entry for the molt gate.
+date: 2026-06-19
+molt_count: 1
+type: session-journal
+---
+
+## What this segment was about
+Testing.
+
+## Accomplishments
+Wrote a valid session journal.
+"""
+
+
+def _write_session_journal(agent, rel="knowledge/session-journal/2026-06-19-molt-1-test/KNOWLEDGE.md"):
+    path = agent._working_dir / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_VALID_SESSION_JOURNAL, encoding="utf-8")
+    return rel
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -134,9 +158,11 @@ class TestNotificationPersistenceAgentMolt:
             mock_entry.content = [tc_block]
             mock_interface.entries = [mock_entry]
 
+            journal_path = _write_session_journal(agent)
             result = _context_molt(agent, {
                 "summary": "test summary for molt",
                 "_tc_id": tc_id,
+                "session_journal_path": journal_path,
             })
 
             # Molt should succeed
@@ -193,9 +219,11 @@ class TestNotificationPersistenceAgentMolt:
             mock_entry.content = [tc_block]
             mock_interface.entries = [mock_entry]
 
+            journal_path = _write_session_journal(agent)
             result = _context_molt(agent, {
                 "summary": "multi-file test",
                 "_tc_id": tc_id,
+                "session_journal_path": journal_path,
             })
 
             assert result.get("status") == "ok"
@@ -311,9 +339,11 @@ class TestNotificationTrackingStateAfterMolt:
             mock_entry.content = [tc_block]
             mock_interface.entries = [mock_entry]
 
+            journal_path = _write_session_journal(agent)
             result = _context_molt(agent, {
                 "summary": "tracking test",
                 "_tc_id": tc_id,
+                "session_journal_path": journal_path,
             })
 
             assert result.get("status") == "ok"

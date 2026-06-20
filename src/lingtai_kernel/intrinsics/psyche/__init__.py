@@ -79,6 +79,10 @@ def get_schema(lang: str = "en") -> dict:
                 "type": "integer",
                 "description": t(lang, "psyche.keep_last_description"),
             },
+            "session_journal_path": {
+                "type": "string",
+                "description": t(lang, "psyche.session_journal_path_description"),
+            },
         },
         "required": ["object", "action"],
     }

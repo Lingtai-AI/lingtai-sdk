@@ -20,12 +20,21 @@ parent index at `knowledge/session-journal/KNOWLEDGE.md`.
 The frontmatter below is the on-disk format; fill every section, writing `None`
 rather than omitting one.
 
+> **Required marker (the molt gate):** the frontmatter **must** include
+> `type: session-journal` (or, equivalently, `session_journal: true`). The
+> kernel molt gate rejects the molt unless this marker is present, the file
+> lives at `knowledge/session-journal/<entry>/KNOWLEDGE.md` (a per-segment
+> sub-entry, not the parent index), exists, is non-empty UTF-8, and has valid
+> YAML frontmatter with `name` and `description`. You pass this file's path to
+> `psyche(context, molt, session_journal_path=...)`.
+
 ```markdown
 ---
 name: <YYYY-MM-DD>-molt-<molt-count>-<slug>
 description: One-sentence hook — what this session segment did. Used in the parent index line.
 date: <YYYY-MM-DD>
 molt_count: <current molt count, before calling psyche(context, molt)>
+type: session-journal
 ---
 
 ## What this segment was about

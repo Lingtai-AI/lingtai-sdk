@@ -16,6 +16,32 @@ def make_mock_service():
     return svc
 
 
+_VALID_SESSION_JOURNAL = """\
+---
+name: 2026-06-19-molt-1-test
+description: A test session journal entry for the molt gate.
+date: 2026-06-19
+molt_count: 1
+type: session-journal
+---
+
+## What this segment was about
+Testing.
+
+## Accomplishments
+Wrote a valid session journal.
+"""
+
+
+def _write_session_journal(agent, rel="knowledge/session-journal/2026-06-19-molt-1-test/KNOWLEDGE.md"):
+    """Write a valid session-journal entry so an agent-initiated molt passes
+    the session-journal gate (issue #350). Returns the workdir-relative path."""
+    path = agent._working_dir / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_VALID_SESSION_JOURNAL, encoding="utf-8")
+    return rel
+
+
 # ---------------------------------------------------------------------------
 # Pad edit
 # ---------------------------------------------------------------------------
@@ -125,13 +151,17 @@ def test_psyche_molt_uses_summary(tmp_path):
         # in the live interface before eigen runs (the wire layer records
         # assistant tool_calls before dispatching). _context_molt locates
         # this block by tc.id and replays it into the fresh session.
+        journal_path = _write_session_journal(agent)
         molt_wire_id = "toolu_test_molt_uses_summary"
         molt_summary = "Key finding: X=42. Task: analyze Y."
         agent._session._chat.interface.add_assistant_message([
             ToolCallBlock(
                 id=molt_wire_id,
                 name="psyche",
-                args={"object": "context", "action": "molt", "summary": molt_summary},
+                args={
+                    "object": "context", "action": "molt", "summary": molt_summary,
+                    "session_journal_path": journal_path,
+                },
             ),
         ])
 
@@ -140,6 +170,7 @@ def test_psyche_molt_uses_summary(tmp_path):
             "action": "molt",
             "summary": molt_summary,
             "_tc_id": molt_wire_id,
+            "session_journal_path": journal_path,
         })
         assert result["status"] == "ok"
         # The summary now lives in the replayed ToolCallBlock's args, not
@@ -351,18 +382,23 @@ def test_snapshot_written_on_agent_molt(tmp_path):
         iface.add_assistant_message([TextBlock(text="Hi.")])
 
         # The molt's own tool_call lives in the tail entry pre-molt.
+        journal_path = _write_session_journal(agent)
         molt_id = "toolu_test_snapshot_agent"
         molt_summary = "Briefing: completed task X, next is Y."
         iface.add_assistant_message([
             ToolCallBlock(
                 id=molt_id, name="psyche",
-                args={"object": "context", "action": "molt", "summary": molt_summary},
+                args={
+                    "object": "context", "action": "molt", "summary": molt_summary,
+                    "session_journal_path": journal_path,
+                },
             ),
         ])
 
         result = agent._intrinsics["psyche"]({
             "object": "context", "action": "molt",
             "summary": molt_summary, "_tc_id": molt_id,
+            "session_journal_path": journal_path,
         })
         assert result["status"] == "ok"
 

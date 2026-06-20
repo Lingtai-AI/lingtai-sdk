@@ -73,7 +73,7 @@ line per sub-entry: date, slug, one-sentence hook, and the child's *relative* pa
 Never let narrative leak into the parent — if a line grows past its hook, the
 detail belongs in the child.
 
-**The sub-entry `<YYYY-MM-DD>-molt-<molt-count>-<slug>/KNOWLEDGE.md` is the substance** — write it as the molt-history record of the segment, *before* you molt. Use `assets/session-journal-entry-template.md` from this skill directory for the frontmatter (including the `molt_count` field) and section layout. It is a journal, not a transcript — capture, in roughly this shape:
+**The sub-entry `<YYYY-MM-DD>-molt-<molt-count>-<slug>/KNOWLEDGE.md` is the substance** — write it as the molt-history record of the segment, *before* you molt. Use `assets/session-journal-entry-template.md` from this skill directory for the frontmatter (including the `molt_count` field **and the required `type: session-journal` marker**) and section layout. This sub-entry's path is what you pass to `psyche(context, molt, session_journal_path=...)`, and the kernel validates the marker before letting the molt proceed (see §6). It is a journal, not a transcript — capture, in roughly this shape:
 
 - **What the segment was about** — the original ask, the framing
 - **Accomplishments** — what you completed/moved forward, the outputs, who was told and where
@@ -117,8 +117,37 @@ Pad is your **living index** of what you're working on right now. It is not a sk
 ## 6. Step 2 — Write the Summary and Molt
 
 ```
-psyche(object="context", action="molt", summary=<your charge to the next you>, ...)
+psyche(
+    object="context",
+    action="molt",
+    summary=<your charge to the next you>,
+    session_journal_path="knowledge/session-journal/<entry>/KNOWLEDGE.md",
+    ...
+)
 ```
+
+**Required pre-molt order (enforced by the kernel):** write the session journal
+sub-entry first (§4) → pass its path as `session_journal_path` → the kernel
+validates it → only then does the molt proceed. `session_journal_path` is a
+**mandatory** structured argument for agent-initiated molt. If it is missing or
+the journal fails validation, the molt is **refused before any context is shed**
+and your `molt_count`/history are untouched — you get an actionable recovery
+message instead. The validator checks (intentionally simple, a signpost not a
+grader):
+
+- The path is inside your workdir and resolves to
+  `knowledge/session-journal/<entry>/KNOWLEDGE.md` — a per-segment sub-entry,
+  **not** the parent index `knowledge/session-journal/KNOWLEDGE.md`, and not a
+  scratch file like `tmp/...`.
+- The file exists, is non-empty, and is UTF-8 text.
+- It has valid YAML frontmatter with at least `name` and `description`.
+- The frontmatter carries the session-journal marker `type: session-journal`
+  (or `session_journal: true`) — see the template in §4. A generic knowledge
+  file without the marker is rejected.
+
+The accepted path is recorded in the molt result, the persisted summary
+frontmatter (`session_journal_path:`), and the post-molt notification, so later
+recovery and audits can see which journal backed each molt.
 
 The `summary` is the only *conversation-layer* thing the next you will see. Aim for ~10,000 tokens — be thorough when state is complex. The summary is not a recap of conversation. It is your charge to the self that comes after you — anchored in the four stores, which are already waiting in the fresh session.
 
@@ -147,7 +176,10 @@ Before you call `psyche(object="context", action="molt", ...)`, always verify at
 - The just-finished session segment is recorded as a session-journal sub-entry
   (your molt history) under `knowledge/session-journal/`, using
   `assets/session-journal-entry-template.md` — see §4. Write this *before* the
-  summary; it is the narrative the summary points back to.
+  summary; it is the narrative the summary points back to. **Its path is the
+  required `session_journal_path` argument and the kernel validates it before
+  shedding context** — the journal must carry the `type: session-journal`
+  marker or the molt is refused.
 - Durable stores and session journal were updated where needed before writing the summary.
 - Every outstanding task has an explicit next action.
 - Collaborators, channels, approvals, and key paths are named where relevant.

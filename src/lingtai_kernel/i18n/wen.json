@@ -42,6 +42,7 @@
   "psyche.context_forget_summary_aed": "[系统] 灵识连 {attempts} 次失联，上下文已清。工作记忆已空。近时对话之条已存于上下文中——先阅之以复位。另查 system/pad.md 览工作手记，以 knowledge 目录查典籍条目，再察邮匣中所领之任，由此续之。",
   "psyche.context_forget_summary_signal": "[系统] 上下文由 {source} 清之。工作记忆已空。近时对话之条已存于上下文中——先阅之以复位。另查 system/pad.md 览工作手记，以 knowledge 目录查典籍条目，再察邮匣中所领之任，由此续之。",
   "psyche.keep_last_description": "可选整数（默认：二十）。凝蜕后保留之近期对话条目数。传零则全归档。与 keep_tool_calls 重叠者自去重。详见 psyche-manual。",
+  "psyche.session_journal_path_description": "context molt 必备。凝蜕前为方竟之本段所书会话日志条目之径：knowledge/session-journal/<entry>/KNOWLEDGE.md（须为分段子条目，非父索引）。须居工作目录之内、存、非空、为 UTF-8 之文，具合法 YAML frontmatter（至少 name 与 description），且以 `type: session-journal` 或 `session_journal: true` 标其为会话之知。若阙或非法，凝蜕将于舍弃任何上下文之前见拒。详见 psyche-manual §4。",
   "tool.reasoning_description": "简述为何调此器（录于汝之私记）。",
   "email.description": ".lingtai/ 网内器灵间之飞鸽——非真互联网之邮（Gmail/Outlook 用 imap 之具）。地址乃 .lingtai/ 下之裸路径，不含 @（如 'human' 指人类操使）。回书之规：必于来书之渠道上作复；优先用 reply 而非 send。切勿以文字输出作复——乃唯汝可见之私记也。必以 sender_nickname（有则用）或 sender_name 称之。",
   "email.action": "send：飞鸽传书，可附 cc/bcc（须 address、message）。check：列邮匣，含每书预览（至多五百字）。若截则示余字数——用 'read' 展全文。（可选 folder、n）。read：以 ID 展信（email_id=[id1, id2, ...]）。建议展阅多封乃至尽读未读书信，深思后再行动。reply：回书（须 email_id、message）。reply_all：群复（须 email_id、message）。search：以正则式搜信（须 query，可选 folder）。archive：将收信归入典藏（须 email_id）。delete：焚信（须 email_id，可选 folder）。contacts：列通讯录。add_contact：添友（须 address、name；可选 note）。remove_contact：删友（须 address）。edit_contact：改友（须 address；可选 name、note）。",
