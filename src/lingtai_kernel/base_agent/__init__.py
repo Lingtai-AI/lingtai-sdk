@@ -471,6 +471,14 @@ class BaseAgent:
         # `meta_block.attach_active_notifications`.
         self._notification_live_holder: dict | None = None
 
+        # Large-result notification threshold (chars).  When a main-agent
+        # tool result's serialized length exceeds this value, a system-channel
+        # notification is published reminding the agent to use
+        # system(action="summarize") after digesting the result.
+        # Default: 5000 chars (per Jason's final policy refinement in #340).
+        # Agents may adjust at runtime by writing to this attribute directly.
+        self._summarize_notification_threshold: int = 5000
+
         # Lifecycle
         self._shutdown = threading.Event()
         self._asleep = threading.Event()   # set when entering ASLEEP; cleared on wake
@@ -1696,11 +1704,183 @@ class BaseAgent:
         """
 
     def _on_tool_result_hook(
-        self, tool_name: str, tool_args: dict, result: dict
+        self,
+        tool_name: str,
+        tool_args: dict,
+        result: dict,
+        *,
+        tool_call_id: str | None = None,
     ) -> str | None:
         """Hook called after each tool execution.
 
         If this returns a non-None string, the current request processing
         returns immediately with that string as the result text.
+
+        ``tool_call_id`` is the provider-assigned id for this tool call,
+        passed directly by ToolExecutor so no heuristic scan is needed.
+
+        Checks whether the tool result exceeds the large-result notification
+        threshold and publishes a system-channel notification if so.  This
+        hook sees main-agent tool results only; daemon child events arrive
+        via a separate path and are not routed here.
         """
+        self._maybe_notify_large_tool_result(tool_name, result, tool_call_id=tool_call_id)
         return None
+
+    def _maybe_notify_large_tool_result(
+        self,
+        tool_name: str,
+        result: object,
+        *,
+        tool_call_id: str | None = None,
+    ) -> None:
+        """Publish a system notification when a tool result exceeds the threshold.
+
+        Called from ``_on_tool_result_hook``.
+
+        Excludes ``daemon_tool_result`` tool names — those are child-daemon
+        result relays, not main-agent results.  (The bare ``daemon`` tool is
+        NOT excluded: it is a normal main-agent capability whose results are
+        legitimately subject to this check.)
+
+        For spill manifests (results capped by ToolExecutor and written to a
+        sidecar file), uses ``original_char_count`` as the effective length
+        when present — the wire-visible manifest is small, but the agent
+        still needs to be reminded to summarize the large original.  The
+        notification body includes the spill path so the agent knows where to
+        read the full content.  Spill manifests whose ``original_char_count``
+        is at or below the threshold are skipped.
+
+        ``tool_call_id`` is the provider-assigned id received directly from
+        ToolExecutor.  A heuristic scan of the pending assistant turn is used
+        only as a fallback when the id is not provided.
+        """
+        import json as _json
+        from ..tool_result_artifacts import is_spill_manifest
+
+        threshold = getattr(self, "_summarize_notification_threshold", 5000)
+        if threshold <= 0:
+            return
+
+        if result is None:
+            return
+
+        # Exclude daemon child result relays; this hook sees main-agent results.
+        if tool_name == "daemon_tool_result":
+            return
+
+        # Determine effective length.  For spill manifests the wire-visible
+        # content is already capped, but the *original* payload may have been
+        # large; use original_char_count when available so the agent still gets
+        # a reminder to summarize if the original exceeded the threshold.
+        is_spill = is_spill_manifest(result)
+        if is_spill:
+            original_char_count = result.get("original_char_count") if isinstance(result, dict) else None  # type: ignore[union-attr]
+            if not isinstance(original_char_count, int) or original_char_count <= threshold:
+                return
+            result_len = original_char_count
+            spill_path = result.get("spill_path") if isinstance(result, dict) else None  # type: ignore[union-attr]
+            preview_text = None  # do not show raw spill payload as preview
+        else:
+            # Compute serialized length of the non-spill result.
+            if isinstance(result, str):
+                result_len = len(result)
+                preview_text = result[:200]
+            else:
+                try:
+                    serialized = _json.dumps(result, ensure_ascii=False, default=str)
+                except (TypeError, ValueError):
+                    serialized = str(result)
+                result_len = len(serialized)
+                preview_text = serialized[:200]
+
+            if result_len <= threshold:
+                return
+            spill_path = None
+
+        # Resolve the tool_call_id.  ToolExecutor passes it directly; fall back
+        # to a heuristic scan of the pending assistant turn only if not provided.
+        if tool_call_id is None:
+            tool_call_id = "<see your conversation history>"
+            try:
+                from ..llm.interface import ToolCallBlock, ToolResultBlock
+                chat = getattr(self, "_chat", None)
+                iface = getattr(chat, "interface", None) if chat is not None else None
+                if iface is not None:
+                    entries = getattr(iface, "_entries", [])
+                    answered_ids: set[str] = set()
+                    for entry in entries:
+                        if entry.role == "user":
+                            for blk in entry.content:
+                                if isinstance(blk, ToolResultBlock):
+                                    answered_ids.add(blk.id)
+                    for entry in reversed(entries):
+                        if entry.role != "assistant":
+                            continue
+                        for blk in entry.content:
+                            if (
+                                isinstance(blk, ToolCallBlock)
+                                and blk.name == tool_name
+                                and blk.id not in answered_ids
+                            ):
+                                tool_call_id = blk.id
+                                break
+                        if tool_call_id != "<see your conversation history>":
+                            break
+            except Exception:
+                pass
+
+        if is_spill and spill_path:
+            body = (
+                f"[large tool result — spilled] tool_name={tool_name!r} tool_call_id={tool_call_id}\n"
+                f"Original result length: {result_len} chars "
+                f"(current summarize notification threshold: {threshold} chars).\n"
+                f"The result was too large for the context window and was written to: {spill_path!r}\n"
+                f"Read the sidecar file to access the full content, then call:\n"
+                f"  system(action=\"summarize\", items=[{{\"tool_call_id\": \"{tool_call_id}\", \"summary\": \"<your summary>\"}}])\n"
+                f"to replace the context-visible spill manifest with your own summary.\n"
+                f"The full original remains in the sidecar file and in events.jsonl by tool_call_id."
+            )
+        elif is_spill:
+            body = (
+                f"[large tool result — spilled] tool_name={tool_name!r} tool_call_id={tool_call_id}\n"
+                f"Original result length: {result_len} chars "
+                f"(current summarize notification threshold: {threshold} chars).\n"
+                f"The result was spilled to a sidecar file (path not available). "
+                f"Check the spill manifest in your conversation history for the path.\n"
+                f"After reading the sidecar, call:\n"
+                f"  system(action=\"summarize\", items=[{{\"tool_call_id\": \"{tool_call_id}\", \"summary\": \"<your summary>\"}}])\n"
+                f"to replace the context-visible spill manifest with your own summary."
+            )
+        else:
+            body = (
+                f"[large tool result] tool_name={tool_name!r} tool_call_id={tool_call_id}\n"
+                f"Result length: {result_len} chars "
+                f"(current summarize notification threshold: {threshold} chars).\n"
+                f"Preview (first 200 chars): {preview_text!r}\n\n"
+                f"After you have digested this result, you may call:\n"
+                f"  system(action=\"summarize\", items=[{{\"tool_call_id\": \"{tool_call_id}\", \"summary\": \"<your summary>\"}}])\n"
+                f"to replace the context-visible payload with your own summary.\n"
+                f"The full original remains retrievable from events.jsonl by tool_call_id."
+            )
+
+        try:
+            self._enqueue_system_notification(
+                source="large_tool_result",
+                ref_id=f"large_tool_result:{tool_call_id}",
+                body=body,
+            )
+            self._log(
+                "large_tool_result_notification_published",
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                result_len=result_len,
+                threshold=threshold,
+                is_spill=is_spill,
+            )
+        except Exception as exc:
+            self._log(
+                "large_tool_result_notification_failed",
+                tool_name=tool_name,
+                error=str(exc),
+            )

@@ -14,7 +14,7 @@ def get_schema(lang: str = "en") -> dict:
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["refresh", "sleep", "lull", "interrupt", "suspend", "cpr", "clear", "nirvana", "presets", "dismiss", "notification"],
+                "enum": ["refresh", "sleep", "lull", "interrupt", "suspend", "cpr", "clear", "nirvana", "presets", "dismiss", "notification", "summarize"],
                 "description": t(lang, "system_tool.action_description"),
             },
             "reason": {
@@ -48,6 +48,29 @@ def get_schema(lang: str = "en") -> dict:
             "ref_id": {
                 "type": "string",
                 "description": t(lang, "system_tool.ref_id_description"),
+            },
+            "items": {
+                "type": "array",
+                "description": t(lang, "system_tool.items_description"),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "tool_call_id": {
+                            "type": "string",
+                            "description": "The id of the prior tool-result block to summarize.",
+                        },
+                        "summary": {
+                            "type": "string",
+                            "description": "Your agent-authored summary of that tool result.",
+                        },
+                    },
+                    "required": ["tool_call_id", "summary"],
+                },
+            },
+            "notification_threshold_chars": {
+                "type": "integer",
+                "description": t(lang, "system_tool.notification_threshold_chars_description"),
+                "minimum": 0,
             },
         },
         "required": ["action"],

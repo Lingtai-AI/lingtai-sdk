@@ -29,7 +29,7 @@
   "psyche.keep_tool_calls_description": "可选：凝蜕中保留之器调用 id 列表，按所指定之序回放。若有 id 不可寻，凝蜕被拒。当从短——四层长存之储乃主要持久化界面。详见 psyche-manual。",
   "psyche.molt_result_note": "凝蜕已毕。恢复清单：（一）阅简（系统提示中）——寻当下之务与下一步。（二）重读本器调用 args 中之回顾——前汝为汝而书。（三）察邮匣有无蜕中所至之书。（四）确认任务与简相合，续之。四层长存之储完好如初。切勿重已保留对话条目中之言。",
   "system_tool.description": "运行检视、生死管、同步与器灵间之治。\n\n自身之操（无须权限）：sleep、refresh、notification。\n因果之操（须 admin.karma=True）：lull、interrupt、suspend、cpr、clear。\n涅槃（须 admin.karma=True 且 admin.nirvana=True）：nirvana。\n\n诸操之详，见 system-manual 技能。",
-  "system_tool.action_description": "refresh：更衣——器灵止，自 init.json 全然重建，身份如故而对话之史得存。自磁重载：MCP 服务器、诸能、附加、LLM、提示诸节。详见 system-manual。\n\npresets：列可用预设（标签、连通、诸能）。详见 system-manual。\n\nsleep：自愿入寐。身犹存而止事，待书信唤醒。\n\nlull：令他者入寐（因果）。\n\nsuspend：冻他者（因果）。\n\ncpr：复苏假死者（因果）。\n\ninterrupt：止他者当轮（因果）。\n\nclear：强令他者更衣（因果）。详见 system-manual。\n\nnirvana：永灭一灵（因果+涅槃）。详见 system-manual。\n\nnotification：查诸通知频道。仅替换。\n\ndismiss：以名清一通知频道。先用其主之本动词（邮件用 email(read/dismiss)）；受护频道唯明知清陈镜时方传 force=true。",
+  "system_tool.action_description": "refresh：更衣——器灵止，自 init.json 全然重建，身份如故而对话之史得存。自磁重载：MCP 服务器、诸能、附加、LLM、提示诸节。详见 system-manual。\n\npresets：列可用预设（标签、连通、诸能）。详见 system-manual。\n\nsleep：自愿入寐。身犹存而止事，待书信唤醒。\n\nlull：令他者入寐（因果）。\n\nsuspend：冻他者（因果）。\n\ncpr：复苏假死者（因果）。\n\ninterrupt：止他者当轮（因果）。\n\nclear：强令他者更衣（因果）。详见 system-manual。\n\nnirvana：永灭一灵（因果+涅槃）。详见 system-manual。\n\nnotification：查诸通知频道。仅替换。\n\ndismiss：以名清一通知频道。先用其主之本动词（邮件用 email(read/dismiss)）；受护频道唯明知清陈镜时方传 force=true。\n\nsummarize：以器灵自撰之摘要替换历史工具结果之上下文可见内容。传 items=[{tool_call_id, summary}, ...]。原文留于 events.jsonl，仅换上下文中之副本。消化大结果后用之，以释上下文之容。详见 system-manual。",
   "system_tool.address_description": "目标智能体之地址（工作目录路径）。interrupt、lull、suspend、cpr、clear、nirvana 须此参数。",
   "system_tool.reason_description": "入寐、更衣或 clear 之缘由（录于事件日志；用于 clear 时，成为复位之书中 source 之标）。",
   "system_tool.preset_description": "可选。配 action='refresh' 用：刷新前换行囊中之一预设（{胎光, 肉身} 之合也）。action='presets' 浏览可用预设。轻巧、可逆。若当下之文超目标预设之限，换被拒——请先更衣。",
@@ -79,5 +79,7 @@
   "system_tool.channel_description": "欲清之通知频道（如 soul、system、mcp.telegram）。action='dismiss' 必需。email 等受护频道，当用其主之本动词。",
   "system_tool.force_description": "action='dismiss' 可选。为 true 则越过生产者所登记之通清护栏（今为 email）。唯明知清陈镜时用之；生产者自有状态不变。",
   "system_tool.event_id_description": "配 action='dismiss' 且 channel='system' 可选：只清匹配之 system notification event_id，非清尽 system.json。",
-  "system_tool.ref_id_description": "配 action='dismiss' 且 channel='system' 可选：清具此生产者 ref_id 之 system notification events（如 goal:<id>）。"
+  "system_tool.ref_id_description": "配 action='dismiss' 且 channel='system' 可选：清具此生产者 ref_id 之 system notification events（如 goal:<id>）。",
+  "system_tool.items_description": "action='summarize' 必需。待摘之条目列表，每条含 'tool_call_id'（历史工具结果之 id）与 'summary'（器灵自撰摘要）。支持一次处理多条。原文不删，仍可于 events.jsonl 中循 tool_call_id 检索。",
+  "system_tool.notification_threshold_chars_description": "配 action='summarize' 可选。调大型结果通知阈值（字符数）。工具结果超此值则系统发通知，提醒用 system(action='summarize')。设 0 则禁通知。默认 5000。此非上下文容量上限，亦非摘要目标——仅控提醒何时触。可与 'items' 合用，亦可独用。"
 }

@@ -739,6 +739,37 @@ def test_intercept_hook():
     assert text == "intercepted!"
 
 
+def test_on_result_hook_receives_model_visible_spill_manifest(tmp_path):
+    seen = []
+
+    def dispatch(tc):
+        return {"status": "ok", "payload": "X" * 500}
+
+    def hook(name, args, result, *, tool_call_id=None):
+        seen.append((name, tool_call_id, result))
+        return None
+
+    executor = make_executor(
+        dispatch_fn=dispatch,
+        working_dir=tmp_path,
+        max_result_chars=120,
+    )
+
+    results, intercepted, text = executor.execute(
+        [ToolCall(name="read", args={}, id="spill-hook")],
+        on_result_hook=hook,
+    )
+
+    assert not intercepted
+    assert text == ""
+    assert len(results) == 1
+    assert seen[0][0] == "read"
+    assert seen[0][1] == "spill-hook"
+    assert seen[0][2]["status"] == "spilled"
+    assert seen[0][2]["artifact"] == "lingtai_tool_result_spill"
+    assert seen[0][2]["original_char_count"] > 120
+
+
 def test_error_collected():
     def dispatch(tc):
         raise ValueError("something broke")

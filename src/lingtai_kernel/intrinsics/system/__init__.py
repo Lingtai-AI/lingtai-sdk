@@ -35,6 +35,7 @@ Sub-modules:
                        _sleep(), _lull(), _suspend(), _cpr(), _interrupt(),
                        _clear(), _nirvana().
     notification.py  — _dismiss() function.
+    summarize.py     — _summarize() function, SUMMARIZE_MARKER.
     schema.py        — get_description(), get_schema().
 """
 from __future__ import annotations
@@ -46,6 +47,9 @@ from .schema import get_description, get_schema  # noqa: F401
 
 # Notification (dismiss — cross-module import from email/manager.py)
 from .notification import _dismiss  # noqa: F401
+
+# Summarize — agent-authored context summarization
+from .summarize import _summarize, SUMMARIZE_MARKER  # noqa: F401
 
 # Notification submission — the canonical helper any producer (intrinsic
 # or in-process MCP) can call to surface a notification to the agent.
@@ -119,6 +123,7 @@ def handle(agent, args: dict) -> dict:
         "nirvana": _nirvana,
         "presets": _presets,
         "dismiss": _dismiss,
+        "summarize": _summarize,
     }.get(action)
     if handler is None:
         return {"status": "error", "message": f"Unknown system action: {action}"}

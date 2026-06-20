@@ -108,6 +108,66 @@ Never treat a notification preview as the full source of truth when it is
 truncated, ambiguous, lacks an exact anchor, includes media/attachments, or
 contains human instructions. Read the producer channel.
 
+### `summarize`
+
+Use after digesting a large tool result to replace the context-visible copy
+with your own agent-authored summary, while preserving the full original in
+`logs/events.jsonl` for later retrieval.
+
+**Why:** large tool results accumulate in context and consume token budget.
+Once you have extracted the key facts, replacing the raw payload with a short
+summary frees context without losing forensic access to the original.
+
+**When to use:**
+- After reading a large command output, file listing, or API response that
+  you no longer need in full — particularly after a system notification tells
+  you the result exceeds the summarize notification threshold.
+- During periodic context-hygiene after finishing the current task.
+
+**When NOT to use:**
+- Before you have read and understood the result.
+- When the exact bytes are still actively needed in context.
+- For results that contain secrets or sensitive payloads — follow existing
+  spill/redaction policies instead.
+
+**Usage:**
+
+```json
+system(action="summarize", items=[
+  {"tool_call_id": "toolu_abc123", "summary": "Listed 50 files under src/; found 3 Python modules."},
+  {"tool_call_id": "toolu_def456", "summary": "grep returned 12 matches for 'ERROR' in logs."}
+])
+```
+
+**Retrieval:** The full original remains in `logs/events.jsonl`. To retrieve:
+```bash
+grep 'toolu_abc123' <workdir>/logs/events.jsonl
+# or: lingtai-agent log query (see sqlite-log-query manual)
+```
+
+**Important:** The agent-authored summary is NOT canonical. It reflects your
+understanding at the time of summarization and may be incomplete or inaccurate.
+If you need the exact original later, retrieve it from events.jsonl.
+
+**Large-result notifications:** When a main-agent tool result exceeds the
+configurable summarize notification threshold (default: 5,000 chars), the
+kernel publishes a system-channel notification showing the result's id,
+length, a 200-char preview, and the current active threshold. For spill
+manifests (results too large for the context window), the notification uses
+the original content size and includes the sidecar file path. This is a
+reminder only — you are not required to summarize immediately.
+
+**Adjusting the threshold at runtime:**
+
+```json
+system(action="summarize", notification_threshold_chars=20000)
+```
+
+Pass `notification_threshold_chars` with (or without) `items` to update the
+threshold for this session. `0` disables notifications entirely. The current
+threshold is always returned in the `notification_threshold_chars` field of
+every summarize response.
+
 ### Sleep, lull, interrupt, suspend, CPR, clear, nirvana
 
 - `sleep`: self-sleep until a wake event; appropriate when there is no concrete

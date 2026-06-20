@@ -729,7 +729,10 @@ class ToolExecutor:
                 collected_errors.append(f"{tc.name}: {err_msg}")
 
             if on_result_hook is not None:
-                intercept = on_result_hook(tc.name, args, result)
+                hook_result = getattr(result_msg, "content", None)
+                if hook_result is None:
+                    hook_result = result_msg.get("result", result_msg) if isinstance(result_msg, dict) else result_msg
+                intercept = on_result_hook(tc.name, args, hook_result, tool_call_id=tc_id)
                 if intercept is not None:
                     return result_msg, True, intercept
 
@@ -1116,16 +1119,19 @@ class ToolExecutor:
         finally:
             pool.shutdown(wait=False, cancel_futures=True)
 
-        # Phase 3: Build result messages (sequential)
+        # Phase 3: Build result messages (sequential) and invoke the result hook.
+        # The hook sees results in input order (same as sequential execution) so
+        # notification/intercept semantics are consistent across both paths.
         for i, tc, args, trace_id, verdict, decision, proposal in to_execute:
             tc_id = getattr(tc, "id", None)
             if i in results_map:
                 result = results_map[i]
                 status = result.get("status", "success") if isinstance(result, dict) else "success"
-                tool_results.append((i, self._build_result_message(
+                result_msg = self._build_result_message(
                     tc.name, result, tool_call_id=tc_id, tool_trace_id=trace_id,
                     status=status,
-                )))
+                )
+                tool_results.append((i, result_msg))
                 if isinstance(result, dict) and result.get("status") == "error":
                     err_msg = result.get("message", "unknown error")
                     collected_errors.append(f"{tc.name}: {err_msg}")
@@ -1136,6 +1142,14 @@ class ToolExecutor:
                         True,
                         result.get("text", ""),
                     )
+                if on_result_hook is not None:
+                    hook_result = getattr(result_msg, "content", None)
+                    if hook_result is None:
+                        hook_result = result_msg.get("result", result_msg) if isinstance(result_msg, dict) else result_msg
+                    intercept = on_result_hook(tc.name, args, hook_result, tool_call_id=tc_id)
+                    if intercept is not None:
+                        tool_results.sort(key=lambda x: x[0])
+                        return [r for _, r in tool_results], True, intercept
             elif i in errors_map:
                 err_result = errors_map[i]
                 err_msg = str(err_result.get("message", "unknown error"))
