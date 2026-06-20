@@ -1,5 +1,5 @@
 {
-  "read.description": "阅卷之器。返带行号之文。仅读文卷——不可读二进制、图像或音声。大卷可以 offset/limit 指定区段而阅。若遇非 UTF-8、巨卷、繁搜或慎改之难题，先读 file-manual 一技。",
+  "read.description": "阅卷之器。返带行号之文。仅读文卷——不可读二进制、图像或音声。大卷可以 offset/limit 指定区段而阅。若遇非 UTF-8、巨卷、繁搜或慎改之难题，先读 file-manual 一技。要言：每召上限约八千字符——阅之成功，仍或有截断。截断时结中含 truncated=true、next_offset（下召以此为 offset）、remaining_lines_estimate 诸续阅之元。务查 truncated=true，以 next_offset 续阅，直至卷尽。若见 line_truncated=true，则一物理行自逾安全阅限；所示唯其前缀，当以更专之器检其卷/行，勿谓 next_offset 已得此行隐尾。",
   "read.file_path": "文卷之绝对路径",
   "read.offset": "起始行号（自一起算）",
   "read.limit": "至多读取之行数",
