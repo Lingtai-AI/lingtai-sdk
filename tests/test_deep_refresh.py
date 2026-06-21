@@ -99,6 +99,15 @@ def _packaged_procedures() -> str:
     )
 
 
+def _packaged_guidance() -> dict:
+    from importlib.resources import files
+
+    return json.loads(
+        files("lingtai.prompts").joinpath("guidance.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
 def _events(tmp_path: Path, event_type: str) -> list[dict]:
     log_path = tmp_path / "logs" / "events.jsonl"
     if not log_path.is_file():
@@ -369,6 +378,19 @@ def test_system_procedures_is_overwritten_by_packaged_default(tmp_path):
     assert (system_dir / "procedures.md").read_text(encoding="utf-8") == packaged
     assert agent._prompt_manager.read_section("procedures") == packaged
 
+
+def test_system_guidance_is_overwritten_by_packaged_default(tmp_path):
+    """Manual system/guidance.json edits are replaced by packaged guidance."""
+    agent = _make_agent(tmp_path, _make_init())
+    system_dir = tmp_path / "system"
+    system_dir.mkdir(exist_ok=True)
+    (system_dir / "guidance.json").write_text('{"stale": true}\n', encoding="utf-8")
+
+    agent._setup_from_init()
+
+    guidance_path = system_dir / "guidance.json"
+    assert json.loads(guidance_path.read_text(encoding="utf-8")) == _packaged_guidance()
+    assert guidance_path.read_text(encoding="utf-8").endswith("\n")
 
 def test_procedures_falls_back_to_system_file_when_packaged_missing(tmp_path):
     """If the packaged default cannot be read, system/procedures.md is fallback."""

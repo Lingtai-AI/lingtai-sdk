@@ -9,6 +9,10 @@ Capabilities are declared at construction and sealed before start().
 """
 from __future__ import annotations
 
+import json
+
+import json
+
 from typing import Any
 
 from pathlib import Path
@@ -1451,6 +1455,22 @@ class Agent(BaseAgent):
         else:
             self._prompt_manager.delete_section("procedures")
 
+        # --- Runtime guidance mirror ---
+        # `_runtime.guidance` is latest-only tool-result metadata, but the TUI
+        # also needs a filesystem-visible copy. Mirror the packaged prompt
+        # resource on every boot/refresh, just like substrate/procedures mirrors.
+        guidance_file = system_dir / "guidance.json"
+        try:
+            from importlib.resources import files
+            from lingtai_kernel.meta_block import validate_runtime_guidance
+
+            guidance_text = files("lingtai.prompts").joinpath("guidance.json").read_text(encoding="utf-8")
+            guidance_payload = json.loads(guidance_text)
+            validate_runtime_guidance(guidance_payload)
+            guidance_file.write_text(json.dumps(guidance_payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        except Exception:
+            if not guidance_file.is_file():
+                guidance_file.write_text("{}\n", encoding="utf-8")
         # --- Brief (externally-maintained, written by secretary) ---
         brief = data.get("brief", "")
         brief_file = system_dir / "brief.md"
