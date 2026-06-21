@@ -1,0 +1,51 @@
+<!doctype html><html><head><meta charset="utf-8"><title>LingTai kernel v0.13.1 release log</title><style>body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;max-width:980px;margin:40px auto;padding:0 24px;line-height:1.55;color:#17202a}code,pre{background:#f5f7f9;padding:.15em .35em;border-radius:4px}pre{padding:12px;overflow:auto}.card{border:1px solid #d8dee4;border-radius:10px;padding:16px;margin:16px 0;background:#fff}h1{color:#275a45}.ok{color:#1a7f37;font-weight:600}</style></head><body><h1>LingTai kernel v0.13.1</h1><p>Candidate head: <code>261558b4c7408552d5a69c839204238d5716331e</code>; previous tag: <code>v0.13.0</code>; generated 2026-06-21T02:04:30.</p><div class="card"><h2>Highlights</h2><ul><li>Tool-result runtime guidance metadata and legacy metadata cleanup.</li><li>Summarize guidance/manual routing plus <code>system/guidance.json</code> mirror.</li><li>Procedures prompt now states canonical session-journal naming.</li></ul></div><div class="card"><h2>Validation</h2><ul><li class="ok">pytest: 2523 passed, 4 skipped</li><li class="ok">build: passed</li><li class="ok">twine check: passed</li><li class="ok">archive scan: no __pycache__</li></ul></div><div class="card"><h2>Artifacts</h2><pre>e476637365e581b2e5644bf13562f2ecf1a3df8e83bfd4b383e8afed3076b502  lingtai-0.13.1-cp312-cp312-macosx_11_0_arm64.whl
+8714db1167dae54fc9b05bb2909104168ff92a033b2955d33a51e8bafc04213d  lingtai-0.13.1.tar.gz</pre></div><div class="card"><h2>Commits</h2><pre>261558b Merge pull request #448 from Lingtai-AI/release/kernel-v0.13.1-20260621
+dfb4590 Bump kernel version to 0.13.1
+d97af05 Merge pull request #447 from Lingtai-AI/docs/procedures-session-journal-naming
+0d3ea92 Clarify session journal naming in procedures prompt
+8f5a095 Merge pull request #446 from Lingtai-AI/docs/codex-cache-affinity-header-comments-20260621
+108ae96 docs: clarify Codex cache affinity header spelling
+327f17e Merge pull request #445 from Lingtai-AI/runtime-guidance-system-mirror
+7d7c240 Mirror runtime guidance into system directory
+4629bb7 Merge pull request #444 from Lingtai-AI/docs/summarize-guidance-20260621
+526a46e Refine summarize guidance and manual routing
+ef359d0 Remove legacy tool result metadata block (#443)
+6c5f3ec Move summarize guidance into prompt resource (#442)
+9683442 Refactor tool result runtime guidance metadata (#440)
+db7e692 Clarify Telegram contacts versus allowed users (#441)
+d9af064 codex: stable per-agent cache key — remove rotation, epoch-stamp, and codex-cache-key header (#439)</pre></div><div class="card"><h2>Merge commits / PRs</h2><pre>261558b Merge pull request #448 from Lingtai-AI/release/kernel-v0.13.1-20260621
+d97af05 Merge pull request #447 from Lingtai-AI/docs/procedures-session-journal-naming
+8f5a095 Merge pull request #446 from Lingtai-AI/docs/codex-cache-affinity-header-comments-20260621
+327f17e Merge pull request #445 from Lingtai-AI/runtime-guidance-system-mirror
+4629bb7 Merge pull request #444 from Lingtai-AI/docs/summarize-guidance-20260621</pre></div><div class="card"><h2>Diffstat</h2><pre>pyproject.toml                                     |   3 +-
+ src/lingtai/ANATOMY.md                             |   4 +-
+ src/lingtai/agent.py                               |  20 +
+ src/lingtai/core/daemon/ANATOMY.md                 |   2 +-
+ src/lingtai/core/daemon/__init__.py                |   2 +-
+ .../intrinsic_skills/system-manual/SKILL.md        |  16 +-
+ .../reference/procedures-manual/SKILL.md           |  21 +-
+ .../reference/substrate-manual/SKILL.md            | 112 +----
+ .../reference/summarize-manual/SKILL.md            | 137 +++++
+ src/lingtai/llm/_register.py                       |   4 +-
+ src/lingtai/llm/openai/ANATOMY.md                  |  54 +-
+ src/lingtai/llm/openai/adapter.py                  | 416 ++++------------
+ src/lingtai/llm/service.py                         |  12 +-
+ src/lingtai/mcp_servers/telegram/manager.py        |   3 +-
+ src/lingtai/mcp_servers/telegram/server.py         |  23 +-
+ src/lingtai/prompts/guidance.json                  |  13 +
+ src/lingtai/prompts/procedures.md                  |  26 +-
+ src/lingtai_kernel/ANATOMY.md                      |   5 +-
+ src/lingtai_kernel/base_agent/__init__.py          |   8 +
+ src/lingtai_kernel/base_agent/turn.py              |  26 +-
+ src/lingtai_kernel/intrinsics/system/ANATOMY.md    |   2 +-
+ src/lingtai_kernel/meta_block.py                   | 250 +++++++++-
+ src/lingtai_kernel/tool_executor.py                | 241 ++++-----
+ tests/test_codex_cache_stall_temp_key.py           | 554 ---------------------
+ tests/test_codex_prompt_cache_key.py               |  58 +--
+ tests/test_codex_prompt_key_header.py              | 275 ----------
+ tests/test_deep_refresh.py                         |  80 +--
+ tests/test_large_result_rescan.py                  | 172 +------
+ tests/test_meta_block.py                           | 273 +++++++++-
+ tests/test_runtime_block_turn_integration.py       | 175 +++++++
+ tests/test_tool_executor.py                        |  80 ++-
+ 31 files changed, 1363 insertions(+), 1704 deletions(-)</pre></div></body></html>

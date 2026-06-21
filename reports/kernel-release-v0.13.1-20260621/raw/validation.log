@@ -1,0 +1,8 @@
+# Validation
+
+- `git diff --check` — passed.
+- `python -m pytest -q` — passed: 2523 passed, 4 skipped in 279.59s.
+- Removed test-generated `__pycache__` directories before final package build.
+- `python -m build` — passed from candidate commit.
+- `python -m twine check dist/*` — passed.
+- Archive scan confirmed no `__pycache__` entries in sdist/wheel.

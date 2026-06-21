@@ -1,0 +1,32 @@
+pyproject.toml                                     |   3 +-
+ src/lingtai/ANATOMY.md                             |   4 +-
+ src/lingtai/agent.py                               |  20 +
+ src/lingtai/core/daemon/ANATOMY.md                 |   2 +-
+ src/lingtai/core/daemon/__init__.py                |   2 +-
+ .../intrinsic_skills/system-manual/SKILL.md        |  16 +-
+ .../reference/procedures-manual/SKILL.md           |  21 +-
+ .../reference/substrate-manual/SKILL.md            | 112 +----
+ .../reference/summarize-manual/SKILL.md            | 137 +++++
+ src/lingtai/llm/_register.py                       |   4 +-
+ src/lingtai/llm/openai/ANATOMY.md                  |  54 +-
+ src/lingtai/llm/openai/adapter.py                  | 416 ++++------------
+ src/lingtai/llm/service.py                         |  12 +-
+ src/lingtai/mcp_servers/telegram/manager.py        |   3 +-
+ src/lingtai/mcp_servers/telegram/server.py         |  23 +-
+ src/lingtai/prompts/guidance.json                  |  13 +
+ src/lingtai/prompts/procedures.md                  |  26 +-
+ src/lingtai_kernel/ANATOMY.md                      |   5 +-
+ src/lingtai_kernel/base_agent/__init__.py          |   8 +
+ src/lingtai_kernel/base_agent/turn.py              |  26 +-
+ src/lingtai_kernel/intrinsics/system/ANATOMY.md    |   2 +-
+ src/lingtai_kernel/meta_block.py                   | 250 +++++++++-
+ src/lingtai_kernel/tool_executor.py                | 241 ++++-----
+ tests/test_codex_cache_stall_temp_key.py           | 554 ---------------------
+ tests/test_codex_prompt_cache_key.py               |  58 +--
+ tests/test_codex_prompt_key_header.py              | 275 ----------
+ tests/test_deep_refresh.py                         |  80 +--
+ tests/test_large_result_rescan.py                  | 172 +------
+ tests/test_meta_block.py                           | 273 +++++++++-
+ tests/test_runtime_block_turn_integration.py       | 175 +++++++
+ tests/test_tool_executor.py                        |  80 ++-
+ 31 files changed, 1363 insertions(+), 1704 deletions(-)
