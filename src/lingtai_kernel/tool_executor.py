@@ -1113,6 +1113,7 @@ class ToolExecutor:
         # Phase 2: Execute in parallel
         results_map: dict[int, Any] = {}
         errors_map: dict[int, dict] = {}
+        elapsed_map: dict[int, int] = {}
 
         def _run_one(
             index: int,
@@ -1180,7 +1181,7 @@ class ToolExecutor:
                     exception=type(e).__name__,
                     exception_message=str(e),
                 )
-                return index, err_result
+                return index, err_result, timer.elapsed_ms
             if isinstance(result, dict):
                 stamp_meta(result, self._meta_fn(), timer.elapsed_ms)
                 self._attach_duplicate_advisory(result, verdict)
@@ -1214,7 +1215,7 @@ class ToolExecutor:
                 elapsed_ms=timer.elapsed_ms,
                 result=result,
             )
-            return index, result
+            return index, result, timer.elapsed_ms
 
         pool = ThreadPoolExecutor(max_workers=len(to_execute))
         try:
@@ -1227,8 +1228,9 @@ class ToolExecutor:
                     pool.shutdown(wait=False, cancel_futures=True)
                     return [], False, ""
                 try:
-                    idx, result = future.result()
+                    idx, result, elapsed_ms = future.result()
                     results_map[idx] = result
+                    elapsed_map[idx] = elapsed_ms
                 except Exception as e:
                     idx = futures[future]
                     tc_entry = next(
@@ -1347,6 +1349,17 @@ class ToolExecutor:
         finally:
             pool.shutdown(wait=False, cancel_futures=True)
 
+        def _elapsed_ms_from_result(result: Any) -> int:
+            if not isinstance(result, dict):
+                return 0
+            pending = result.get("_runtime_pending")
+            if isinstance(pending, dict):
+                pending_elapsed = pending.get("elapsed_ms")
+                if isinstance(pending_elapsed, (int, float)):
+                    return int(pending_elapsed)
+            elapsed = result.get("elapsed_ms", 0)
+            return int(elapsed) if isinstance(elapsed, (int, float)) else 0
+
         # Phase 3: Build result messages (sequential) and invoke the result hook.
         # The hook sees results in input order (same as sequential execution) so
         # notification/intercept semantics are consistent across both paths.
@@ -1355,7 +1368,7 @@ class ToolExecutor:
             if i in results_map:
                 result = results_map[i]
                 status = result.get("status", "success") if isinstance(result, dict) else "success"
-                _elapsed = result.get("elapsed_ms", 0) if isinstance(result, dict) else 0
+                _elapsed = elapsed_map.get(i, _elapsed_ms_from_result(result))
                 result_msg = self._build_result_message(
                     tc.name, result, tool_call_id=tc_id, tool_trace_id=trace_id,
                     status=status, elapsed_ms=_elapsed,
@@ -1382,7 +1395,7 @@ class ToolExecutor:
             elif i in errors_map:
                 err_result = errors_map[i]
                 err_msg = str(err_result.get("message", "unknown error"))
-                _elapsed = err_result.get("elapsed_ms", 0)
+                _elapsed = elapsed_map.get(i, _elapsed_ms_from_result(err_result))
                 tool_results.append((i, self._build_result_message(
                     tc.name, err_result, tool_call_id=tc_id, tool_trace_id=trace_id,
                     status="error", elapsed_ms=_elapsed,

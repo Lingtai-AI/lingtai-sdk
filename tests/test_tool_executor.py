@@ -673,6 +673,11 @@ def test_execute_parallel():
     elapsed = time.monotonic() - t0
     assert len(results) == 2
     assert elapsed < 0.15
+    for result in results:
+        payload = result["result"]
+        assert payload["_tool"]["elapsed_ms"] > 0
+        assert "_runtime_pending" not in payload
+        assert "elapsed_ms" not in payload
 
 
 def test_parallel_future_exception_stays_enriched_for_model(monkeypatch):
