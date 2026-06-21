@@ -6,22 +6,10 @@ of relying on resident memory. The unified runtime/procedure router is
 `system-manual`; it routes expanded procedure guidance to
 `reference/procedures-manual/SKILL.md`.
 
-Progressive disclosure applies to tool results as much as to manuals. A raw tool
-result is useful while you are inspecting it; after you have digested it, the
-better long-lived form is an index-style summary. Use `system.summarize` whenever
-future-you no longer needs the full raw payload in the active context, not only
-when the result crossed a long-result threshold. Long-result reminders and
-`_tool_result_metadata.long_tool_result=true` are stronger prompts that context
-hygiene is already at risk, but a smaller result can still deserve summarization
-if its durable value is just the conclusion, key evidence, local paths/IDs,
-validation status, risks, and next steps.
-
-Do the digestion deliberately: read or inspect the result first, decide what
-future-you will need, then summarize the already-completed prior result on a
-later step (possibly in parallel with other independent work). The summary
-becomes the context-visible index; the original remains in logs/events for
-fallback. For classification rules, examples, and summary-quality guidance, read
-`system-manual` → `reference/procedures-manual/SKILL.md`.
+High-attention tool-result summarization guidance lives in the runtime
+`guidance.json` prompt resource, alongside this prompt layer. For classification
+rules, examples, and summary-quality guidance, read `system-manual` →
+`reference/procedures-manual/SKILL.md`.
 
 ### Write Skills As You Work
 

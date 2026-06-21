@@ -61,7 +61,7 @@ exclude = [
 ]
 
 [tool.setuptools.package-data]
-lingtai_kernel = ["i18n/*.json", "guidance.json"]
+lingtai_kernel = ["i18n/*.json"]
 lingtai = [
     "i18n/*.json",
     "mcp_catalog.json",
@@ -71,6 +71,7 @@ lingtai = [
     "capabilities/*/manual/**/*",
     "intrinsic_skills/*/**/*",
     "prompts/*.md",
+    "prompts/*.json",
     # Rust sidecar binary bundled at build time by setup.py — present in
     # platform-specific wheels, absent in pure-Python sdist fallback
     # builds. The glob is non-strict, so missing files don't fail builds.

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "guidance_version": "0.2.0",
+  "priority": "high",
+  "render_mode": "latest_tool_result_only",
+  "sections": [
+    {
+      "id": "summarize_best_practice",
+      "title": "Summarize digested tool results",
+      "body": "Tool results are raw working material. When a result is long, noisy, or no longer needed verbatim, first consume it: inspect the output, decide what future-you needs, then summarize that completed prior result with system(action=\"summarize\"). Do not summarize a result you have not read, and do not try to summarize the current result in the same tool batch. A good summary is a progressive-disclosure index: conclusion, key evidence, paths/IDs, validation status, risks, and next steps, while the full original remains in events/logs for fallback. When work quiets down, bulk-summarize older tool results you are unlikely to need soon so active context keeps the grain, not the raw bulk."
+    }
+  ]
+}

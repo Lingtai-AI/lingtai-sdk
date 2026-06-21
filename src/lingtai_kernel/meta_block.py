@@ -52,7 +52,7 @@ def now_iso_plain() -> str:
 
 
 # ---------------------------------------------------------------------------
-# guidance.json — package resource, loaded once.
+# guidance.json — prompt package resource, loaded once.
 # ---------------------------------------------------------------------------
 
 _GUIDANCE_CACHE: dict | None = None
@@ -123,7 +123,7 @@ def validate_runtime_guidance(data) -> dict:
 
 
 def build_runtime_guidance() -> dict:
-    """Load, validate, and return the runtime guidance payload from guidance.json.
+    """Load, validate, and return the runtime guidance payload from prompts/guidance.json.
 
     Cached after first successful load.  The payload is schema-checked via
     :func:`validate_runtime_guidance`; on a missing/unreadable resource, a JSON
@@ -136,8 +136,8 @@ def build_runtime_guidance() -> dict:
     if _GUIDANCE_CACHE is not None:
         return _GUIDANCE_CACHE
     try:
-        pkg = _resources.files("lingtai_kernel")
-        data = (pkg / "guidance.json").read_text(encoding="utf-8")
+        pkg = _resources.files("lingtai")
+        data = (pkg / "prompts" / "guidance.json").read_text(encoding="utf-8")
         parsed = _json.loads(data)
         validate_runtime_guidance(parsed)
         _GUIDANCE_CACHE = parsed
