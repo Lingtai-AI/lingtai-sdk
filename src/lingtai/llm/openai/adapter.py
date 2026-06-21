@@ -51,17 +51,25 @@ _AUTO_PROMPT_CACHE_KEY = object()
 
 
 # Codex REST cache-affinity headers (issue #378). The official Codex client
-# sends ``session-id`` / ``thread-id`` headers on its
+# sends ``session_id`` / ``thread_id`` headers on its
 # ``/backend-api/codex/responses`` calls; a probe showed they materially
 # improve prompt-cache affinity for repeated full-history replays. The REST
 # endpoint does NOT accept ``previous_response_id`` (``Unsupported
 # parameter``), so stable headers — not delta chaining — are the near-term
 # cache-affinity lever.
 #
+# The header keys MUST be the underscore names ``session_id`` / ``thread_id``
+# exactly as the Codex backend/CLI sends them. Do NOT "normalise" them into
+# hyphenated, HTTP-looking ``session-id`` / ``thread-id``: the Codex backend
+# matches the literal underscore key, so a hyphenated spelling silently loses
+# cache affinity — every request fragments to a cold slot, exploding cache
+# misses and token cost. (This comment block uses the spelling the code must
+# emit; keep prose and code in sync.)
+#
 # For the normal/root main Codex session, the three cache-affinity values are
 # byte-identical and stable for the lifetime of the agent's durable identity:
 #
-#     session-id == thread-id == prompt_cache_key == <8-char agent-path hash>
+#     session_id == thread_id == prompt_cache_key == <8-char agent-path hash>
 #
 # The shared value is a deterministic 8-character lowercase-hex digest of the
 # agent's durable identity anchor (the resolved ``init.json`` / agent path).
@@ -92,7 +100,7 @@ def _codex_session_id(anchor: str) -> str:
     ``init.json`` / agent-dir path), NOT a global model-only key. The result is
     a deterministic 8-character lowercase-hex sha256 prefix: the same anchor
     always yields the same id; distinct anchors differ. The same value is used
-    byte-identically for ``session-id``, ``thread-id``, and the default
+    byte-identically for ``session_id``, ``thread_id``, and the default
     ``prompt_cache_key`` on the normal/root path.
     """
     return hashlib.sha256(anchor.encode("utf-8")).hexdigest()[:8]
@@ -1628,10 +1636,12 @@ class CodexResponsesSession(OpenAIResponsesSession):
       * `store=False` is forced — same reason.
       * Streaming is forced (`stream=True` on send/send_stream alike) —
         non-streaming Codex requests return data the SDK can't unmarshal.
-      * Optional stable ``session-id`` / ``thread-id`` request headers are
+      * Optional stable ``session_id`` / ``thread_id`` request headers are
         sent for REST prompt-cache affinity (issue #378). They are HTTP
         headers (``extra_headers``), not request-body fields, and are
-        independent of ``prompt_cache_key`` (both may be sent together).
+        independent of ``prompt_cache_key`` (both may be sent together). The
+        keys are underscored (``session_id`` / ``thread_id``) to match the
+        Codex backend literally — a hyphenated spelling loses cache affinity.
     """
 
     def __init__(
@@ -1675,9 +1685,14 @@ class CodexResponsesSession(OpenAIResponsesSession):
         The header names use UNDERSCORES (``session_id`` / ``thread_id``) to match
         what the official Codex CLI sends on its
         ``/backend-api/codex/responses`` calls (verified by capturing real Codex
-        CLI traffic, 2026-06). The backend routes the prompt-cache slot to a
-        sticky-warm replica off a STABLE session id; we send one fixed per-agent
-        value for the life of the session and never change it.
+        CLI traffic, 2026-06). This spelling is load-bearing: the Codex backend
+        matches the literal underscore key, so emitting hyphenated
+        ``session-id`` / ``thread-id`` would silently lose cache affinity and
+        fragment every request onto a cold slot (cache/cost explosion). Do NOT
+        rename these to HTTP-looking hyphenated forms. The backend routes the
+        prompt-cache slot to a sticky-warm replica off a STABLE session id; we
+        send one fixed per-agent value for the life of the session and never
+        change it.
         """
         headers: dict[str, str] = {}
         if self._session_id:

@@ -1330,7 +1330,7 @@ class DaemonManager:
             # service rather than reusing ``self._agent.service``. Every provider
             # keeps the parent's provider defaults; Codex additionally gets a
             # per-run cache anchor (and drops any fixed session id) so this run
-            # gets its own session-id/thread-id/prompt_cache_key triple instead
+            # gets its own session_id/thread_id/prompt_cache_key triple instead
             # of colliding with the parent agent's cache slot.
             from lingtai.llm.service import LLMService
             parent_service = self._agent.service

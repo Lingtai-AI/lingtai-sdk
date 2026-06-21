@@ -62,12 +62,14 @@ def _generate_tool_call_id() -> str:
 # Lingtai-AI/lingtai#112 for the full failure trace.
 # ``codex_session_id`` / ``codex_session_anchor`` / ``codex_thread_salt`` carry
 # the agent's per-agent Codex identity down to the adapter, which lets the Codex
-# REST path send stable ``session-id`` / ``thread-id`` cache-affinity headers
-# (issue #378). The adapter layer has no per-agent identity of its own, so the
+# REST path send stable ``session_id`` / ``thread_id`` cache-affinity headers
+# (issue #378; the underscore spelling is mandatory — the Codex backend matches
+# the literal key, and a hyphenated ``session-id`` / ``thread-id`` would lose
+# cache affinity). The adapter layer has no per-agent identity of its own, so the
 # ``codex_session_anchor`` is normally populated *automatically* for Codex
 # agents from the agent path (see ``build_provider_defaults_from_manifest_llm``);
 # the adapter derives an 8-char agent-path hash from it and uses that value
-# byte-identically for session-id, thread-id, and prompt_cache_key.
+# byte-identically for session_id, thread_id, and prompt_cache_key.
 # ``codex_session_id`` / ``codex_thread_salt`` remain available as an internal
 # override / testing escape hatch when set on the manifest ``llm`` block
 # directly. The default path no longer injects ``codex_thread_salt``; the salt
@@ -99,7 +101,7 @@ def build_provider_defaults_from_manifest_llm(
     per-agent Codex identity is injected by default: the ``codex_session_anchor``
     is the resolved ``init.json`` path (the agent's durable identity anchor). The
     adapter derives an 8-char agent-path hash from that anchor and uses it
-    byte-identically for ``session-id``, ``thread-id``, and ``prompt_cache_key``.
+    byte-identically for ``session_id``, ``thread_id``, and ``prompt_cache_key``.
     This is the normal path — neither opt-in nor opt-out; a Codex agent gets
     stable cache-affinity values out of the box. Crucially, this no longer reads
     the token ledger / ``api_call_id`` or molt time: the same ``working_dir``
@@ -126,7 +128,7 @@ def build_provider_defaults_from_manifest_llm(
             per_provider[key] = llm[key]
 
     # Default per-agent Codex identity from the agent path only. The adapter
-    # hashes this anchor to one 8-char value shared by session-id, thread-id,
+    # hashes this anchor to one 8-char value shared by session_id, thread_id,
     # and prompt_cache_key. Manifest-supplied values (handled above) take
     # precedence; we only fill the gap so the override/testing escape hatch
     # still works. No token ledger / molt time is consulted.

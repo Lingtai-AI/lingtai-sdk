@@ -16,7 +16,7 @@ mirroring the parent (provider/model/base_url/key_resolver/context_window) and
 preserving the parent's provider defaults, rather than reusing the parent
 service. Codex additionally derives a daemon-scoped cache anchor from each run's
 `daemon.json` (and drops any fixed `codex_session_id`), so the child's
-`session-id`, `thread-id`, and `prompt_cache_key` do not collide with the parent
+`session_id`, `thread_id`, and `prompt_cache_key` do not collide with the parent
 agent's cache slot. Results are persisted in per-run daemon folders; **every** terminal outcome
 (done / failed / cancelled / timeout) is surfaced exactly once as a compact
 `.notification/system.json` event — never as ordinary parent request text — so a

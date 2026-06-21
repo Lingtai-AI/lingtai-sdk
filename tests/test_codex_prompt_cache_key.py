@@ -190,7 +190,7 @@ def test_codex_prompt_cache_key_is_stable_across_requests():
 def test_lone_prompt_cache_key_stays_body_only_no_headers():
     """A cache-key-only session keeps the body key and emits NO headers.
 
-    Header carve-out (#378): ``session-id`` / ``thread-id`` route the backend
+    Header carve-out (#378): ``session_id`` / ``thread_id`` route the backend
     cache slot and must be per-agent. A lone ``prompt_cache_key`` with no
     companion ``session_id``/``thread_id`` declares no per-agent identity (this
     is the bare/no-anchor adapter path, where the key is the shared model-only
@@ -239,7 +239,9 @@ def test_responses_session_omits_cache_key_when_unset():
 
 
 # ---------------------------------------------------------------------------
-# Codex REST cache-affinity headers — session-id / thread-id (issue #378)
+# Codex REST cache-affinity headers — session_id / thread_id (issue #378).
+# Underscore keys are mandatory: the Codex backend matches the literal key, so a
+# hyphenated session-id / thread-id would lose cache affinity (cache/cost blowup).
 # ---------------------------------------------------------------------------
 
 
@@ -302,7 +304,7 @@ def test_codex_sends_stable_headers_from_session_anchor():
     h0 = s0["extra_headers"]
     h1 = s1["extra_headers"]
     expected = _expected_codex_hash(anchor)
-    # Root/main path: session-id == thread-id == prompt_cache_key == 8-char hash.
+    # Root/main path: session_id == thread_id == prompt_cache_key == 8-char hash.
     assert h0["session_id"] == expected
     assert h0["thread_id"] == expected
     assert s0["prompt_cache_key"] == expected
@@ -403,7 +405,7 @@ def test_codex_explicit_prompt_cache_key_override_drives_all_three_with_anchor()
 
     This is the mismatch leak Jason flagged: previously an explicit
     ``prompt_cache_key`` override would diverge from the anchor-derived
-    ``session-id``/``thread-id``. Now the override (highest priority) becomes the
+    ``session_id``/``thread_id``. Now the override (highest priority) becomes the
     single effective id carried byte-identically by all three levers, so the
     operator's explicit choice can never split the cache slot from the headers.
     """
@@ -441,7 +443,7 @@ def test_codex_session_normalizes_mismatched_ids_to_one_effective_value():
     Jason's follow-up: the three levers must never be independent. When a
     session is constructed with three different candidate ids, the session
     normalizes them to a single effective affinity id and sends that one value
-    byte-identically as ``prompt_cache_key`` / ``session-id`` / ``thread-id``.
+    byte-identically as ``prompt_cache_key`` / ``session_id`` / ``thread_id``.
     Priority is ``prompt_cache_key`` (the explicit request-body cache-affinity
     key) > ``session_id`` > ``thread_id``.
     """
@@ -592,7 +594,7 @@ def test_codex_factory_builds_adapter_with_per_agent_ids():
 # ---------------------------------------------------------------------------
 # Default wiring — only the agent path is passed down automatically (#378).
 # The adapter hashes it to one stable 8-char value used byte-identically for
-# session-id, thread-id, and prompt_cache_key. The default path no longer reads
+# session_id, thread_id, and prompt_cache_key. The default path no longer reads
 # the token ledger / last API call id or molt time, so the same working_dir
 # always yields the same defaults regardless of ledger contents.
 # ---------------------------------------------------------------------------
