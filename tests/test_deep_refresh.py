@@ -466,24 +466,23 @@ def test_post_molt_preserves_pad_append_pinned_reference(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Codex cache-affinity rebuild on refresh (Jason's final #406 semantics).
+# Codex cache-affinity rebuild on refresh.
 #
-# #406 makes start/refresh one of exactly two rotate triggers: a live refresh
-# must (re)build the Codex adapter so it stamps a FRESH epoch and the current
-# affinity id rotates. The agent path is stable across refresh, so without an
-# explicit rebuild the provider-defaults bucket is byte-identical and the old
-# adapter (with its boot-epoch id) survives — the 8-hit shuffle never goes
-# live. These tests prove refresh now rebuilds the Codex service/adapter while
-# preserving chat history.
+# A live refresh (re)builds the Codex adapter while preserving chat history. The
+# cache-affinity id is a pure hash of the agent path (no epoch / no clock), so
+# the rebuilt adapter MUST keep the byte-identical id — the agent stays pinned to
+# the same sticky-warm backend cache slot across refresh. These tests prove the
+# refresh rebuilds the Codex service/adapter and the id is stable across it.
 # ---------------------------------------------------------------------------
 
 
 def _codex_agent(tmp_path: Path, epoch: float):
-    """Build a real Agent backed by a real Codex LLMService at a pinned epoch.
+    """Build a real Agent backed by a real Codex LLMService.
 
-    ``time.time`` is patched for the duration of service construction so the
-    adapter's build epoch (``_codex_epoch``) is deterministic. The returned
-    agent's ``service`` is a genuine ``LLMService`` (not a mock), so
+    ``time.time`` is patched during construction only to keep any incidental
+    timestamps deterministic; the Codex id does NOT depend on the clock (it is a
+    pure hash of the agent path), so the patched value never affects it. The
+    returned agent's ``service`` is a genuine ``LLMService`` (not a mock), so
     ``_setup_from_init`` exercises the real Codex rebuild path.
     """
     from unittest.mock import patch as _patch
@@ -581,9 +580,9 @@ def test_refresh_rebuilds_codex_adapter_with_stable_id(tmp_path):
 def test_refresh_codex_adapter_keeps_per_agent_anchor(tmp_path):
     """The rebuilt adapter still anchors on the same agent path (identity).
 
-    Rotation must change only the epoch, not the agent's durable identity:
-    both the old and new ids derive from the same ``init.json`` anchor, so the
-    rebuilt adapter remains a per-agent identity (not a shared model-only key).
+    Both the old and new ids derive from the same ``init.json`` anchor (a pure
+    hash of it), so the rebuilt adapter remains a per-agent identity (not a
+    shared model-only key) and the id is byte-identical across refresh.
     """
     from unittest.mock import patch
 
