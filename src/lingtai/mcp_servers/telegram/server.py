@@ -320,6 +320,18 @@ Use the `telegram` tool with actions: `send`, `check`, `read`, `reply`,
 
 For long-running work, `send` may be used with `chat_action` (for example
 `typing`) and no `text`/`media` to show a Telegram status indicator.
+
+## Contacts vs inbound permissions
+
+`contacts` and `add_contact` manage local aliases so an agent can remember and
+message a `chat_id` more conveniently. They do **not** grant inbound permission.
+
+Inbound messages are filtered by `accounts[].allowed_users`. If the bot can send
+messages to a person but their replies never appear in `check`, `read`, search,
+or the agent notification stream, compare the person's Telegram user ID with the
+account's `allowed_users` list. To let a newly added contact talk to the bot, add
+that user ID to `allowed_users` in the config JSON and refresh/restart the MCP so
+the allow-list is reloaded.
 """
 
 
@@ -356,6 +368,13 @@ send `/start`, then retry.
 Check that the MCP process is active, `poll_interval` is reasonable, the bot can
 reach Telegram, and `allowed_users` includes the sender's Telegram user ID. Read
 `lingtai://status` for redacted config/runtime state.
+
+Do not confuse saved contacts with inbound authorization. `add_contact` only
+creates a local alias for a `chat_id`; it does not edit the config file and does
+not add the user to `allowed_users`. A common failure mode is: the bot can send
+to a saved contact, but that user's messages never arrive. In that case, add the
+user ID to `accounts[].allowed_users`, refresh/restart the MCP, then ask the
+human to reply again in the same bot chat.
 
 ## Agent-facing vs human-facing interface
 
@@ -404,7 +423,9 @@ after rotating the bot token via BotFather (`/revoke`).
 1. **Direct config edit (recommended).** Read `lingtai://docs/configuration`
    for the exact schema, then write the `bot_token` and `allowed_users` into the
    config JSON pointed at by `LINGTAI_TELEGRAM_CONFIG`. Refresh the MCP
-   afterward.
+   afterward. Remember that saving a user with `add_contact` is not enough for
+   inbound messages; each person who should be able to talk to the bot must be
+   present in `allowed_users`.
 
 2. **Agent-generated local HTML checklist page.** When a human wants a clean,
    readable, at-a-glance setup checklist in the browser (e.g. to follow along

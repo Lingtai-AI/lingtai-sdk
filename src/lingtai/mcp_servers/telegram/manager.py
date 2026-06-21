@@ -179,7 +179,8 @@ SCHEMA = {
                 "delete: delete a bot message (message_id). "
                 "edit: edit a bot message (message_id, text; optional reply_markup). "
                 "contacts: list saved contacts. "
-                "add_contact: save a chat (chat_id, alias). "
+                "add_contact: save a chat alias (chat_id, alias); this does not grant inbound permission. "
+                "To receive messages from that user, their Telegram user ID must also be in allowed_users. "
                 "remove_contact: remove a contact (alias or chat_id). "
                 "accounts: list configured bot accounts."
             ),
