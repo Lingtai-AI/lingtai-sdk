@@ -559,6 +559,14 @@ class DaemonManager:
         # watchdog owns them.
         self._cli_procs: list[subprocess.Popen] = []
         self._cli_proc_groups: dict[str, set[subprocess.Popen]] = {}
+        # LingTai-initiated termination reason per tracked proc, keyed by
+        # id(proc) and guarded by ``_cli_lock``. Stamped at the out-of-loop kill
+        # sites (reclaim/agent_stop/parent refresh via _drain_all_cli_procs,
+        # batch timeout via _kill_cli_group) *before* SIGTERM is sent, then read
+        # back when the read loop sees the resulting -15/143 returncode so the
+        # exit is attributed to the local cause instead of an opaque
+        # "claude CLI exited with code 143". See GH #455.
+        self._cli_term_reasons: dict[int, str] = {}
         self._cli_lock = threading.Lock()
         # Dedicated pool for CLI-backend `ask` follow-ups so they run off the
         # caller's tool-dispatch thread. The agent's `daemon(action="ask")` call
@@ -1773,8 +1781,12 @@ class DaemonManager:
 
         if proc.returncode != 0:
             detail = stderr_tail or (final_result_text or "")
+            attributed = self._attributed_cli_exit(
+                proc, "claude", detail[-500:], run_dir,
+            )
             exc = RuntimeError(
-                f"claude CLI exited with code {proc.returncode}: "
+                attributed
+                or f"claude CLI exited with code {proc.returncode}: "
                 f"{detail[-500:]}"
             )
             run_dir.mark_failed(exc)
@@ -2018,8 +2030,12 @@ class DaemonManager:
 
         if proc.returncode != 0:
             detail = stderr_tail or "\n".join(agent_message_texts[-3:])
+            attributed = self._attributed_cli_exit(
+                proc, "codex", detail[-500:], run_dir,
+            )
             exc = RuntimeError(
-                f"codex CLI exited with code {proc.returncode}: "
+                attributed
+                or f"codex CLI exited with code {proc.returncode}: "
                 f"{detail[-500:]}"
             )
             run_dir.mark_failed(exc)
@@ -3913,8 +3929,12 @@ class DaemonManager:
 
         if proc.returncode != 0:
             detail = stderr_tail or "\n".join(text_chunks[-3:])
+            attributed = self._attributed_cli_exit(
+                proc, backend_name, detail[-500:], run_dir,
+            )
             exc = RuntimeError(
-                f"{backend_name} CLI exited with code {proc.returncode}: "
+                attributed
+                or f"{backend_name} CLI exited with code {proc.returncode}: "
                 f"{detail[-500:]}"
             )
             run_dir.mark_failed(exc)
@@ -4097,8 +4117,12 @@ class DaemonManager:
 
         if proc.returncode != 0:
             detail = stderr_tail or output
+            attributed = self._attributed_cli_exit(
+                proc, "qwen-code", detail[-500:], run_dir,
+            )
             exc = RuntimeError(
-                f"qwen-code CLI exited with code {proc.returncode}: "
+                attributed
+                or f"qwen-code CLI exited with code {proc.returncode}: "
                 f"{detail[-500:]}"
             )
             run_dir.mark_failed(exc)
@@ -4523,8 +4547,12 @@ class DaemonManager:
 
         if proc.returncode != 0:
             detail = stderr_tail or "\n".join(text_chunks[-3:])
+            attributed = self._attributed_cli_exit(
+                proc, "Cursor", detail[-500:], run_dir,
+            )
             exc = RuntimeError(
-                f"Cursor CLI exited with code {proc.returncode}: "
+                attributed
+                or f"Cursor CLI exited with code {proc.returncode}: "
                 f"{detail[-500:]}"
             )
             run_dir.mark_failed(exc)
@@ -4885,7 +4913,7 @@ class DaemonManager:
         # Kill all tracked CLI process groups first — this terminates child
         # shells/tools that cancel_event alone cannot reach (GH #122).
         # Snapshot under lock, kill outside to avoid holding lock during wait.
-        procs_to_kill = self._drain_all_cli_procs()
+        procs_to_kill = self._drain_all_cli_procs(reason=reason)
         for proc in procs_to_kill:
             try:
                 _kill_process_group(proc)
@@ -5028,10 +5056,21 @@ class DaemonManager:
             self._cli_procs.append(proc)
             if group_id is not None:
                 self._cli_proc_groups.setdefault(group_id, set()).add(proc)
+            # CPython may recycle a previous proc's id() for this fresh object.
+            # Drop any stale termination reason left under that id (e.g. a kill
+            # stamped on a proc that then exited 0 before SIGTERM landed) so it
+            # cannot be mis-attributed to this new subprocess. See GH #455.
+            self._cli_term_reasons.pop(id(proc), None)
 
     def _unregister_cli_proc(self, proc: subprocess.Popen,
                              group_id: str | None = None) -> None:
-        """Detach *proc* from global and group tracking. Idempotent."""
+        """Detach *proc* from global and group tracking. Idempotent.
+
+        The recorded termination reason (if any) is intentionally NOT cleared
+        here: ``_unregister_cli_proc`` runs in the read-loop's ``finally`` block,
+        immediately before the returncode is classified, so the reason must
+        survive until ``_take_cli_term_reason`` consumes it.
+        """
         with self._cli_lock:
             try:
                 self._cli_procs.remove(proc)
@@ -5044,18 +5083,38 @@ class DaemonManager:
                     if not bucket:
                         del self._cli_proc_groups[group_id]
 
-    def _kill_cli_group(self, group_id: str) -> None:
+    def _note_cli_term_reason(self, proc: subprocess.Popen, reason: str) -> None:
+        """Record the LingTai-initiated termination *reason* for *proc*.
+
+        Called at the out-of-loop kill sites (reclaim/agent_stop/refresh and
+        batch timeout) just before SIGTERM. First reason wins so a follow-up
+        teardown kill cannot overwrite the original causal reason (e.g. a
+        timeout that is then swept by reclaim stays "timeout"). See GH #455.
+        """
+        with self._cli_lock:
+            self._cli_term_reasons.setdefault(id(proc), reason)
+
+    def _take_cli_term_reason(self, proc: subprocess.Popen) -> str | None:
+        """Pop and return the recorded termination reason for *proc*, if any."""
+        with self._cli_lock:
+            return self._cli_term_reasons.pop(id(proc), None)
+
+    def _kill_cli_group(self, group_id: str, reason: str = "timeout") -> None:
         """Kill only the CLI process groups owned by *group_id*.
 
         Snapshots the group's procs under the lock, detaches them from both
         the group index and the global list, then kills outside the lock so we
         never hold ``_cli_lock`` across a multi-second ``proc.wait``. Procs from
         other batches (and ungrouped ``ask`` procs) are left untouched.
+
+        *reason* (default "timeout", the only current caller) is stamped on each
+        proc before SIGTERM so the read loop can attribute the signal exit.
         """
         with self._cli_lock:
             bucket = self._cli_proc_groups.pop(group_id, None)
             procs_to_kill = list(bucket) if bucket else []
             for proc in procs_to_kill:
+                self._cli_term_reasons.setdefault(id(proc), reason)
                 try:
                     self._cli_procs.remove(proc)
                 except ValueError:
@@ -5063,13 +5122,73 @@ class DaemonManager:
         for proc in procs_to_kill:
             _kill_process_group(proc)
 
-    def _drain_all_cli_procs(self) -> list[subprocess.Popen]:
-        """Clear all CLI tracking and return the procs to kill (reclaim path)."""
+    def _drain_all_cli_procs(self, reason: str | None = None) -> list[subprocess.Popen]:
+        """Clear all CLI tracking and return the procs to kill (reclaim path).
+
+        When *reason* is given (agent_stop / parent refresh / reclaim) it is
+        stamped on each drained proc before the caller sends SIGTERM, so the
+        read loop attributes the resulting -15/143 exit to that local cause
+        instead of reporting an opaque CLI failure (GH #455).
+        """
         with self._cli_lock:
             procs_to_kill = list(self._cli_procs)
+            if reason is not None:
+                for proc in procs_to_kill:
+                    self._cli_term_reasons.setdefault(id(proc), reason)
             self._cli_procs.clear()
             self._cli_proc_groups.clear()
         return procs_to_kill
+
+    @staticmethod
+    def _signal_exit_name(returncode: int | None) -> str | None:
+        """Map a Popen returncode to a signal name, or None if not a signal.
+
+        Covers both subprocess conventions: negative (``-15``) when Python
+        reaps the child directly, and ``128 + signum`` (``143``) when the exit
+        propagates through a shell.
+        """
+        if returncode in (-15, 143):
+            return "SIGTERM"
+        if returncode in (-9, 137):
+            return "SIGKILL"
+        return None
+
+    def _attributed_cli_exit(
+        self,
+        proc: subprocess.Popen,
+        backend_name: str,
+        detail: str,
+        run_dir: "DaemonRunDir | None" = None,
+    ) -> str | None:
+        """Attribute a signal-terminated CLI exit to its local cause.
+
+        Returns a human-readable message naming the LingTai-initiated reason
+        (e.g. ``agent_stop`` / ``reclaim`` / ``timeout``) when this manager
+        recorded one before sending the signal, and records the reason on
+        *run_dir* for forensic inspection. The raw exit code is always kept in
+        the message. Returns ``None`` when the exit is not a signal we attribute
+        or no local reason was recorded — the caller then keeps its existing
+        opaque message so external/unknown SIGTERMs are not mislabeled as
+        deliberate cancellations. See GH #455.
+        """
+        reason = self._take_cli_term_reason(proc)
+        signal_name = self._signal_exit_name(getattr(proc, "returncode", None))
+        if signal_name is None or reason is None:
+            return None
+        if run_dir is not None:
+            try:
+                run_dir.record_cli_termination(
+                    reason=reason,
+                    signal_name=signal_name,
+                    returncode=proc.returncode,
+                )
+            except Exception:
+                pass
+        msg = (
+            f"{backend_name} CLI terminated by LingTai ({reason}, "
+            f"{signal_name}, code {proc.returncode})"
+        )
+        return f"{msg}: {detail}" if detail else msg
 
     def _arm_batch_done_cancel(self, futures: list,
                                cancel_event: threading.Event) -> None:

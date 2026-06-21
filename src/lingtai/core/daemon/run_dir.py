@@ -602,6 +602,39 @@ class DaemonRunDir:
             )
         self._safe("mark_failed", _write)
 
+    def record_cli_termination(
+        self, *, reason: str, signal_name: str, returncode: int | None
+    ) -> None:
+        """Record that LingTai signalled this run's CLI subprocess.
+
+        Writes a structured ``daemon_cli_terminate`` event and stamps
+        ``cli_termination`` onto daemon.json so a later ``daemon(check)`` or a
+        post-mortem run-dir inspection can attribute an otherwise-opaque
+        signal exit (e.g. SIGTERM/143) to its local cause — parent
+        refresh/agent_stop, reclaim, or watchdog timeout. This is forensic
+        metadata only; it does not itself transition terminal state (the run
+        loop still records failed/cancelled/timeout). See GH #455.
+        """
+        def _write():
+            self._state["cli_termination"] = {
+                "reason": reason,
+                "signal": signal_name,
+                "returncode": returncode,
+                "ts": self._now_iso(),
+            }
+            self._atomic_write_json(self.daemon_json_path, self._state)
+            self._append_jsonl(
+                self.events_path,
+                {
+                    "event": "daemon_cli_terminate",
+                    "reason": reason,
+                    "signal": signal_name,
+                    "returncode": returncode,
+                    "ts": self._now_iso(),
+                },
+            )
+        self._safe("record_cli_termination", _write)
+
     def mark_cancelled(self) -> None:
         """Cancel event observed. Sets state=cancelled."""
         self._mark_terminal("cancelled", "daemon_cancelled")
