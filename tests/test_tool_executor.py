@@ -547,7 +547,7 @@ def test_lifecycle_trace_events_cover_spilled_result(tmp_path):
     assert not intercepted
     manifest = results[0]["result"]
     assert manifest["artifact"] == "lingtai_tool_result_spill"
-    tool_block = manifest["_tool"]
+    tool_block = manifest["_meta"]["tool_meta"]
     assert "spilled" not in tool_block
     assert isinstance(tool_block["char_count"], int) and tool_block["char_count"] > 0
     assert tool_block["spilled_char_count"] == manifest["original_char_count"]
@@ -675,7 +675,7 @@ def test_execute_parallel():
     assert elapsed < 0.15
     for result in results:
         payload = result["result"]
-        assert payload["_tool"]["elapsed_ms"] > 0
+        assert payload["_meta"]["tool_meta"]["elapsed_ms"] > 0
         assert "_runtime_pending" not in payload
         assert "elapsed_ms" not in payload
 
@@ -867,8 +867,8 @@ def test_tool_executor_uses_meta_fn_for_stamping():
     """ToolExecutor calls meta_fn once per tool call and records the returned
     dict under result["_runtime_pending"] together with elapsed_ms.
 
-    The real latest-only _runtime block is promoted from _runtime_pending at the
-    tool-batch boundary by meta_block.attach_active_runtime (covered in
+    The real latest-only _meta.agent_meta block is promoted from _runtime_pending
+    at the tool-batch boundary by meta_block.attach_active_runtime (covered in
     test_meta_block.py); ToolExecutor itself only records the pending snapshot.
     """
     meta_calls = {"n": 0}
@@ -897,12 +897,12 @@ def test_tool_executor_uses_meta_fn_for_stamping():
     assert meta_calls["n"] == 1
     payload = results[0]["result"]
     # meta keys are recorded under _runtime_pending (not flat, not a real
-    # _runtime block — that is attached only at the turn boundary).
+    # _meta.agent_meta block — that is attached only at the turn boundary).
     pending = payload["_runtime_pending"]
     assert pending["current_time"] == "FAKE-TS"
     assert pending["future_field"] == 1
     assert "elapsed_ms" in pending
-    assert "_runtime" not in payload
+    assert "agent_meta" not in payload.get("_meta", {})
     assert "current_time" not in payload
     assert "_elapsed_ms" not in payload
 
@@ -943,7 +943,7 @@ def test_tool_executor_meta_fn_covers_parallel_path():
         pending = payload["_runtime_pending"]
         assert pending["current_time"] == "FAKE-TS"
         assert "elapsed_ms" in pending
-        assert "_runtime" not in payload
+        assert "agent_meta" not in payload.get("_meta", {})
         assert "current_time" not in payload
         assert "_elapsed_ms" not in payload
 
@@ -1030,7 +1030,7 @@ def test_tool_executor_attaches_batch_progress_notice_only():
     no longer repeats the running counter top-level.
 
     The counter (active_turn_tool_calls) is latest-only and lives under
-    _runtime.state, stamped by attach_active_runtime at the turn boundary from
+    _meta.agent_meta, stamped by attach_active_runtime at the turn boundary from
     the guard's total_calls — see test_meta_block.py. The transient notice is
     still surfaced on the result that triggered it.
     """
@@ -1054,7 +1054,7 @@ def test_tool_executor_attaches_batch_progress_notice_only():
 
 
 def test_tool_executor_runtime_counter_stamped_at_boundary():
-    """The ACTIVE-turn counter reaches the model via _runtime.state (latest-only),
+    """The ACTIVE-turn counter reaches the model via _meta.agent_meta (latest-only),
     sourced from the guard at the tool-batch boundary by attach_active_runtime."""
     from lingtai_kernel.meta_block import attach_active_runtime
     from lingtai_kernel.llm.interface import ToolResultBlock
@@ -1074,4 +1074,4 @@ def test_tool_executor_runtime_counter_stamped_at_boundary():
 
     holder = attach_active_runtime(agent, [block], prior_holder=None)
     assert holder is content
-    assert content["_runtime"]["state"]["active_turn_tool_calls"] == 500
+    assert content["_meta"]["agent_meta"]["active_turn_tool_calls"] == 500

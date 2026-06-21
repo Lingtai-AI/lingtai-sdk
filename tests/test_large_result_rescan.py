@@ -28,6 +28,7 @@ from lingtai_kernel.llm.interface import (
 from lingtai_kernel.intrinsics.system.summarize import SUMMARIZE_MARKER
 from lingtai_kernel.tool_result_artifacts import ARTIFACT_MARKER
 from lingtai_kernel.base_agent.messaging import (
+    _pending_large_result_len,
     _rescan_large_tool_results,
     _enqueue_system_notification,
 )
@@ -408,6 +409,23 @@ def test_rescan_threshold_negative_disables():
 # ---------------------------------------------------------------------------
 # 6. Synthesized blocks are skipped
 # ---------------------------------------------------------------------------
+
+
+def test_pending_large_result_len_ignores_meta_notifications():
+    """Large notification metadata is not formal result content for rescan gating."""
+    block = ToolResultBlock(
+        id="tc-meta",
+        name="bash",
+        content={
+            "payload": "ok",
+            "_meta": {
+                "notifications": {"system": {"body": "N" * 10_000}},
+                "notification_guidance": "G" * 10_000,
+            },
+        },
+    )
+
+    assert _pending_large_result_len(block, threshold=100) is None
 
 
 def test_rescan_skips_synthesized_blocks():
@@ -953,8 +971,8 @@ def test_legacy_tool_result_metadata_removed_for_small_dict_result(tmp_path):
     )
 
     assert "_tool_result_metadata" not in content
-    assert content["_tool"]["id"] == "tc-small"
-    assert content["_tool"]["char_count"] > 0
+    assert content["_meta"]["tool_meta"]["id"] == "tc-small"
+    assert content["_meta"]["tool_meta"]["char_count"] > 0
 
 
 def test_legacy_tool_result_metadata_removed_for_large_dict_result(tmp_path):
@@ -965,5 +983,5 @@ def test_legacy_tool_result_metadata_removed_for_large_dict_result(tmp_path):
     )
 
     assert "_tool_result_metadata" not in content
-    assert content["_tool"]["id"] == "tc-large"
-    assert content["_tool"]["char_count"] > 0
+    assert content["_meta"]["tool_meta"]["id"] == "tc-large"
+    assert content["_meta"]["tool_meta"]["char_count"] > 0

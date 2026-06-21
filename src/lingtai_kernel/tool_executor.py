@@ -297,7 +297,7 @@ class ToolExecutor:
 
         The running counter (``active_turn_tool_calls``) is intentionally NOT
         written here: it is latest-only state and lives under
-        ``_runtime.state.active_turn_tool_calls`` (stamped by
+        ``_meta.agent_meta.active_turn_tool_calls`` (stamped by
         ``attach_active_runtime`` at the tool-batch boundary).  Repeating the
         counter on every result left stale snapshots in history.
 
@@ -317,16 +317,15 @@ class ToolExecutor:
         return result
 
     # Kernel-injected auxiliary keys that are NOT part of the tool's own
-    # substantive payload. Excluded from the result-intrinsic ``_tool.char_count``
-    # count so size reflects the tool output, not metadata layered on after.
+    # substantive payload. Excluded from the result-intrinsic
+    # ``_meta.tool_meta.char_count`` count so size reflects the tool output, not
+    # metadata layered on after.  The unified ``_meta`` envelope holds
+    # tool_meta/agent_meta/guidance/notifications/notification_guidance; the
+    # remaining keys are transient top-level scaffolding/advisories.
     _AUX_RESULT_KEYS = (
-        "_tool",
-        "_runtime",
+        "_meta",
         "_runtime_pending",
-            "_advisory",
-        "notifications",
-        "_notifications",
-        "_notification_guidance",
+        "_advisory",
         "active_turn_tool_calls",
         "active_turn_tool_call_notice",
     )
@@ -336,7 +335,7 @@ class ToolExecutor:
 
         Builds a shallow copy without the aux keys (see ``_AUX_RESULT_KEYS``) and
         measures that, so the count is stable regardless of which metadata blocks
-        happen to be present when ``_tool`` is stamped.
+        happen to be present when ``_meta.tool_meta`` is stamped.
         """
         import json as _json
         intrinsic = {k: v for k, v in result.items() if k not in self._AUX_RESULT_KEYS}
@@ -354,7 +353,7 @@ class ToolExecutor:
         spilled_char_count: int | None = None,
         status: str | None = None,
     ) -> Any:
-        """Inject the permanent ``_tool`` identity block into dict-shaped results.
+        """Inject the permanent ``_meta.tool_meta`` identity block into dict results.
 
         This block is tiny, written once, and survives context history. It records
         facts intrinsic to this specific tool result invocation. The tool name is
@@ -363,11 +362,10 @@ class ToolExecutor:
         Fields:
           id                  — tool_call_id (or "<unknown>")
           timestamp           — ISO completion timestamp
-          char_count          — current model-visible serialized size: kernel aux keys
-                                (``_tool``, ``_runtime``, ``_runtime_pending``,
-                                ``_advisory``,
-                                ``notifications``, ``_notification_guidance``, batch
-                                progress notice) are excluded from the count.
+          char_count          — current model-visible serialized size: the kernel
+                                ``_meta`` envelope and transient top-level
+                                scaffolding (``_runtime_pending``, ``_advisory``,
+                                batch progress notice) are excluded from the count.
           elapsed_ms          — execution time in milliseconds
           spilled_char_count  — original sidecar character count when a spill occurred;
                                 omitted for ordinary non-spilled results
@@ -375,7 +373,8 @@ class ToolExecutor:
         """
         if not isinstance(result, dict):
             return result
-        if "_tool" in result:
+        meta = result.get("_meta")
+        if isinstance(meta, dict) and "tool_meta" in meta:
             return result
 
         char_count = self._intrinsic_char_count(result)
@@ -391,7 +390,10 @@ class ToolExecutor:
         if status == "error":
             tool_block["status"] = "error"
 
-        result["_tool"] = tool_block
+        if not isinstance(meta, dict):
+            meta = {}
+            result["_meta"] = meta
+        meta["tool_meta"] = tool_block
         return result
 
     def _append_advisory(self, result: Any, advisory: dict[str, Any] | None) -> Any:
@@ -548,8 +550,9 @@ class ToolExecutor:
     ) -> Any:
         """Final boundary before a result reaches the LLM wire.
 
-        Attaches ACTIVE-turn progress metadata and the permanent ``_tool``
-        identity block, then applies the unified character cap: oversized results
+        Attaches ACTIVE-turn progress metadata and the permanent
+        ``_meta.tool_meta`` identity block, then applies the unified character
+        cap: oversized results
         are spilled to a sidecar artifact and replaced with a compact manifest.
         The manifest also receives progress metadata when dict-shaped.
 
@@ -582,7 +585,7 @@ class ToolExecutor:
                 )
             except Exception:
                 pass
-        # Attach permanent _tool identity block to the final (possibly spilled) result.
+        # Attach permanent _meta.tool_meta identity block to the final (possibly spilled) result.
         self._attach_tool_block(
             capped,
             tool_call_id=tool_call_id,

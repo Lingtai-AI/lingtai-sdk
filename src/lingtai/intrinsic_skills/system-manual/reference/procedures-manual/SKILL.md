@@ -49,7 +49,7 @@ not bloat the resident prompt with one-off details.
 
 Progressive disclosure applies to tool results as much as to manuals. A raw tool
 result is useful while you inspect it; after you have consumed it, the better
-active-context form is an index-style summary. Runtime `_runtime.guidance` gives
+active-context form is an index-style summary. Runtime `_meta.guidance` gives
 the high-attention reminder when summarization is timely. For the full procedure
 — urgent large-result handling, idle cleanup sweeps, quality checklist,
 original-result recovery, and summarize-vs-molt boundaries — read

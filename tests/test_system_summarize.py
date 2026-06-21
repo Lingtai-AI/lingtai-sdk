@@ -113,6 +113,18 @@ def test_visible_len_dict():
     assert _visible_len(d) == len(json.dumps(d, ensure_ascii=False))
 
 
+def test_visible_len_ignores_meta_notifications():
+    content = {
+        "payload": "ok",
+        "_meta": {
+            "notifications": {"system": {"body": "N" * 10_000}},
+            "notification_guidance": "G" * 10_000,
+            "guidance": {"meta_readme": {"notifications": "do not summarize"}},
+        },
+    }
+    assert _visible_len(content) == len(json.dumps({"payload": "ok"}, ensure_ascii=False))
+
+
 # ---------------------------------------------------------------------------
 # Missing / malformed items arg
 # ---------------------------------------------------------------------------
@@ -187,6 +199,35 @@ def test_summarize_replaces_block_content():
     assert "retrieval_hint" in block.content
     assert "tc-001" in block.content["retrieval_hint"]
     assert block.content["original_visible_chars"] == len(original)
+
+
+def test_summarize_original_visible_chars_ignores_meta_notifications():
+    iface = ChatInterface()
+    formal_payload = {"payload": "short"}
+    original = {
+        **formal_payload,
+        "_meta": {
+            "notifications": {"system": {"body": "N" * 10_000}},
+            "notification_guidance": "G" * 10_000,
+        },
+    }
+    _add_tool_pair(iface, "tc-meta", "bash", original)
+    agent = _make_stub_agent(iface)
+
+    _summarize(agent, {
+        "action": "summarize",
+        "items": [{"tool_call_id": "tc-meta", "summary": "formal summary"}],
+    })
+
+    block = next(
+        b
+        for entry in iface._entries
+        for b in entry.content
+        if isinstance(b, ToolResultBlock) and b.id == "tc-meta"
+    )
+    assert block.content["original_visible_chars"] == len(
+        json.dumps(formal_payload, ensure_ascii=False)
+    )
 
 
 def test_summarize_saves_chat_history():
@@ -620,6 +661,27 @@ def test_large_result_notification_zero_threshold_disables(tmp_path):
     )
 
     agent._maybe_notify_large_tool_result("bash", "A" * 999999)
+    assert published == []
+
+
+def test_large_result_notification_ignores_meta_notifications(tmp_path):
+    """Huge notification/guidance metadata must not make a small result large."""
+    agent = _make_base_agent_for_notification(tmp_path)
+    agent._summarize_notification_threshold = 100
+
+    published = []
+    agent._enqueue_system_notification = MagicMock(
+        side_effect=lambda **kw: published.append(kw)
+    )
+
+    result = {
+        "payload": "ok",
+        "_meta": {
+            "notifications": {"system": {"body": "N" * 10_000}},
+            "notification_guidance": "G" * 10_000,
+        },
+    }
+    agent._maybe_notify_large_tool_result("bash", result, tool_call_id="id-meta")
     assert published == []
 
 

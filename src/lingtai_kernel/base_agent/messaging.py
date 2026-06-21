@@ -4,6 +4,7 @@ from __future__ import annotations
 import time
 
 from ..message import _make_message, MSG_REQUEST
+from ..meta_block import formal_tool_result_preview, formal_tool_result_visible_len
 
 # Default large-result notification size threshold (chars).  A tool result whose
 # effective length exceeds this is a "pending large-result case".  Configurable
@@ -23,9 +24,11 @@ def _pending_large_result_len(block, threshold: int):
     """Return the effective length of ``block`` if it is a pending large result.
 
     A "pending large-result case" is a non-synthesized, non-``daemon_tool_result``,
-    unsummarized ``ToolResultBlock`` whose effective length exceeds ``threshold``.
+    unsummarized ``ToolResultBlock`` whose effective formal-result length exceeds ``threshold``.
     For spill manifests the effective length is ``original_char_count`` (the
     wire-visible manifest is small, but the original payload may have been large).
+
+    Kernel metadata under ``_meta`` (including notifications/guidance) is excluded.
 
     Returns the effective char length when the block qualifies, else ``None``.
     This is the single source of truth shared by the total-length summer
@@ -54,16 +57,7 @@ def _pending_large_result_len(block, threshold: int):
             return None
         return original_char_count
 
-    if isinstance(content, str):
-        result_len = len(content)
-    else:
-        import json as _json
-
-        try:
-            serialized = _json.dumps(content, ensure_ascii=False, default=str)
-        except (TypeError, ValueError):
-            serialized = str(content)
-        result_len = len(serialized)
+    result_len = formal_tool_result_visible_len(content)
 
     if result_len <= threshold:
         return None
@@ -451,17 +445,8 @@ def _rescan_large_tool_results(agent) -> int:
                 spill_path = content.get("spill_path") if isinstance(content, dict) else None
                 preview_text = None
             else:
-                import json as _json
-                if isinstance(content, str):
-                    result_len = len(content)
-                    preview_text = content[:200]
-                else:
-                    try:
-                        serialized = _json.dumps(content, ensure_ascii=False, default=str)
-                    except (TypeError, ValueError):
-                        serialized = str(content)
-                    result_len = len(serialized)
-                    preview_text = serialized[:200]
+                result_len = formal_tool_result_visible_len(content)
+                preview_text = formal_tool_result_preview(content, 200)
 
                 if result_len <= threshold:
                     continue

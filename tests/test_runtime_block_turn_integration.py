@@ -1,14 +1,14 @@
-"""Turn-level integration tests for the latest-only `_runtime` block.
+"""Turn-level integration tests for the latest-only ``_meta`` agent/guidance blocks.
 
 These tests drive ``base_agent.turn._process_response`` end-to-end (with light
 fakes) to verify the parent-identified blockers are actually fixed at the
 boundary, not just in the helper:
 
   * blocker #1 — ``attach_active_runtime`` is invoked at the tool-batch
-    boundary, so the latest provider-visible result gets ``_runtime.state`` and
-    ``_runtime.guidance``.
-  * the latest-only invariant — a prior result loses ``_runtime`` once a newer
-    dict-shaped result takes over across consecutive batches.
+    boundary, so the latest provider-visible result gets ``_meta.agent_meta``
+    and ``_meta.guidance``.
+  * the latest-only invariant — a prior result loses ``_meta.agent_meta`` once a
+    newer dict-shaped result takes over across consecutive batches.
 
 The helper-level semantics (promotion, pending scaffolding, guidance schema)
 are covered in ``tests/test_meta_block.py``; this file proves the wiring.
@@ -135,12 +135,13 @@ def test_runtime_block_lands_on_latest_result_at_turn_boundary(tmp_path):
 
     holder = agent._runtime_live_holder
     assert holder is not None, "attach_active_runtime was not invoked at the boundary"
-    assert holder["_runtime"]["state"]["current_time"] == "T1"
+    assert holder["_meta"]["agent_meta"]["current_time"] == "T1"
     # The turn records the batch's calls on the guard (2 seeded + 1 this batch),
-    # and the boundary stamps the live total under _runtime.state.
-    assert holder["_runtime"]["state"]["active_turn_tool_calls"] == 3
-    # guidance from guidance.json rides on the latest result.
-    assert holder["_runtime"]["guidance"]["schema_version"] == 1
+    # and the boundary stamps the live total under _meta.agent_meta.
+    assert holder["_meta"]["agent_meta"]["active_turn_tool_calls"] == 3
+    # guidance from guidance.json rides on the latest result, with meta_readme.
+    assert holder["_meta"]["guidance"]["schema_version"] == 1
+    assert "meta_readme" in holder["_meta"]["guidance"]
     # transient scaffolding is gone; no top-level counter repetition.
     assert "_runtime_pending" not in holder
     assert "active_turn_tool_calls" not in holder
@@ -155,7 +156,7 @@ def test_prior_runtime_block_is_stripped_when_newer_result_arrives(tmp_path):
     )
     _process_response(agent, first_response, ledger_source="test")
     first_holder = agent._runtime_live_holder
-    assert first_holder["_runtime"]["state"]["current_time"] == "T1"
+    assert first_holder["_meta"]["agent_meta"]["current_time"] == "T1"
 
     # Stage a second assistant turn with a fresh tool call, then process it.
     agent._chat.interface.add_assistant_message(
@@ -170,6 +171,6 @@ def test_prior_runtime_block_is_stripped_when_newer_result_arrives(tmp_path):
 
     second_holder = agent._runtime_live_holder
     assert second_holder is not first_holder
-    assert second_holder["_runtime"]["state"]["current_time"] == "T2"
-    # The previous holder must have shed its _runtime (latest-only invariant).
-    assert "_runtime" not in first_holder
+    assert second_holder["_meta"]["agent_meta"]["current_time"] == "T2"
+    # The previous holder must have shed its agent_meta/guidance (latest-only).
+    assert "_meta" not in first_holder or "agent_meta" not in first_holder["_meta"]

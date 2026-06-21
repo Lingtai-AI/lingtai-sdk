@@ -122,7 +122,7 @@ semantics, and the undismissable large-result reminders, read
 consumed a completed prior tool result, replace its context-visible raw payload
 with a summary that preserves the conclusion, evidence, anchors, validation,
 risks, and next steps. Runtime high-attention guidance for this behavior is
-carried in `_runtime.guidance` from `src/lingtai/prompts/guidance.json`; follow
+carried in `_meta.guidance` from `src/lingtai/prompts/guidance.json`; follow
 that latest guidance first when it appears.
 
 For the full operating procedure — urgent large-result summarization, idle

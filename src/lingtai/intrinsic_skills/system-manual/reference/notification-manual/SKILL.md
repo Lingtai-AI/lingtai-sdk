@@ -74,7 +74,7 @@ is a context-hygiene operation owned by `system`, **not** a notification verb.
 `notification(action="check")` returns a placeholder; the kernel stamps the live
 notification payload onto that tool result. The same payload is synthesized when
 notifications arrive while the agent is IDLE or ASLEEP. The payload contains a
-global `_notification_guidance` plus `notifications:{...}` keyed by channel.
+`_meta.notification_guidance` plus `_meta.notifications:{...}` keyed by channel.
 After handling a notification, dismiss it and end your turn — do not call
 `check` voluntarily again.
 

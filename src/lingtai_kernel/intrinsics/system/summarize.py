@@ -14,6 +14,8 @@ import datetime as _dt
 import json as _json
 from typing import Any
 
+from ...meta_block import formal_tool_result_visible_len
+
 
 # Stable marker stamped on every summarized replacement block so future
 # passes (and idempotency checks) can detect them without heuristics.
@@ -50,13 +52,13 @@ def _find_tool_result_block(agent, tool_call_id: str):
 
 
 def _visible_len(content: Any) -> int:
-    """Return the context-visible character length of a tool-result content."""
-    if isinstance(content, str):
-        return len(content)
-    try:
-        return len(_json.dumps(content, ensure_ascii=False, default=str))
-    except (TypeError, ValueError):
-        return len(str(content))
+    """Return visible length of the formal tool-result payload only.
+
+    Kernel/runtime metadata such as ``_meta.notifications`` and
+    ``_meta.guidance`` is channel guidance/state, not the substantive result
+    being summarized.
+    """
+    return formal_tool_result_visible_len(content)
 
 
 def _summarize(agent, args: dict) -> dict:
