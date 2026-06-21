@@ -1418,10 +1418,12 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
             # Only log when a genuinely new holder was established (changed and
             # is not None), i.e. when stamping actually happened this batch.
             _new_holder = agent._notification_live_holder
+            _new_meta = _new_holder.get("_meta") if isinstance(_new_holder, dict) else None
             if (
                 _new_holder is not None
                 and _new_holder is not _prior_holder
-                and "notifications" in _new_holder
+                and isinstance(_new_meta, dict)
+                and "notifications" in _new_meta
             ):
                 try:
                     _carrier_call_id = ""
@@ -1430,8 +1432,8 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
                             _carrier_call_id = str(getattr(_result, "id", "") or "")
                             break
                     _block_payload = {
-                        "_notification_guidance": _new_holder.get("_notification_guidance", ""),
-                        "notifications": _new_holder.get("notifications", {}),
+                        "notification_guidance": _new_meta.get("notification_guidance", ""),
+                        "notifications": _new_meta.get("notifications", {}),
                     }
                     agent._log_notification_block_injected(
                         _block_payload,
@@ -1442,13 +1444,14 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
                 except Exception:
                     pass
 
-        # Move the live `_runtime` block (kernel runtime state + guidance) to
-        # the latest tool-result dict from this batch, stripping it from the
-        # prior holder.  This keeps `_runtime` latest-only — only the freshest
-        # provider-visible result carries live runtime state, so stale snapshots
-        # do not accumulate in history.  Mirrors the notification holder above.
-        # Unlike notifications there is no molt-race special case: `_runtime` is
-        # a pure per-turn snapshot, not kernel-synchronized channel state.
+        # Move the live `_meta.agent_meta` / `_meta.guidance` blocks (kernel
+        # runtime state + guidance) to the latest tool-result dict from this
+        # batch, stripping them from the prior holder.  This keeps them
+        # latest-only — only the freshest provider-visible result carries live
+        # agent state, so stale snapshots do not accumulate in history.  Mirrors
+        # the notification holder above.  Unlike notifications there is no
+        # molt-race special case: these are pure per-turn snapshots, not
+        # kernel-synchronized channel state.
         try:
             agent._runtime_live_holder = attach_active_runtime(
                 agent,

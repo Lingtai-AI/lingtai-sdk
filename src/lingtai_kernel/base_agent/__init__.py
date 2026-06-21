@@ -1322,13 +1322,18 @@ class BaseAgent:
 
         notifications_with_guidance = build_notification_payload(notifications)
 
+        # Nest the canonical notification payload under the unified ``_meta``
+        # envelope so the synthesized pair presents notifications the same way
+        # an ACTIVE tool result does (``_meta.notifications`` +
+        # ``_meta.notification_guidance``).
         body = {
             "_synthesized": True,
-            **notifications_with_guidance,
+            "_meta": dict(notifications_with_guidance),
         }
-        # Flatten meta into body top-level — matches real tool results
-        # (status/result fields then current_time/context/stamina_left_seconds
-        # at the same level), so the model sees the same shape it's used to.
+        # Flatten build_meta fields into body top-level — these are the
+        # synthesized pair's own freshness/uniqueness fields (current_time,
+        # context, stamina_left_seconds, injection_seq), distinct from the
+        # four tool-result-metadata blocks under ``_meta``.
         body.update(meta)
         # Store body as a dict (not a JSON string) so it can be mutated
         # in-place when this pair is skeletonized later.  All adapters
@@ -1442,7 +1447,7 @@ class BaseAgent:
 
         Best-effort: any exception is swallowed so callers are never broken
         by a logging failure.  ``payload`` is the dict returned by
-        ``build_notification_payload`` — ``{"_notification_guidance": ...,
+        ``build_notification_payload`` — ``{"notification_guidance": ...,
         "notifications": {...}}``.  A deep copy is stored so later
         in-place skeletonization or nested mutation of the live holder does not
         corrupt the logged snapshot.
@@ -1455,7 +1460,7 @@ class BaseAgent:
                 call_id=call_id or "",
                 sources=sources,
                 payload={
-                    "_notification_guidance": payload.get("_notification_guidance", ""),
+                    "notification_guidance": payload.get("notification_guidance", ""),
                     "notifications": copy.deepcopy(payload.get("notifications", {})),
                 },
                 meta=meta or {},

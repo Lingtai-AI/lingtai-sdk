@@ -953,8 +953,8 @@ def test_legacy_tool_result_metadata_removed_for_small_dict_result(tmp_path):
     )
 
     assert "_tool_result_metadata" not in content
-    assert content["_tool"]["id"] == "tc-small"
-    assert content["_tool"]["char_count"] > 0
+    assert content["_meta"]["tool_meta"]["id"] == "tc-small"
+    assert content["_meta"]["tool_meta"]["char_count"] > 0
 
 
 def test_legacy_tool_result_metadata_removed_for_large_dict_result(tmp_path):
@@ -965,5 +965,5 @@ def test_legacy_tool_result_metadata_removed_for_large_dict_result(tmp_path):
     )
 
     assert "_tool_result_metadata" not in content
-    assert content["_tool"]["id"] == "tc-large"
-    assert content["_tool"]["char_count"] > 0
+    assert content["_meta"]["tool_meta"]["id"] == "tc-large"
+    assert content["_meta"]["tool_meta"]["char_count"] > 0

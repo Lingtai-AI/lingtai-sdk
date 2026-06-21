@@ -1456,7 +1456,7 @@ class Agent(BaseAgent):
             self._prompt_manager.delete_section("procedures")
 
         # --- Runtime guidance mirror ---
-        # `_runtime.guidance` is latest-only tool-result metadata, but the TUI
+        # `_meta.guidance` is latest-only tool-result metadata, but the TUI
         # also needs a filesystem-visible copy. Mirror the packaged prompt
         # resource on every boot/refresh, just like substrate/procedures mirrors.
         guidance_file = system_dir / "guidance.json"

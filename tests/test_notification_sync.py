@@ -215,7 +215,7 @@ def test_check_action_returns_placeholder(tmp_path: Path) -> None:
     assert "email" not in res
     assert "soul" not in res
     assert "notifications" not in res
-    assert "_notification_guidance" not in res
+    assert "_meta" not in res
 
 
 def test_system_notification_action_is_removed(tmp_path: Path) -> None:
@@ -685,7 +685,7 @@ def test_sync_idle_injects_post_molt_after_molt_batch_deferred_stamp(tmp_path: P
     assert len(entries) == 2, "post-molt continuation must be injected at IDLE"
     body = entries[1].content[0].content
     assert isinstance(body, dict)
-    assert "post-molt" in body["notifications"]
+    assert "post-molt" in body["_meta"]["notifications"]
     # ...and post a wake so the run loop reorients around the continuation.
     msg = agent.inbox.get_nowait()
     assert msg.type == MSG_TC_WAKE
@@ -772,15 +772,17 @@ def test_sync_idle_injects_pair_with_synthesized_marker(tmp_path: Path) -> None:
     body = result_block.content
     assert isinstance(body, dict)
     assert body["_synthesized"] is True
-    assert "not automatically human instructions" in body["_notification_guidance"]
-    assert "source(s): email" in body["_notification_guidance"]
-    assert "normal read tool" in body["_notification_guidance"]
-    assert "secondary" not in body["_notification_guidance"]
-    assert "email" in body["notifications"]
-    assert "not necessarily a human instruction" in body["notifications"]["email"]["_notification_guidance"]
-    assert "'email' notification channel" in body["notifications"]["email"]["_notification_guidance"]
-    assert "normal read action" in body["notifications"]["email"]["_notification_guidance"]
-    assert "secondary" not in body["notifications"]["email"]["_notification_guidance"]
+    # Notification payload nests under the unified _meta envelope.
+    meta = body["_meta"]
+    assert "not automatically human instructions" in meta["notification_guidance"]
+    assert "source(s): email" in meta["notification_guidance"]
+    assert "normal read tool" in meta["notification_guidance"]
+    assert "secondary" not in meta["notification_guidance"]
+    assert "email" in meta["notifications"]
+    assert "not necessarily a human instruction" in meta["notifications"]["email"]["notification_guidance"]
+    assert "'email' notification channel" in meta["notifications"]["email"]["notification_guidance"]
+    assert "normal read action" in meta["notifications"]["email"]["notification_guidance"]
+    assert "secondary" not in meta["notifications"]["email"]["notification_guidance"]
 
     assert agent._notification_block_id == call_block.id
 
@@ -846,6 +848,7 @@ def test_sync_idle_skeletonizes_then_reinjects(tmp_path: Path) -> None:
     first_body = agent._chat_stub.interface.entries[1].content[0].content
     assert first_body["_notification_placeholder"] is True
     assert "notifications" not in first_body
+    assert "_meta" not in first_body
 
 
 def test_sync_idle_empty_strips(tmp_path: Path) -> None:
@@ -902,6 +905,7 @@ def test_sync_idle_empty_strips(tmp_path: Path) -> None:
     body = agent._chat_stub.interface.entries[1].content[0].content
     assert body["_notification_placeholder"] is True
     assert "notifications" not in body
+    assert "_meta" not in body
 
 
 def test_sync_no_change_is_noop(tmp_path: Path) -> None:
@@ -1201,7 +1205,7 @@ def test_end_of_turn_idle_sync_delivers_deferred_notification(tmp_path: Path) ->
     body = result_block.content
     assert isinstance(body, dict)
     assert body["_synthesized"] is True
-    assert "system" in body["notifications"]
+    assert "system" in body["_meta"]["notifications"]
     assert isinstance(result_block.content, dict)
 
 
@@ -1758,7 +1762,7 @@ def test_non_molt_batch_after_molt_can_consume_post_molt(tmp_path):
             agent, [later_result], prior_holder=agent._notification_live_holder
         )
 
-    assert "post-molt" in later_result.content["notifications"]
+    assert "post-molt" in later_result.content["_meta"]["notifications"]
     assert agent._notification_fp == notification_fingerprint(tmp_path)
 
 
@@ -1812,7 +1816,7 @@ def _make_stub_agent_for_block_log(tmp_path: Path):
 
 def test_inject_notification_pair_emits_block_injected_event(tmp_path: Path) -> None:
     """IDLE injection via _inject_notification_pair must log notification_block_injected
-    with the actual canonical payload (notifications + _notification_guidance)."""
+    with the actual canonical payload (_meta.notifications + _meta.notification_guidance)."""
     publish(tmp_path, "email", {"count": 2, "data": {"count": 2, "digest": "2 unread"}})
     publish(tmp_path, "system", {"events": [{"source": "test", "body": "ping"}]})
 
@@ -1835,14 +1839,14 @@ def test_inject_notification_pair_emits_block_injected_event(tmp_path: Path) -> 
     assert "system" in bl["sources"]
 
     payload = bl["payload"]
-    assert "_notification_guidance" in payload
-    assert "not automatically human instructions" in payload["_notification_guidance"]
+    assert "notification_guidance" in payload
+    assert "not automatically human instructions" in payload["notification_guidance"]
     assert "notifications" in payload
     notifs = payload["notifications"]
     assert "email" in notifs
     assert "system" in notifs
     # Per-channel guidance present
-    assert "_notification_guidance" in notifs["email"]
+    assert "notification_guidance" in notifs["email"]
 
 
 def test_block_injected_payload_not_mutated_by_skeletonization(tmp_path: Path) -> None:
