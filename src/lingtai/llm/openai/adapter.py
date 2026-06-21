@@ -22,6 +22,7 @@ import httpx
 import openai
 
 from lingtai_kernel.logging import get_logger
+from lingtai_kernel.config import THINKING_LEVELS
 
 from lingtai_kernel.llm.base import (
     ChatSession,
@@ -186,6 +187,18 @@ def _validate_compact_threshold(value: int | None) -> int | None:
     if value <= 0:
         raise ValueError("compact_threshold must be > 0 or None")
     return value
+
+
+def _responses_reasoning_kwargs(thinking: str | None) -> dict[str, dict[str, str]]:
+    """Return OpenAI Responses reasoning kwargs for a configured thinking level."""
+    if thinking in (None, "default"):
+        return {}
+    if thinking not in THINKING_LEVELS:
+        raise ValueError(
+            "OpenAI Responses thinking must be one of "
+            f"{', '.join(THINKING_LEVELS)}, or default"
+        )
+    return {"reasoning": {"effort": thinking}}
 
 
 def _codex_responses_trace_path() -> Path | None:
@@ -1470,12 +1483,11 @@ class OpenAIAdapter(LLMAdapter):
                 },
             }
 
-        if thinking != "default":
-            # Responses API takes `reasoning: { effort: ... }`, not the
-            # Chat Completions SDK's flat `reasoning_effort`. Sending the
-            # wrong shape silently drops the field on the OpenAI Responses
-            # endpoint and 400s on Codex's `/backend-api/codex/responses`.
-            extra_kwargs["reasoning"] = {"effort": "high" if thinking == "high" else "low"}
+        # Responses API takes `reasoning: { effort: ... }`, not the Chat
+        # Completions SDK's flat `reasoning_effort`. Sending the wrong shape
+        # silently drops the field on the OpenAI Responses endpoint and 400s
+        # on Codex's `/backend-api/codex/responses`.
+        extra_kwargs.update(_responses_reasoning_kwargs(thinking))
 
         return OpenAIResponsesSession(
             client=self._client,
@@ -2106,8 +2118,7 @@ class CodexOpenAIAdapter(OpenAIAdapter):
                 },
             }
 
-        if thinking != "default":
-            extra_kwargs["reasoning"] = {"effort": "high" if thinking == "high" else "low"}
+        extra_kwargs.update(_responses_reasoning_kwargs(thinking))
 
         # Codex's backend doesn't accept context_management compaction —
         # leave compact_threshold unset.

@@ -164,6 +164,32 @@ def test_api_key_env_wrong_type():
         validate_init(data)
 
 
+@pytest.mark.parametrize("value", ["low", "medium", "high", "xhigh"])
+def test_llm_thinking_valid_values(value):
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = "codex"
+    data["manifest"]["llm"]["thinking"] = value
+    validate_init(data)
+
+
+@pytest.mark.parametrize("value", ["default", "ultra", 1, None])
+def test_llm_thinking_invalid_values(value):
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = "codex"
+    data["manifest"]["llm"]["thinking"] = value
+    with pytest.raises(ValueError, match="manifest.llm.thinking"):
+        validate_init(data)
+
+
+@pytest.mark.parametrize("value", ["high", "default", None])
+def test_llm_thinking_rejected_for_non_codex_provider(value):
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = "anthropic"
+    data["manifest"]["llm"]["thinking"] = value
+    with pytest.raises(ValueError, match=r"manifest\.llm\.thinking.*Codex"):
+        validate_init(data)
+
+
 # --- addons (list of curated MCP names; mcp capability handles the rest) ---
 
 

@@ -7,9 +7,12 @@ import json
 from dataclasses import dataclass
 from types import SimpleNamespace
 
+import pytest
+
 from lingtai.llm.interface_converters import to_responses_input
 from lingtai.llm.openai.adapter import (
     CodexOpenAIAdapter,
+    OpenAIAdapter,
     OpenAIResponsesSession,
 )
 from lingtai_kernel.llm.base import FunctionSchema
@@ -130,7 +133,7 @@ def _reasoning_events() -> list[Event]:
     ]
 
 
-def _create_codex_session(events: list[Event]):
+def _create_codex_session(events: list[Event], *, thinking: str = "high"):
     adapter = CodexOpenAIAdapter(
         api_key="fake",
         base_url="http://fake",
@@ -143,8 +146,44 @@ def _create_codex_session(events: list[Event]):
         "system prompt",
         tools=[_function_schema()],
         force_tool_call=True,
-        thinking="high",
+        thinking=thinking,
     )
+
+
+@pytest.mark.parametrize("thinking", ["low", "medium", "high", "xhigh"])
+def test_openai_responses_sends_exact_reasoning_effort(thinking):
+    adapter = OpenAIAdapter(api_key="fake", use_responses=True)
+    adapter._client = FakeClient([_completed()])
+    session = adapter.create_chat("gpt-5.5", "system prompt", thinking=thinking)
+
+    session.send_stream("hello")
+
+    sent = adapter._client.responses.kwargs[-1]
+    assert sent["reasoning"] == {"effort": thinking}
+    assert "reasoning_effort" not in sent
+
+
+@pytest.mark.parametrize("thinking", ["low", "medium", "high", "xhigh"])
+def test_codex_responses_sends_exact_reasoning_effort(thinking):
+    session = _create_codex_session([_completed()], thinking=thinking)
+
+    session.send_stream("hello")
+
+    sent = session._client.responses.kwargs[-1]
+    assert sent["reasoning"] == {"effort": thinking}
+    assert "reasoning_effort" not in sent
+
+
+@pytest.mark.parametrize("adapter_cls", [OpenAIAdapter, CodexOpenAIAdapter])
+def test_responses_rejects_unsupported_thinking(adapter_cls):
+    kwargs = {"api_key": "fake", "use_responses": True}
+    if adapter_cls is CodexOpenAIAdapter:
+        kwargs.update({"base_url": "http://fake", "force_responses": True})
+    adapter = adapter_cls(**kwargs)
+    adapter._client = FakeClient([_completed()])
+
+    with pytest.raises(ValueError, match="OpenAI Responses thinking"):
+        adapter.create_chat("gpt-5.5", "system prompt", thinking="ultra")
 
 
 def test_codex_stream_captures_reasoning_and_persists_thinking_block():
