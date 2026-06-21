@@ -63,7 +63,7 @@ def test_build_meta_time_blind_regardless_of_timezone_awareness():
 
 
 def test_build_meta_counts_current_tool_result_chars_excluding_meta():
-    formal_payload = {"payload": "ok"}
+    formal_payload = {"payload": "X" * 1200}
     tool_block = ToolResultBlock(
         id="tc-history",
         name="bash",
@@ -95,16 +95,22 @@ def test_build_meta_counts_current_tool_result_chars_excluding_meta():
 
     meta = build_meta(agent)
 
-    assert meta["current_tool_result_chars"] == len(
-        json.dumps(formal_payload, ensure_ascii=False, default=str)
+    current = meta["current_tool_result_chars"]
+    expected = len(json.dumps(formal_payload, ensure_ascii=False, default=str))
+    assert current["_readme"] == (
+        "listing top 5 tool result longer than 1000 char; "
+        "consider summarize if deemed useless"
     )
+    assert current["total_chars"] == expected
+    assert current["top_results"] == [{"id": "tc-history", "chars": expected}]
 
 
 def test_build_meta_readme_mentions_tool_result_char_count_and_summarize():
     readme = build_meta_readme()
 
     assert "current_tool_result_chars" in readme["agent_meta"]
-    assert "summarized" in readme["agent_meta"]
+    assert "top" in readme["agent_meta"]
+    assert "summarization" in readme["agent_meta"]
 
 
 def _fake_agent_with_lang(lang: str, *, time_awareness: bool = True):
@@ -829,9 +835,11 @@ def test_attach_active_runtime_counts_current_batch_tool_result_chars():
     attach_active_runtime(agent, [block])
 
     agent_meta = block.content["_meta"]["agent_meta"]
-    assert agent_meta["current_tool_result_chars"] == len(
+    current = agent_meta["current_tool_result_chars"]
+    assert current["total_chars"] == len(
         json.dumps({"payload": "batch"}, ensure_ascii=False, default=str)
     )
+    assert current["top_results"] == []
 
 
 def test_attach_active_runtime_stamps_latest_with_state_and_guidance():

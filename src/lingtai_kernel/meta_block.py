@@ -128,8 +128,20 @@ def _iter_history_tool_result_blocks(agent):
                 yield block
 
 
-def current_tool_result_chars(agent, extra_results=()) -> int:
-    """Return current context-visible formal tool-result chars.
+TOOL_RESULT_CHARS_TOP_N = 5
+TOOL_RESULT_CHARS_MIN = 1000
+TOOL_RESULT_CHARS_README = (
+    "listing top 5 tool result longer than 1000 char; "
+    "consider summarize if deemed useless"
+)
+
+
+def _tool_result_id(block) -> str:
+    return str(getattr(block, "id", None) or getattr(block, "tool_call_id", None) or "")
+
+
+def current_tool_result_chars(agent, extra_results=()) -> dict:
+    """Return current context-visible formal tool-result char summary.
 
     The count is intentionally based on formal result payloads rather than
     runtime metadata.  ``_meta`` notifications/guidance, transient scaffolding,
@@ -139,15 +151,30 @@ def current_tool_result_chars(agent, extra_results=()) -> int:
     appended to chat history.
     """
     total = 0
+    top: list[dict] = []
     seen: set[int] = set()
-    for block in _iter_history_tool_result_blocks(agent) or ():
+
+    def visit(block) -> None:
+        nonlocal total
         seen.add(id(block))
-        total += formal_tool_result_visible_len(getattr(block, "content", ""))
+        chars = formal_tool_result_visible_len(getattr(block, "content", ""))
+        total += chars
+        if chars > TOOL_RESULT_CHARS_MIN:
+            top.append({"id": _tool_result_id(block), "chars": chars})
+
+    for block in _iter_history_tool_result_blocks(agent) or ():
+        visit(block)
     for block in extra_results or ():
         if not _is_tool_result_block(block) or id(block) in seen:
             continue
-        total += formal_tool_result_visible_len(getattr(block, "content", ""))
-    return total
+        visit(block)
+
+    top.sort(key=lambda item: item["chars"], reverse=True)
+    return {
+        "_readme": TOOL_RESULT_CHARS_README,
+        "total_chars": total,
+        "top_results": top[:TOOL_RESULT_CHARS_TOP_N],
+    }
 
 
 def _meta_block(result: dict) -> dict:
@@ -181,8 +208,8 @@ def build_meta_readme() -> dict:
             "Agent/current-state snapshot (time, context usage, stamina, "
             "active_turn_tool_calls, current_tool_result_chars). Latest tool "
             "result only; older copies are stripped as newer results arrive. "
-            "Use the char count to decide when older/unused tool results "
-            "should be summarized."
+            "current_tool_result_chars is a dict with total_chars and the top "
+            "long tool results to consider for summarization."
         ),
         GUIDANCE_KEY: (
             "Kernel guidance plus this meta_readme. Latest tool result only."
@@ -321,7 +348,7 @@ def build_meta(agent) -> dict:
                 "usage": float,              # fraction of context window used
             },
             "stamina_left_seconds": float,   # session time remaining; -1 if unstarted
-            "current_tool_result_chars": int, # formal tool-result chars in context
+            "current_tool_result_chars": dict, # total + top long formal tool results
         }
 
     Sentinel handling: when token decomposition has not yet run, the
