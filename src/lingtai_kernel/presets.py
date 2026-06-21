@@ -38,6 +38,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from .config import THINKING_LEVELS
+
 log = logging.getLogger(__name__)
 
 
@@ -306,6 +308,19 @@ def load_preset(
         raise ValueError(
             f"preset {name!r} ({p}): context_limit must be an integer (got {type(ctx_limit).__name__})"
         )
+    if "thinking" in llm:
+        provider = llm.get("provider")
+        if not isinstance(provider, str) or provider.lower() != "codex":
+            raise ValueError(
+                f"preset {name!r} ({p}): manifest.llm.thinking is currently "
+                "supported only for the Codex provider (provider='codex')"
+            )
+        thinking = llm["thinking"]
+        if not isinstance(thinking, str) or thinking not in THINKING_LEVELS:
+            raise ValueError(
+                f"preset {name!r} ({p}): manifest.llm.thinking must be one of "
+                f"{', '.join(THINKING_LEVELS)}"
+            )
 
     caps = manifest.get("capabilities", {})
     if not isinstance(caps, dict):

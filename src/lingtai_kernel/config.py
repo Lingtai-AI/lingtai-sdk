@@ -4,6 +4,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
+THINKING_LEVELS = ("low", "medium", "high", "xhigh")
+
+
 @dataclass
 class AgentConfig:
     """Configuration for a BaseAgent instance.
@@ -21,6 +24,7 @@ class AgentConfig:
     max_aed_attempts: int = 10   # max AED retry attempts per inbox message turn
     max_rpm: int = 60  # API requests-per-minute cap for this agent's provider; 0 = no gating. Shared across all agents in the same process that use the same (provider, base_url) pair (adapter cache key).
     thinking_budget: int | None = None
+    thinking: str = "high"  # reasoning/thinking tier passed to the main persistent LLM session
     data_dir: str | None = None  # for cache files (e.g., model context windows)
     soul_delay: float = 99999.0  # seconds idle before soul whispers; large value (> stamina) = effectively off
     language: str = "en"  # agent language ("en", "zh", "wen"); controls kernel-injected prose

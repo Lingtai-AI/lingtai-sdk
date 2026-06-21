@@ -328,6 +328,58 @@ def test_load_preset_rejects_non_integer_context_limit(tmp_path):
         load_preset(str(f))
 
 
+@pytest.mark.parametrize("value", ["low", "medium", "high", "xhigh"])
+def test_load_preset_accepts_thinking_values(tmp_path, value):
+    p = {
+        "name": "thinking",
+        "description": _DESC,
+        "manifest": {
+            "llm": {"provider": "codex", "model": "gpt-5.5", "thinking": value},
+            "capabilities": {},
+        },
+    }
+    f = tmp_path / "thinking.json"
+    f.write_text(json.dumps(p))
+
+    loaded = load_preset(str(f))
+
+    assert loaded["manifest"]["llm"]["thinking"] == value
+
+
+@pytest.mark.parametrize("value", ["default", "ultra", 1, None])
+def test_load_preset_rejects_invalid_thinking(tmp_path, value):
+    p = {
+        "name": "bad",
+        "description": _DESC,
+        "manifest": {
+            "llm": {"provider": "codex", "model": "gpt-5.5", "thinking": value},
+            "capabilities": {},
+        },
+    }
+    f = tmp_path / "bad.json"
+    f.write_text(json.dumps(p))
+
+    with pytest.raises(ValueError, match="manifest.llm.thinking"):
+        load_preset(str(f))
+
+
+@pytest.mark.parametrize("value", ["high", "default", None])
+def test_load_preset_rejects_thinking_for_non_codex_provider(tmp_path, value):
+    p = {
+        "name": "bad",
+        "description": _DESC,
+        "manifest": {
+            "llm": {"provider": "anthropic", "model": "claude", "thinking": value},
+            "capabilities": {},
+        },
+    }
+    f = tmp_path / "bad-provider.json"
+    f.write_text(json.dumps(p))
+
+    with pytest.raises(ValueError, match=r"manifest\.llm\.thinking.*Codex"):
+        load_preset(str(f))
+
+
 def test_preset_context_limit_reads_from_llm_block():
     manifest = {
         "llm": {"provider": "x", "model": "y", "context_limit": 16384},

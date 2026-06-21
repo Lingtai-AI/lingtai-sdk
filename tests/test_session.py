@@ -63,6 +63,20 @@ def test_ensure_session_passes_interaction_id():
     assert call_kwargs["interaction_id"] == "int-123"
 
 
+def test_ensure_session_defaults_thinking_to_high():
+    sm, svc, _ = make_session_manager()
+    sm.ensure_session()
+    call_kwargs = svc.create_session.call_args.kwargs
+    assert call_kwargs["thinking"] == "high"
+
+
+def test_ensure_session_uses_configured_thinking():
+    sm, svc, _ = make_session_manager(config=AgentConfig(thinking="xhigh"))
+    sm.ensure_session()
+    call_kwargs = svc.create_session.call_args.kwargs
+    assert call_kwargs["thinking"] == "xhigh"
+
+
 # ------------------------------------------------------------------
 # send() — the core operation
 # ------------------------------------------------------------------
@@ -286,6 +300,14 @@ def test_rebuild_session_uses_current_prompt_and_tools():
     assert call_kw["provider"] is None
     assert call_kw["interface"] is mock_interface
     assert sm.chat is mock_rebuilt
+
+
+def test_rebuild_session_uses_configured_thinking():
+    sm, svc, _ = make_session_manager(config=AgentConfig(thinking="medium"))
+    mock_interface = MagicMock()
+    sm._rebuild_session(mock_interface)
+    call_kw = svc.create_session.call_args.kwargs
+    assert call_kw["thinking"] == "medium"
 
 
 def test_rebuild_session_tracked_false():

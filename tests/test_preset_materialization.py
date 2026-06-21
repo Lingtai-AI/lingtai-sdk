@@ -106,12 +106,82 @@ def test_materialize_substitutes_llm_and_capabilities(tmp_path, monkeypatch):
     assert "vision" in data["manifest"]["capabilities"]
 
 
+def test_materialize_preserves_thinking_from_active_preset(tmp_path):
+    plib = _make_preset_lib(tmp_path, {
+        "codex": {
+            "name": "codex",
+            "description": {"summary": "Codex"},
+            "manifest": {
+                "llm": {
+                    "provider": "codex",
+                    "model": "gpt-5.5",
+                    "thinking": "xhigh",
+                },
+                "capabilities": {"file": {}},
+            },
+        },
+    })
+    wd = _make_workdir(tmp_path, active_preset=str(plib / "codex.json"))
+
+    a = _make_probe_agent(wd)
+    data = a._read_init()
+
+    assert data is not None
+    assert data["manifest"]["llm"]["thinking"] == "xhigh"
+
+
 def test_materialize_no_preset_field_unchanged(tmp_path):
     """init.json without active_preset behaves exactly as before."""
     wd = _make_workdir(tmp_path)
     a = _make_probe_agent(wd)
     data = a._read_init()
     assert data["manifest"]["llm"]["provider"] == "deepseek"  # original
+
+
+def test_refresh_preset_thinking_reaches_session_path(tmp_path):
+    from unittest.mock import MagicMock
+    from lingtai.agent import Agent
+    from lingtai_kernel.config import AgentConfig
+
+    plib = _make_preset_lib(tmp_path, {
+        "codex": {
+            "name": "codex",
+            "description": {"summary": "Codex"},
+            "manifest": {
+                "llm": {
+                    "provider": "codex",
+                    "model": "gpt-5.5",
+                    "thinking": "xhigh",
+                },
+                "capabilities": {"file": {}},
+            },
+        },
+    })
+    wd = _make_workdir(tmp_path, active_preset=str(plib / "codex.json"))
+
+    svc = MagicMock()
+    svc.provider = "codex"
+    svc.model = "gpt-5.5"
+    svc._base_url = None
+    svc._provider_defaults = {"codex": {"max_rpm": 60}}
+    svc.create_session.return_value = MagicMock()
+    svc.make_tool_result = MagicMock()
+    agent = Agent(svc, working_dir=wd, config=AgentConfig())
+
+    # ``_setup_from_init`` rebuilds a real ``LLMService`` from the resolved
+    # manifest (provider/model changed → service is reconstructed) and
+    # reassigns it onto the session, discarding the injected mock above. So
+    # the assertion must inspect the *real* session that ``ensure_session``
+    # creates, not the mock's ``create_session.call_args`` (which is never
+    # touched once the service is rebuilt). The real OpenAI Responses session
+    # folds the thinking level into ``reasoning.effort`` via
+    # ``_responses_reasoning_kwargs`` — asserting on that proves the preset's
+    # ``manifest.llm.thinking`` reaches the actual API reasoning payload.
+    agent._setup_from_init()
+    chat = agent._session.ensure_session()
+
+    assert agent._config.thinking == "xhigh"
+    assert chat._extra_kwargs.get("reasoning") == {"effort": "xhigh"}
 
 
 def test_materialize_unknown_preset_returns_none_and_logs(tmp_path):
