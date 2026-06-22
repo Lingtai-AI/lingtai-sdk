@@ -13,7 +13,7 @@ resume the work it had in flight. The reminder carries:
 - ``summary_path`` — pointer into ``system/summaries/`` when persisted
 
 The post-molt channel is intentionally distinct from the ``molt`` channel
-owned by ``base_agent.turn._check_molt_pressure``; pressure clearing must
+owned by ``base_agent.turn._check_molt_pressure``; legacy cleanup must
 never sweep the post-molt reminder.
 """
 
@@ -259,7 +259,7 @@ class TestPostMoltNotificationSystemForget:
 
 
 # ---------------------------------------------------------------------------
-# Channel isolation — pressure clear must not sweep post-molt
+# Channel isolation — legacy cleanup must not sweep post-molt
 # ---------------------------------------------------------------------------
 
 
@@ -392,8 +392,8 @@ class TestPostMoltContinuationSignal:
 
 
 class TestPostMoltChannelIsolation:
-    def test_pressure_below_threshold_clears_molt_not_post_molt(self, tmp_path):
-        """Falling under molt_pressure clears `.notification/molt.json` but
+    def test_legacy_molt_cleanup_does_not_clear_post_molt(self, tmp_path):
+        """Cleaning stale `.notification/molt.json` must
         leaves `.notification/post-molt.json` intact — they are separate
         producer channels."""
         from lingtai_kernel.notifications import publish, clear
@@ -418,12 +418,12 @@ class TestPostMoltChannelIsolation:
         assert (workdir / ".notification" / "molt.json").is_file()
         assert (workdir / ".notification" / "post-molt.json").is_file()
 
-        # Simulate pressure-clear (channel="molt").
+        # Simulate legacy-cleanup (channel="molt").
         clear(workdir, "molt")
 
         assert not (workdir / ".notification" / "molt.json").exists(), (
-            "pressure clear should remove the molt channel"
+            "legacy cleanup should remove the molt channel"
         )
         assert (workdir / ".notification" / "post-molt.json").is_file(), (
-            "pressure clear must not touch the post-molt channel"
+            "legacy cleanup must not touch the post-molt channel"
         )

@@ -13,6 +13,7 @@ from lingtai_kernel.meta_block import (
     attach_active_runtime,
     build_meta,
     build_meta_readme,
+    build_molt_context,
     build_guidance_with_meta_readme,
     build_runtime_guidance,
     clear_active_notification_holder,
@@ -526,7 +527,7 @@ def test_attach_active_notifications_moves_to_latest_and_clears_prior(tmp_path):
         }
     }
     assert "email" in first.content["_meta"]["notification_guidance"]
-    assert "normal read tool" in first.content["_meta"]["notification_guidance"]
+    assert "verify intent before acting" in first.content["_meta"]["notification_guidance"]
     assert "secondary" not in first.content["_meta"]["notification_guidance"]
     # Successful stamping must commit the fingerprint, so the IDLE-path
     # synthesized pair will treat this same state as already delivered.
@@ -1073,3 +1074,133 @@ def test_attach_active_runtime_is_wired_into_turn_boundary():
     )
     # The holder attribute the boundary mutates must be referenced too.
     assert "_runtime_live_holder" in src
+
+
+# ---------------------------------------------------------------------------
+# build_molt_context / context.molt — context pressure surfaced under
+# _meta.agent_meta.context.molt (not a dismissible notification). Verifies the
+# psyche gate, threshold stages, short message + procedure pointer, and that
+# no full procedure text is inlined.
+# ---------------------------------------------------------------------------
+
+
+def _molt_agent(*, notice=0.5, strong=0.7, immediate=0.9, prompt="", psyche=True):
+    """Minimal agent stand-in for build_molt_context: reads _intrinsics + _config."""
+    return SimpleNamespace(
+        _intrinsics={"psyche": object()} if psyche else {},
+        _config=SimpleNamespace(
+            molt_notice=notice,
+            molt_pressure=strong,
+            molt_urgency=immediate,
+            molt_prompt=prompt,
+            context_limit=None,
+            time_awareness=True,
+            timezone_awareness=True,
+        ),
+    )
+
+
+def test_build_molt_context_absent_below_notice_threshold():
+    agent = _molt_agent()
+    # 0.49 < default notice 0.5 -> no molt context emitted.
+    assert build_molt_context(agent, 0.49) is None
+
+
+def test_build_molt_context_absent_without_psyche():
+    agent = _molt_agent(psyche=False)
+    # Even at 0.95 usage, no molt context when psyche is absent.
+    assert build_molt_context(agent, 0.95) is None
+
+
+def test_build_molt_context_consider_stage_50_to_70():
+    agent = _molt_agent()
+    for usage in (0.50, 0.55, 0.69):
+        molt = build_molt_context(agent, usage)
+        assert molt is not None, f"expected molt at {usage}"
+        assert molt["stage"] == "consider"
+        assert molt["level"] == "notice"
+        assert molt["usage"] == usage
+
+
+def test_build_molt_context_strong_stage_70_to_90():
+    agent = _molt_agent()
+    for usage in (0.70, 0.80, 0.89):
+        molt = build_molt_context(agent, usage)
+        assert molt is not None, f"expected molt at {usage}"
+        assert molt["stage"] == "strong"
+        assert molt["level"] == "warning"
+
+
+def test_build_molt_context_immediate_stage_90_plus():
+    agent = _molt_agent()
+    for usage in (0.90, 0.95, 1.0, 1.05):  # >100% can happen under overflow trim
+        molt = build_molt_context(agent, usage)
+        assert molt is not None, f"expected molt at {usage}"
+        assert molt["stage"] == "immediate"
+        assert molt["level"] == "critical"
+        assert molt["message"].startswith("Context is above 90%; act now")
+        assert "do it immediately; otherwise molt now" in molt["message"]
+
+
+def test_build_molt_context_shape_is_short_with_pointer_not_full_procedure():
+    agent = _molt_agent()
+    molt = build_molt_context(agent, 0.92)
+    assert molt is not None
+    # Required fields.
+    for key in ("usage", "stage", "level",
+                "message", "procedure_ref", "manual", "thresholds"):
+        assert key in molt, f"missing {key}"
+    # Pointers to the detailed procedure, not the full text inlined.
+    assert molt["procedure_ref"] == "procedures.md#performing-a-molt"
+    assert molt["manual"] == "psyche-manual"
+    # Message stays short — no long procedural recipe inlined.
+    assert len(molt["message"]) < 200, "molt message must stay short"
+    assert "session_journal_path" not in molt["message"]
+    # Context pressure is a hygiene signal: reduce bulky tool results first
+    # when summarize can bring pressure down; do not overreact to temporary spikes.
+    assert "Temporary spikes" in molt["message"]
+    assert 'system(action="summarize")' in molt["message"]
+    # Thresholds echo the configured stages.
+    assert molt["thresholds"] == {"consider": 0.5, "strong": 0.7, "immediate": 0.9}
+
+
+def test_build_molt_context_prompt_override_replaces_default_message():
+    agent = _molt_agent(prompt="ship it: molt now please")
+    molt = build_molt_context(agent, 0.93)
+    assert molt is not None
+    assert molt["message"] == "ship it: molt now please"
+
+
+def test_build_molt_context_respects_custom_thresholds():
+    # Custom thresholds shift the stage boundaries.
+    agent = _molt_agent(notice=0.6, strong=0.8, immediate=0.95)
+    assert build_molt_context(agent, 0.55) is None  # below custom notice
+    assert build_molt_context(agent, 0.6)["stage"] == "consider"
+    assert build_molt_context(agent, 0.8)["stage"] == "strong"
+    assert build_molt_context(agent, 0.95)["stage"] == "immediate"
+
+
+def test_build_meta_attaches_context_molt_only_above_threshold():
+    """build_meta integrates build_molt_context: context.molt is absent below
+    the notice threshold and present (as a sub-key of context) above it."""
+    agent = _molt_agent()
+    # No session -> usage sentinel -1.0 -> below threshold -> no molt key.
+    meta = build_meta(agent)
+    assert "molt" not in meta["context"]
+
+    # Inject a fake session whose token decomposition yields usage = 0.9
+    # (system 10 + history 80 over a 100-token window) -> immediate stage.
+    fake_iface = SimpleNamespace(estimate_context_tokens=lambda: 90)
+    fake_session = SimpleNamespace(
+        _token_decomp_dirty=False,
+        _system_prompt_tokens=10,
+        _tools_tokens=0,
+        _latest_input_tokens=0,
+        chat=SimpleNamespace(interface=fake_iface, context_window=lambda: 100),
+    )
+    agent._session = fake_session
+    agent._uptime_anchor = None
+    meta = build_meta(agent)
+    assert meta["context"]["usage"] == pytest.approx(0.9)
+    assert "molt" in meta["context"]
+    assert meta["context"]["molt"]["stage"] == "immediate"

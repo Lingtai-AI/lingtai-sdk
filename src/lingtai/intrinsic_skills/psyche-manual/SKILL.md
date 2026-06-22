@@ -190,20 +190,19 @@ Before you call `psyche(object="context", action="molt", ...)`, always verify at
 
 **`keep_last`** — optional integer (default: 20). Number of recent conversation entries to preserve. These entries are replayed so the post-molt self retains recent context. Pass 0 to explicitly disable (archive everything). Overlapping entries with `keep_tool_calls` are deduplicated.
 
-## 7. Pressure Notification
+## 7. Context Pressure Reminder
 
-When context usage crosses ~70%, a `molt` notification arrives:
+Context pressure is agent state, not a dismissible notification. Current turns surface it under `_meta.agent_meta.context.molt` when usage reaches the configured notice threshold (default 50%). The stages are intentionally short:
 
-- **Gentle (⚠️, ~70%–90%)** — "context at NN% — consider molt." Pick a clean stopping point, tend stores, write journal, draft summary, then molt.
-- **Urgent (🚨, ≥90%)** — "context at NN% — molt NOW." Past 100% the upstream model may reject the request, and the kernel's overflow recovery can drop data. Finish current sub-step, tend stores, and molt.
+- 50%-70%: consider whether a molt would help.
+- 70%-90%: prepare durable stores and molt soon if pressure remains.
+- 90%+: molt now if pressure remains.
 
-There is no forced wipe from pressure notifications. Heeding the gentle warning is your job.
-
-**Molt deliberately. Tend the stores first.**
+Do not overreact to a temporary pressure spike. If long/noisy tool results can be digested with `system(action="summarize")` and that will lower context pressure, summarize first; then decide whether a molt is still needed. The reminder points back to this manual/procedure instead of inlining the full workflow.
 
 ## 8. Post-Wipe Recovery
 
-If you wake up after a *system-performed* molt (triggered by karma, signal file, or operator — NOT by pressure notifications), there is no summary, only a system notice. Your character and pad were reloaded, but conversation history is gone. To reconstruct:
+If you wake up after a *system-performed* molt (triggered by karma, signal file, or operator — NOT by context-pressure reminders), there is no summary, only a system notice. Your character and pad were reloaded, but conversation history is gone. To reconstruct:
 
 1. `email(check)` — see what arrived while you were down
 2. Check `knowledge/session-journal/KNOWLEDGE.md` — your session history index

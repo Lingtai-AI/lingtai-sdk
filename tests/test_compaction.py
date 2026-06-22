@@ -213,10 +213,12 @@ def _make_agent_with_psyche(tmp_path):
     )
 
 
-def test_compaction_warning_published_above_threshold(tmp_path):
-    """Above the molt_pressure threshold, the kernel publishes a
-    notification to .notification/molt.json rather than inlining a
-    [system] block in user content."""
+def test_compaction_pressure_not_published_as_notification(tmp_path):
+    """Above the molt_pressure threshold, the kernel no longer publishes a
+    dismissible ``.notification/molt.json`` warning. Context pressure is
+    agent state and is surfaced under ``_meta.agent_meta.context.molt``
+    (see ``meta_block.build_molt_context``); ``_check_molt_pressure`` only
+    clears any stale legacy ``molt`` notification and never publishes."""
     agent = _make_agent_with_psyche(tmp_path)
     agent.start()
     try:
@@ -243,15 +245,14 @@ def test_compaction_warning_published_above_threshold(tmp_path):
         msg = _make_message(MSG_REQUEST, sender="test", content="do something")
         agent._handle_request(msg)
 
-        # User content is NOT mutated — the molt warning routes through
-        # .notification/molt.json instead.
+        # User content is NOT mutated with an inlined [system] block.
         assert len(sent_content) > 0
         assert not any("[system]" in c for c in sent_content)
 
+        # The legacy molt pressure notification is NOT published anymore.
         notif_path = agent._working_dir / ".notification" / "molt.json"
-        assert notif_path.is_file(), "above-threshold molt should publish a notification"
-        import json
-        notif = json.loads(notif_path.read_text())
-        assert "molt" in json.dumps(notif).lower()
+        assert not notif_path.is_file(), (
+            "context pressure must not be published as .notification/molt.json"
+        )
     finally:
         agent.stop()

@@ -785,89 +785,22 @@ def _handle_message(agent, msg: Message) -> None:
         logger.warning(f"[{agent.agent_name}] Unknown message type: {msg.type}")
 
 
-_MOLT_WARNING_GENTLE = (
-    "[system] Context at {pressure} — consider molt. See 'Performing a Molt' "
-    "in your procedures for the recipe (tend pad / lingtai / knowledge / "
-    "skills, write the session-journal entry, then `psyche(object=context, "
-    "action=molt, summary=..., session_journal_path=...)`). The journal path "
-    "is required — molt is refused before any context is shed without a valid "
-    "one. Molt is yours to perform — do it deliberately while context is still "
-    "cheap."
-)
-
-_MOLT_WARNING_URGENT = (
-    "[system] ⚠️ URGENT — Context at {pressure}. Please consider molting "
-    "NOW. Every additional turn at this pressure is slower and more "
-    "expensive, and once usage crosses 100% the upstream model may reject "
-    "the request outright — at which point the kernel's overflow recovery "
-    "kicks in and silently trims history to retry, which can discard data "
-    "you would have wanted to keep. Wrap up the current sub-step if you "
-    "must, then tend the stores (pad / lingtai / knowledge / skills), write "
-    "the session-journal entry, and call `psyche(object=context, action=molt, "
-    "summary=..., session_journal_path=...)` — the journal path is required or "
-    "the molt is refused. The kernel will not molt you — this is yours to do, "
-    "and the longer you wait the more cramped the molt becomes. See "
-    "'Performing a Molt' in your procedures."
-)
-
-
+# Context-pressure molt reminders are emitted as `_meta.agent_meta.context.molt`
+# by meta_block.build_meta; the notification channel is kept only for
+# post-molt continuation/event signals.
 def _check_molt_pressure(agent) -> None:
-    """Check context pressure and publish/clear the molt notification.
+    """Clear the legacy pressure-warning notification channel.
 
-    Two tones, no ladder:
-      - pressure ≥ ``molt_urgency`` (default 0.9, may exceed 1.0 when
-        the upstream model is in overflow trim): publish the urgent
-        variant — 🚨 header, "molt NOW" wording, mentions that >100%
-        means the kernel is already silently trimming history.
-      - ``molt_pressure`` ≤ pressure < ``molt_urgency``: publish the
-        gentle "consider molt" variant.
-      - pressure < ``molt_pressure``: clear the notification.
-
-    No counter, no flag, no force-wipe — the kernel does not molt the
-    agent for them at any pressure. The escalation is in the text and
-    header only. Safe to call repeatedly; the notification system
-    fingerprints content and skips redundant wire updates.
-
-    Warning text is English-only. These are agent-facing system
-    instructions that reference English procedures.md headings and tool
-    syntax — translating them adds churn without value, and the agent
-    reads English fluently regardless of ``config.language``.
+    Context pressure is current agent state and is now exposed under
+    `_meta.agent_meta.context.molt` by ``meta_block.build_meta``. It should not
+    be a dismissible notification. Post-molt continuation still uses the
+    notification system and is handled separately.
     """
-    has_molt = "psyche" in agent._intrinsics
-    if not has_molt:
+    if "psyche" not in agent._intrinsics:
         return
+    from ..intrinsics.system import clear_notification
 
-    pressure = agent._session.get_context_pressure()
-
-    if pressure < agent._config.molt_pressure:
-        from ..intrinsics.system import clear_notification
-        clear_notification(agent._working_dir, "molt")
-        return
-
-    urgent = pressure >= agent._config.molt_urgency
-    template = _MOLT_WARNING_URGENT if urgent else _MOLT_WARNING_GENTLE
-    warning_text = agent._config.molt_prompt or template.format(
-        pressure=f"{pressure:.0%}"
-    )
-    header = (
-        f"context {pressure:.0%} — molt NOW"
-        if urgent
-        else f"context {pressure:.0%} — consider molt"
-    )
-    icon = "🚨" if urgent else "⚠️"
-    from ..intrinsics.system import publish_notification
-    publish_notification(
-        agent._working_dir, "molt",
-        header=header,
-        icon=icon,
-        priority="high",
-        data={
-            "pressure": pressure,
-            "urgent": urgent,
-            "warning_text": warning_text,
-        },
-    )
-
+    clear_notification(agent._working_dir, "molt")
 
 def _is_context_molt_call(tc) -> bool:
     """Return True when ``tc`` is ``psyche(context, molt, ...)``.
@@ -1539,9 +1472,10 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         agent._last_usage = response.usage
         agent._save_chat_history(ledger_source=ledger_source)
 
-        # Mid-loop pressure check — keep the molt notification fresh
-        # during extended tool chains so the agent sees the signal even
-        # while it's deep inside a multi-call loop.
+        # Mid-loop legacy molt-notification sweep. Context pressure is now
+        # surfaced every tool result under _meta.agent_meta.context.molt
+        # (meta_block.build_meta), so this only clears any stale legacy
+        # molt.json left from older builds; it no longer publishes pressure.
         _check_molt_pressure(agent)
         # Synchronous notification sync — same ACTIVE deferral semantics as
         # _handle_request; delivery happens at the next IDLE boundary.

@@ -33,9 +33,10 @@ class AgentConfig:
     time_awareness: bool = True  # experimental: False strips LLM-visible timestamps (perception nerf)
     timezone_awareness: bool = True  # when True, now_iso emits OS local time; when False, UTC
     context_limit: int | None = None  # max context tokens; None = use model default
-    molt_pressure: float = 0.7  # context usage fraction above which the molt notification is published (0.0–1.0)
-    molt_urgency: float = 0.9  # context usage fraction at/above which the molt notification escalates to an urgent variant (0.0–1.0)
-    molt_prompt: str = ""  # user-provided override for the warning_text inside the molt notification
+    molt_notice: float = 0.5  # context usage fraction at/above which agent_meta.context.molt suggests considering molt (0.0–1.0)
+    molt_pressure: float = 0.7  # context usage fraction at/above which agent_meta.context.molt becomes firm (0.0–1.0)
+    molt_urgency: float = 0.9  # context usage fraction at/above which agent_meta.context.molt requires immediate molt (0.0–1.0)
+    molt_prompt: str = ""  # optional override for the short molt message inside agent_meta.context.molt
     ensure_ascii: bool = False  # JSON output: False = readable unicode, True = \uXXXX escapes
     insights_interval: int = 0  # turns between auto-insights; 0 = off
     consultation_past_count: int = 0  # K random past-snapshot consultations per fire; default 0 = current-context soul flow only

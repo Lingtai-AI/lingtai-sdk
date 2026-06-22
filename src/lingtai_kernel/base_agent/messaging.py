@@ -188,13 +188,17 @@ def _rerender_unread_digest(agent) -> str | None:
             "call email(action=\"read\", email_id=[...]) as a normal tool so "
             "you have the full body before acting. To acknowledge or answer the "
             "sender, call email reply directly as a normal tool. "
+            "Coalesce: when safe, batch the read/reply/dismiss together with "
+            "other tool work you already need this turn rather than spending a "
+            "standalone call — but never delay a prompt human acknowledgment "
+            "just to save a call. "
             "Note: this digest is a live mirror of current unread mail, "
             "not a fixed arrival log. IDs can become stale if you "
             "already read, dismissed, or archived a message through "
             "another path (e.g. email.check → email.read). If read or "
             "dismiss returns 'not_found', the mail was likely already "
             "handled — call email(action=\"check\", unread_only=true) "
-            "to see what is still pending."
+            "to see what is still pending. See email-manual."
         ),
         data={
             "count": count,
