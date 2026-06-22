@@ -124,26 +124,89 @@ def _codex_session_id(anchor: str) -> str:
 # never sends it either.
 
 
-# Honest client-identity headers for the Codex ``/backend-api/codex/responses``
-# path. The official Codex CLI sends ``originator`` + a Codex ``User-Agent`` to
-# identify itself; LingTai is NOT the Codex CLI, so we identify HONESTLY as
-# LingTai rather than impersonating ``codex_exec`` (impersonating a first-party
-# client risks an OpenAI ToS violation). These are pure identity hints — they do
-# NOT affect prompt caching (verified empirically: cache rate is identical with
-# or without them; only the stable ``session_id``/``thread_id`` header routes the
-# cache slot). The point is account hygiene: hitting the endpoint with a
-# ChatGPT-OAuth token and no recognizable client identity is exactly the traffic
-# anomaly/abuse detection flags. Mirrors the existing honest-User-Agent policy
-# for Kimi in ``LLMService._default_headers_for``. See issue #436.
-_CODEX_ORIGINATOR = "lingtai"
+# Client-identity headers for the Codex ``/backend-api/codex/responses`` path.
+#
+# IDENTITY POLICY (issue #436 -> #471 experiment): the official Codex CLI sends
+# ``originator`` + a Codex ``User-Agent`` to identify itself. We previously
+# identified HONESTLY as LingTai (``originator: lingtai`` / ``User-Agent:
+# LingTai/<ver>``) to avoid first-party impersonation. The current experiment
+# (Jason, 2026-06-22) deliberately FLIPS this default: present the official
+# Codex CLI app-name identity instead, on the hypothesis that the ChatGPT
+# backend keys/segments its prompt cache (and/or routing) on a recognized
+# first-party app name and rejects/cold-slots an unrecognized ``lingtai``
+# originator — i.e. that the honest identity is itself causing cache misses.
+#
+# This is a single, centralized, REVERSIBLE switch. Set
+# ``_CODEX_IMPERSONATE_OFFICIAL_CLI = False`` to restore the honest LingTai
+# identity wholesale; nothing else changes. Caller-supplied ``extra_headers``
+# still win over this default (the identity is only the base layer).
+#
+# The exact tokens are taken from the installed official binary
+# (``codex-cli 0.130.0``; ``codex_login::auth::default_client``): the default
+# CLI originator is ``codex_cli_rs`` and the User-Agent is built as
+# ``{originator}/{version} ({os} {os_version}; {arch})``. The non-interactive
+# ``exec`` subcommand overrides the originator to ``codex_exec`` via
+# ``CODEX_INTERNAL_ORIGINATOR_OVERRIDE``; we mirror the *default* interactive
+# originator (``codex_cli_rs``), which is the broadest first-party identity.
+#
+# Caveat recorded for the parent review: per the prior #436 investigation the
+# identity headers did NOT change the cache rate in an A/B (only the stable
+# ``session_id``/``thread_id`` headers routed the slot). This experiment
+# re-tests that conclusion at Jason's request; if the cache rate is unchanged,
+# flip the switch back.
+_CODEX_IMPERSONATE_OFFICIAL_CLI = True
+
+# Official Codex CLI app-name identity (version pinned to the installed
+# ``codex-cli`` build we inspected). Kept as data so the impersonated UA is a
+# single, auditable place to update when the CLI version moves.
+_CODEX_CLI_ORIGINATOR = "codex_cli_rs"
+_CODEX_CLI_VERSION = "0.130.0"
+
+# Honest LingTai identity (fallback when impersonation is disabled).
+_LINGTAI_ORIGINATOR = "lingtai"
+
+# Effective originator for this build. Flipping the switch above swaps both the
+# originator and the User-Agent together so they never disagree.
+_CODEX_ORIGINATOR = (
+    _CODEX_CLI_ORIGINATOR if _CODEX_IMPERSONATE_OFFICIAL_CLI else _LINGTAI_ORIGINATOR
+)
+
+
+def _codex_cli_user_agent() -> str:
+    """Return an official-CLI-shaped ``User-Agent``, e.g.
+    ``codex_cli_rs/0.130.0 (Darwin 23.4.0; arm64)``.
+
+    Mirrors the official Codex CLI UA shape: ``{originator}/{version} ({os}
+    {os_version}; {arch})``. The OS/arch suffix is best-effort — on failure we
+    fall back to the bare ``{originator}/{version}`` token rather than raising.
+    """
+    base = f"{_CODEX_CLI_ORIGINATOR}/{_CODEX_CLI_VERSION}"
+    try:
+        import platform
+
+        system = platform.system() or "unknown"
+        release = platform.release() or ""
+        machine = platform.machine() or ""
+        return f"{base} ({system} {release}; {machine})".replace("  ", " ").strip()
+    except Exception:
+        return base
 
 
 def _lingtai_user_agent() -> str:
-    """Return an honest LingTai ``User-Agent`` string, e.g. ``LingTai/0.12.4``.
+    """Return the effective Codex ``User-Agent`` string.
 
-    Falls back to an unversioned token if the installed package version cannot
-    be resolved (e.g. running from a source tree without metadata).
+    When ``_CODEX_IMPERSONATE_OFFICIAL_CLI`` is set (the current default), this
+    returns the official-Codex-CLI-shaped UA so the app name matches what the
+    ChatGPT backend recognizes (see the identity-policy note above). When the
+    switch is off it returns the honest ``LingTai/<version>`` UA, falling back
+    to an unversioned ``LingTai`` token if the package version can't be
+    resolved.
+
+    (The function name is retained for back-compat with existing imports/tests;
+    it is the single resolver for the Codex identity UA regardless of policy.)
     """
+    if _CODEX_IMPERSONATE_OFFICIAL_CLI:
+        return _codex_cli_user_agent()
     try:
         from importlib.metadata import version
 
@@ -166,7 +229,14 @@ def _codex_installation_id(anchor: str | None) -> str | None:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"lingtai-codex-installation:{anchor}"))
 
 def _codex_identity_headers() -> dict[str, str]:
-    """Honest client-identity headers sent on every Codex request (see #436)."""
+    """Client-identity headers sent on every Codex request.
+
+    Returns the official-Codex-CLI app-name identity when
+    ``_CODEX_IMPERSONATE_OFFICIAL_CLI`` is set (current default — the cache-miss
+    experiment), or the honest LingTai identity when the switch is off. The
+    originator and User-Agent are always resolved together so they agree. See
+    the identity-policy note above (#436 / #471).
+    """
     return {"originator": _CODEX_ORIGINATOR, "User-Agent": _lingtai_user_agent()}
 
 
@@ -1682,10 +1752,11 @@ class CodexResponsesSession(OpenAIResponsesSession):
         super().__init__(*args, **kwargs)
         # The user's own ChatGPT account id (decoded upstream from their OAuth
         # auth data). When present it is sent as the ``ChatGPT-Account-ID`` HTTP
-        # header so the request is attributed to the right ChatGPT account —
-        # this does NOT impersonate the official Codex CLI (we keep the honest
-        # ``originator: lingtai`` / ``User-Agent: LingTai/<ver>`` identity). It
-        # is a non-secret account identifier and is never copied into usage
+        # header so the request is attributed to the right ChatGPT account. It is
+        # orthogonal to the app-name identity (``originator``/``User-Agent``),
+        # which the #471 experiment sets to the official Codex CLI by default
+        # (see ``_codex_identity_headers`` / ``_CODEX_IMPERSONATE_OFFICIAL_CLI``).
+        # It is a non-secret account identifier and is never copied into usage
         # metadata or logs.
         self._account_id = account_id if isinstance(account_id, str) and account_id else None
         self._installation_id = installation_id
@@ -1889,8 +1960,11 @@ class CodexResponsesSession(OpenAIResponsesSession):
             # the SDK's per-request ``extra_headers``, never as request-body
             # fields. ``session_id`` / ``thread_id`` route the per-agent cache
             # slot and are a single stable per-agent value (never rotated).
-            # Honest client identity (#436) forms the base; cache-affinity and
-            # caller-supplied headers layer on top so they always win.
+            # Client identity (#436 → #471 experiment) forms the base;
+            # cache-affinity and caller-supplied headers layer on top so they
+            # always win. The identity default now impersonates the official
+            # Codex CLI app name (``originator: codex_cli_rs`` / matching UA);
+            # see ``_codex_identity_headers`` / ``_CODEX_IMPERSONATE_OFFICIAL_CLI``.
             extra_headers = {
                 **_codex_identity_headers(),
                 **affinity_headers,
@@ -1899,8 +1973,7 @@ class CodexResponsesSession(OpenAIResponsesSession):
             # The user's own ChatGPT account id, when available. Canonical
             # official spelling ``ChatGPT-Account-ID`` (HTTP header names are
             # case-insensitive). Attributes the request to the right ChatGPT
-            # account WITHOUT impersonating the official Codex CLI — the honest
-            # ``originator``/``User-Agent`` identity above is unchanged. Omitted
+            # account; orthogonal to the app-name identity above. Omitted
             # entirely when no account id is known.
             if self._account_id:
                 extra_headers["ChatGPT-Account-ID"] = self._account_id

@@ -110,22 +110,27 @@ def test_codex_request_includes_default_prompt_cache_key():
     assert sent["prompt_cache_key"] == "lingtai-codex:gpt-5.5:v1"
 
 
-def test_codex_request_sends_honest_lingtai_identity_headers():
-    """Every Codex request carries honest LingTai client-identity headers (#436):
-    ``originator: lingtai`` and a ``LingTai/<version>`` User-Agent. We identify
-    as LingTai, NOT as the Codex CLI (no ``codex_exec`` impersonation)."""
+def test_codex_request_sends_official_cli_identity_headers():
+    """Every Codex request carries the official-Codex-CLI app-name identity
+    (#471 cache-miss experiment): ``originator: codex_cli_rs`` and a
+    ``codex_cli_rs/<version> (...)`` User-Agent matching the official CLI shape.
+
+    The default was deliberately flipped from the honest LingTai identity to
+    impersonate the official CLI, on the hypothesis that the ChatGPT backend
+    cold-slots an unrecognized originator. The switch is a single module flag
+    (``_CODEX_IMPERSONATE_OFFICIAL_CLI``)."""
     session = _create_codex_session([_completed()], model="gpt-5.5")
 
     session.send("please answer via tool")
 
     headers = session._client.responses.kwargs[0]["extra_headers"]
-    assert headers["originator"] == "lingtai"
-    # Normal case resolves the installed package version: ``LingTai/<version>``.
+    assert headers["originator"] == "codex_cli_rs"
+    # UA mirrors the official CLI shape ``{originator}/{version} (...)``.
     ua = headers["User-Agent"]
-    assert re.fullmatch(r"LingTai/\d+\.\d+.*", ua), f"unexpected User-Agent: {ua!r}"
-    # We do NOT impersonate the official Codex CLI.
-    assert "codex_exec" not in ua
-    assert headers["originator"] != "codex_exec"
+    assert re.fullmatch(r"codex_cli_rs/\d+\.\d+\.\d+.*", ua), f"unexpected UA: {ua!r}"
+    # The honest LingTai identity is no longer presented on the wire.
+    assert "LingTai" not in ua
+    assert headers["originator"] != "lingtai"
 
 
 def test_codex_caller_headers_override_identity_headers():
@@ -147,10 +152,26 @@ def test_codex_caller_headers_override_identity_headers():
     assert headers["User-Agent"] == "Caller/1"
 
 
+def test_codex_user_agent_impersonates_official_cli_by_default():
+    """With impersonation on (default), the Codex UA resolver returns the
+    official-CLI-shaped ``codex_cli_rs/<version> (...)`` string and never the
+    LingTai token, regardless of the installed package version (#471)."""
+    import lingtai.llm.openai.adapter as adapter_mod
+
+    assert adapter_mod._CODEX_IMPERSONATE_OFFICIAL_CLI is True
+    ua = _lingtai_user_agent()
+    assert ua.startswith("codex_cli_rs/")
+    assert "LingTai" not in ua
+
+
 def test_lingtai_user_agent_falls_back_when_version_unresolvable(monkeypatch):
-    """If the package version can't be resolved, the UA degrades to a bare
-    ``LingTai`` token rather than raising (#436)."""
+    """With impersonation DISABLED, the resolver returns the honest LingTai UA
+    and degrades to a bare ``LingTai`` token when the package version can't be
+    resolved rather than raising (#436). Guards the reversible-switch path."""
     import importlib.metadata as md
+    import lingtai.llm.openai.adapter as adapter_mod
+
+    monkeypatch.setattr(adapter_mod, "_CODEX_IMPERSONATE_OFFICIAL_CLI", False)
 
     def _boom(_name):
         raise md.PackageNotFoundError("lingtai")
@@ -514,7 +535,8 @@ def test_codex_session_normalization_priority_session_then_thread():
 
 def test_codex_bare_session_omits_cache_headers_but_sends_identity():
     """A directly-constructed session with no ids sends no cache-affinity header
-    (bare/test path), but still sends honest LingTai client-identity headers (#436)."""
+    (bare/test path), but still sends the official-CLI app-name identity
+    headers (#471 experiment)."""
     session = CodexResponsesSession(
         client=FakeClient([_completed()]),
         model="gpt-5.5",
@@ -531,9 +553,9 @@ def test_codex_bare_session_omits_cache_headers_but_sends_identity():
     assert "session_id" not in headers
     assert "thread_id" not in headers
     assert "codex-cache-key" not in headers
-    # Honest identity headers are always present.
-    assert headers["originator"] == "lingtai"
-    assert headers["User-Agent"].startswith("LingTai")
+    # Identity headers are always present (impersonated official CLI by default).
+    assert headers["originator"] == "codex_cli_rs"
+    assert headers["User-Agent"].startswith("codex_cli_rs/")
 
 
 # ---------------------------------------------------------------------------
@@ -569,9 +591,10 @@ def test_codex_omits_chatgpt_account_id_header_when_absent():
     assert "ChatGPT-Account-ID" not in headers
 
 
-def test_codex_account_id_preserves_honest_identity():
-    """Sending ChatGPT-Account-ID does NOT alter the honest LingTai identity —
-    no Codex CLI impersonation creeps in alongside the account header."""
+def test_codex_account_id_preserves_app_name_identity():
+    """Sending ChatGPT-Account-ID does NOT perturb the app-name identity — the
+    account header layers on top of (and is independent of) the impersonated
+    official-CLI originator/User-Agent (#471)."""
     session = _create_codex_session_cfg(
         [_completed()], codex_account_id=_TEST_ACCOUNT_ID
     )
@@ -580,10 +603,9 @@ def test_codex_account_id_preserves_honest_identity():
 
     headers = session._client.responses.kwargs[0]["extra_headers"]
     assert headers["ChatGPT-Account-ID"] == _TEST_ACCOUNT_ID
-    # Honest identity is unchanged; we are still LingTai, not the Codex CLI.
-    assert headers["originator"] == "lingtai"
-    assert headers["User-Agent"].startswith("LingTai")
-    assert "codex_exec" not in headers["User-Agent"]
+    # App-name identity is the impersonated official CLI; account header is orthogonal.
+    assert headers["originator"] == "codex_cli_rs"
+    assert headers["User-Agent"].startswith("codex_cli_rs/")
 
 
 def test_codex_account_id_does_not_affect_cache_affinity():
@@ -1006,8 +1028,8 @@ def test_codex_sends_honest_request_and_turn_metadata_headers():
 
     kwargs = session._client.responses.kwargs[0]
     headers = kwargs["extra_headers"]
-    assert headers["originator"] == "lingtai"
-    assert "codex_exec" not in headers["User-Agent"]
+    assert headers["originator"] == "codex_cli_rs"
+    assert headers["User-Agent"].startswith("codex_cli_rs/")
     assert headers["ChatGPT-Account-ID"] == _TEST_ACCOUNT_ID
     assert kwargs["prompt_cache_key"] == "stable123"
     assert headers["session_id"] == "stable123"
@@ -1037,7 +1059,7 @@ def test_codex_omits_x_codex_metadata_without_session_identity():
 
     kwargs = session._client.responses.kwargs[0]
     headers = kwargs["extra_headers"]
-    assert headers["originator"] == "lingtai"
+    assert headers["originator"] == "codex_cli_rs"
     assert "session_id" not in headers
     assert "thread_id" not in headers
     assert "x-client-request-id" not in headers
