@@ -13,6 +13,7 @@ from lingtai_kernel.meta_block import (
     attach_active_runtime,
     build_meta,
     build_meta_readme,
+    build_guidance_with_meta_readme,
     build_runtime_guidance,
     clear_active_notification_holder,
     render_meta,
@@ -71,7 +72,11 @@ def test_build_meta_counts_current_tool_result_chars_excluding_meta():
             **formal_payload,
             "_meta": {
                 "notifications": {"system": {"body": "N" * 1000}},
-                "guidance": {"meta_readme": {}},
+                "guidance": {
+                    "sections": [
+                        {"id": "meta_readme", "title": "_meta envelope readme", "body": ""}
+                    ]
+                },
             },
         },
     )
@@ -111,6 +116,16 @@ def test_build_meta_readme_mentions_tool_result_char_count_and_summarize():
     assert "current_tool_result_chars" in readme["agent_meta"]
     assert "top" in readme["agent_meta"]
     assert "summarization" in readme["agent_meta"]
+
+
+def test_build_guidance_with_meta_readme_keeps_section_shape_without_packaged_guidance():
+    guidance = build_guidance_with_meta_readme({})
+
+    assert guidance["schema_version"] == 1
+    assert guidance["guidance_version"] == "runtime-meta-readme"
+    assert guidance["render_mode"] == "latest_tool_result_only"
+    assert "meta_readme" not in guidance
+    assert [section["id"] for section in guidance["sections"]] == ["meta_readme"]
 
 
 def _fake_agent_with_lang(lang: str, *, time_awareness: bool = True):
@@ -859,11 +874,19 @@ def test_attach_active_runtime_stamps_latest_with_state_and_guidance():
     # guidance comes from guidance.json (package resource) and validates.
     guidance = meta["guidance"]
     assert guidance["schema_version"] == 1
-    # The latest-only meta_readme self-describes the four _meta blocks.
-    readme = guidance["meta_readme"]
-    assert set(readme) == {"tool_meta", "agent_meta", "guidance", "notifications"}
-    assert "every tool result" in readme["tool_meta"].lower()
-    assert "latest" in readme["agent_meta"].lower()
+    # The latest-only meta_readme self-describes _meta as a guidance section,
+    # not as a sibling key beside sections.
+    assert "meta_readme" not in guidance
+    sections = {section["id"]: section for section in guidance["sections"]}
+    readme_section = sections["meta_readme"]
+    readme_body = readme_section["body"]
+    assert "`tool_meta`" in readme_body
+    assert "`agent_meta`" in readme_body
+    assert "`guidance`" in readme_body
+    assert "`notification_guidance`" in readme_body
+    assert "`notifications`" in readme_body
+    assert "every tool result" in readme_body.lower()
+    assert "latest" in readme_body.lower()
     # The transient scaffolding is consumed.
     assert "_runtime_pending" not in block.content
     # No top-level active_turn_tool_calls repetition, and no legacy _runtime key.

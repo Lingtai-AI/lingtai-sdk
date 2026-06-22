@@ -13,8 +13,9 @@ the result dict:
 - ``_meta.tool_meta`` — permanent per-result identity facts, written once by
   ``ToolExecutor._attach_tool_block`` and never moved.
 - ``_meta.agent_meta`` — latest-result-only agent/current-state snapshot.
-- ``_meta.guidance`` — latest-result-only kernel guidance, carrying a
-  ``meta_readme`` block that self-explains the four ``_meta`` blocks.
+- ``_meta.guidance`` — latest-result-only kernel guidance.  Guidance is an
+  ordered, system-prompt-like appendix; ``meta_readme`` is one section within
+  ``guidance.sections`` rather than a sibling key.
 - ``_meta.notifications`` / ``_meta.notification_guidance`` — latest-result-only
   channel-owned notification payloads plus kernel safety framing.
 
@@ -212,7 +213,12 @@ def build_meta_readme() -> dict:
             "long tool results to consider for summarization."
         ),
         GUIDANCE_KEY: (
-            "Kernel guidance plus this meta_readme. Latest tool result only."
+            "Kernel guidance sections, including the meta_readme section. "
+            "Latest tool result only."
+        ),
+        NOTIFICATION_GUIDANCE_KEY: (
+            "Kernel safety framing for channel notification handling. Latest "
+            "tool result only."
         ),
         NOTIFICATIONS_KEY: (
             "Channel notification payloads with kernel safety framing under "
@@ -258,6 +264,53 @@ class GuidanceSchemaError(ValueError):
     degrades to ``{}`` rather than crashing an agent on a bad ship.
     """
 
+
+
+META_README_SECTION_ID = "meta_readme"
+
+
+def build_meta_readme_section() -> Dict[str, str]:
+    """Return the guidance section that explains the `_meta` envelope.
+
+    Guidance is consumed like a system prompt appended at the end of context, so
+    every guidance explanation must be an ordered section.  In particular,
+    `meta_readme` must not be reintroduced as a sibling of `sections`.
+    """
+    readme = build_meta_readme()
+    body_lines = [
+        "This section explains the `_meta` envelope carried on tool results.",
+        "`_meta.guidance` is an ordered, system-prompt-like appendix rendered at the end of context; `meta_readme` therefore lives here as a section, not as a sibling key beside `sections`.",
+        "",
+    ]
+    body_lines.extend(f"- `{key}`: {value}" for key, value in readme.items())
+    return {
+        "id": META_README_SECTION_ID,
+        "title": "_meta envelope readme",
+        "body": "\n".join(body_lines),
+    }
+
+
+def build_guidance_with_meta_readme(base_guidance: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    """Return runtime guidance with the `_meta` readme appended as a section."""
+    source = build_runtime_guidance() if base_guidance is None else base_guidance
+    guidance = dict(source or {})
+    # Preserve packaged guidance keys when available, but keep the fallback shape
+    # valid too: even if guidance.json cannot be loaded, guidance remains the
+    # same system-prompt-like structure with a single meta_readme section.
+    guidance.setdefault("schema_version", 1)
+    guidance.setdefault("guidance_version", "runtime-meta-readme")
+    guidance.setdefault("priority", "high")
+    guidance.setdefault("render_mode", "latest_tool_result_only")
+    sections = []
+    for section in guidance.get("sections") or []:
+        if not isinstance(section, dict):
+            continue
+        if section.get("id") == META_README_SECTION_ID:
+            continue
+        sections.append(dict(section))
+    sections.append(build_meta_readme_section())
+    guidance["sections"] = sections
+    return guidance
 
 def validate_runtime_guidance(data) -> dict:
     """Validate the guidance payload shape, returning it unchanged on success.
@@ -561,12 +614,13 @@ def build_synthetic_meta_envelope(
 ) -> dict:
     """Assemble the full ``_meta`` envelope for a synthesized notification pair.
 
-    Produces the same four-block envelope an ACTIVE tool result persists:
+    Produces the same ``_meta`` envelope an ACTIVE tool result persists:
 
       * ``tool_meta``            — synthetic identity (see
         :func:`build_synthetic_tool_meta`)
       * ``agent_meta``           — current ``build_meta`` snapshot
-      * ``guidance``             — packaged ``guidance.json`` plus ``meta_readme``
+      * ``guidance``             — packaged ``guidance.json`` plus a
+        ``meta_readme`` section in ``guidance.sections``
       * ``notifications`` +
         ``notification_guidance``— from ``notification_payload`` (the dict
         returned by :func:`build_notification_payload`)
@@ -581,8 +635,7 @@ def build_synthetic_meta_envelope(
     except (AttributeError, TypeError):
         agent_meta = {}
 
-    guidance: dict = dict(build_runtime_guidance())
-    guidance["meta_readme"] = build_meta_readme()
+    guidance = build_guidance_with_meta_readme()
 
     envelope: dict = {
         TOOL_META_KEY: build_synthetic_tool_meta(call_id),
@@ -923,7 +976,7 @@ def attach_active_runtime(
         snapshot (recorded by :func:`stamp_meta`) into ``_meta.agent_meta``
         (kernel runtime state + ``elapsed_ms`` + ``active_turn_tool_calls``)
         and ``_meta.guidance`` (from ``guidance.json`` plus the latest-only
-        ``meta_readme`` self-description of the four blocks).
+        ``meta_readme`` section).
       * Strip the transient ``_runtime_pending`` scaffolding from *all* results.
       * Return the new holder dict (or ``None`` when no live runtime applies).
 
@@ -958,10 +1011,10 @@ def attach_active_runtime(
         agent, extra_results=tool_results
     )
 
-    # guidance always carries meta_readme (latest-only self-description); the
-    # packaged guidance.json sections are merged in when available.
-    guidance: dict = dict(build_runtime_guidance())
-    guidance["meta_readme"] = build_meta_readme()
+    # Guidance is prompt-like ordered material.  Keep the `_meta` readme as a
+    # section so consumers can render one coherent guidance block instead of a
+    # mixed object with sibling control fields.
+    guidance = build_guidance_with_meta_readme()
 
     meta = _meta_block(target)
     meta[AGENT_META_KEY] = agent_meta

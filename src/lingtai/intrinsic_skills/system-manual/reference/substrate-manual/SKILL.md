@@ -121,9 +121,13 @@ semantics, and the undismissable large-result reminders, read
 `summarize` is the system action for tool-result context hygiene: after you have
 consumed a completed prior tool result, replace its context-visible raw payload
 with a summary that preserves the conclusion, evidence, anchors, validation,
-risks, and next steps. Runtime high-attention guidance for this behavior is
-carried in `_meta.guidance` from `src/lingtai/prompts/guidance.json`; follow
-that latest guidance first when it appears.
+risks, and next steps. Runtime high-attention guidance for this behavior is carried in `_meta.guidance`.
+Treat guidance as a system-prompt-like appendix placed at the end of context: it
+is an ordered `sections[]` structure, not a loose metadata bag.  The kernel's
+`meta_readme` explanation of the `_meta` envelope is therefore one guidance
+section inside `sections[]`, alongside the packaged sections from
+`src/lingtai/prompts/guidance.json`; follow that latest guidance first when it
+appears.
 
 For the full operating procedure — urgent large-result summarization, idle
 cleanup sweeps, original-result recovery by `tool_call_id`, summary quality,

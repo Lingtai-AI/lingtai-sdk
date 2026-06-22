@@ -1445,7 +1445,7 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         # Only log when a genuinely new notification holder was established
         # (changed and not None), i.e. when notification stamping actually
         # happened this batch.  Runs after attach_active_runtime so the persisted
-        # ``_meta`` carries all four blocks (tool_meta/agent_meta/guidance/
+        # ``_meta`` carries the full envelope (tool_meta/agent_meta/guidance/
         # notifications/notification_guidance).
         if not _batch_includes_context_molt(response.tool_calls):
             _new_holder = agent._notification_live_holder

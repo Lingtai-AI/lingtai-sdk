@@ -119,7 +119,15 @@ def test_visible_len_ignores_meta_notifications():
         "_meta": {
             "notifications": {"system": {"body": "N" * 10_000}},
             "notification_guidance": "G" * 10_000,
-            "guidance": {"meta_readme": {"notifications": "do not summarize"}},
+            "guidance": {
+                "sections": [
+                    {
+                        "id": "meta_readme",
+                        "title": "_meta envelope readme",
+                        "body": "notifications: do not summarize",
+                    }
+                ]
+            },
         },
     }
     assert _visible_len(content) == len(json.dumps({"payload": "ok"}, ensure_ascii=False))

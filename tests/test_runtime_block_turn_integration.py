@@ -139,9 +139,12 @@ def test_runtime_block_lands_on_latest_result_at_turn_boundary(tmp_path):
     # The turn records the batch's calls on the guard (2 seeded + 1 this batch),
     # and the boundary stamps the live total under _meta.agent_meta.
     assert holder["_meta"]["agent_meta"]["active_turn_tool_calls"] == 3
-    # guidance from guidance.json rides on the latest result, with meta_readme.
-    assert holder["_meta"]["guidance"]["schema_version"] == 1
-    assert "meta_readme" in holder["_meta"]["guidance"]
+    # guidance from guidance.json rides on the latest result, with meta_readme
+    # as an ordered section rather than a sibling key.
+    guidance = holder["_meta"]["guidance"]
+    assert guidance["schema_version"] == 1
+    assert "meta_readme" not in guidance
+    assert any(section.get("id") == "meta_readme" for section in guidance["sections"])
     # transient scaffolding is gone; no top-level counter repetition.
     assert "_runtime_pending" not in holder
     assert "active_turn_tool_calls" not in holder

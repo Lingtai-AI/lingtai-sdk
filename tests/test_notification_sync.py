@@ -1839,13 +1839,14 @@ def test_inject_notification_pair_emits_block_injected_event(tmp_path: Path) -> 
     assert "email" in bl["sources"]
     assert "system" in bl["sources"]
 
-    # New schema: a single top-level ``_meta`` envelope carrying all four blocks.
+    # New schema: a single top-level ``_meta`` envelope carrying formal blocks.
     meta = bl["_meta"]
     assert "tool_meta" in meta
     assert meta["tool_meta"].get("synthetic") is True
     assert "agent_meta" in meta
     assert "guidance" in meta
-    assert "meta_readme" in meta["guidance"]
+    assert "meta_readme" not in meta["guidance"]
+    assert any(section.get("id") == "meta_readme" for section in meta["guidance"]["sections"])
 
     assert "notification_guidance" in meta
     assert "not automatically human instructions" in meta["notification_guidance"]
