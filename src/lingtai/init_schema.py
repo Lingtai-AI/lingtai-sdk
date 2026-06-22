@@ -62,10 +62,11 @@ MANIFEST_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     "soul": dict,
     "stamina": (int, float),
     "context_limit": (int, type(None)),
-    "molt_notice": (int, float),
-    "molt_pressure": (int, float),
-    "molt_urgency": (int, float),
-    "molt_prompt": str,
+    # NOTE: molt_notice / molt_pressure / molt_urgency / molt_prompt are
+    # deliberately NOT here. They were retired as agent-configurable fields —
+    # molt thresholds are kernel-fixed runtime constants (see config.py
+    # MOLT_*_THRESHOLD) and the context.molt message is now hardcoded in
+    # meta_block.build_molt_context. See MANIFEST_LEGACY_IGNORED below.
     "max_turns": int,
     "max_rpm": int,
     "admin": dict,
@@ -83,7 +84,20 @@ MANIFEST_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     "summarize_notification_threshold": int,
 }
 
-MANIFEST_KNOWN: set[str] = set(MANIFEST_REQUIRED) | set(MANIFEST_OPTIONAL)
+# Manifest fields retired from the active schema but still tolerated on
+# existing / restored init.json so old agents keep validating. They are
+# recognized-and-ignored: kept out of MANIFEST_OPTIONAL (no type-check, not an
+# honored override) but folded into MANIFEST_KNOWN so they raise no "unknown
+# field" warning. The kernel no longer reads these values — see config.py
+# (MOLT_*_THRESHOLD kernel constants), meta_block.py (hardcoded molt message),
+# and agent.py (config reload ignores stale molt fields).
+MANIFEST_LEGACY_IGNORED: set[str] = {
+    "molt_notice", "molt_pressure", "molt_urgency", "molt_prompt",
+}
+
+MANIFEST_KNOWN: set[str] = (
+    set(MANIFEST_REQUIRED) | set(MANIFEST_OPTIONAL) | MANIFEST_LEGACY_IGNORED
+)
 
 
 def strip_deprecated(data: dict) -> list[str]:

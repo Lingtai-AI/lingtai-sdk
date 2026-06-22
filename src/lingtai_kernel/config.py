@@ -6,6 +6,19 @@ from dataclasses import dataclass, field
 
 THINKING_LEVELS = ("low", "medium", "high", "xhigh")
 
+# Molt context-pressure thresholds are kernel-fixed runtime constants — NOT
+# agent-configurable. An agent must not be able to raise its own molt
+# thresholds (or defeat them entirely) to avoid molting under pressure, so the
+# stage boundaries are owned by the kernel. Legacy ``init.json`` /
+# resolved-manifest ``molt_notice`` / ``molt_pressure`` / ``molt_urgency``
+# fields are tolerated for backward compatibility (old agents still validate)
+# but are ignored — they no longer override these values. See
+# ``lingtai/agent.py`` (config reload) and ``lingtai/init_schema.py``
+# (MANIFEST_LEGACY_IGNORED).
+MOLT_NOTICE_THRESHOLD = 0.5   # >= this fraction of context used -> "consider" stage
+MOLT_PRESSURE_THRESHOLD = 0.7  # >= this -> "strong" stage
+MOLT_URGENCY_THRESHOLD = 0.9   # >= this -> "immediate" stage (90% hard gate)
+
 
 @dataclass
 class AgentConfig:
@@ -33,10 +46,15 @@ class AgentConfig:
     time_awareness: bool = True  # experimental: False strips LLM-visible timestamps (perception nerf)
     timezone_awareness: bool = True  # when True, now_iso emits OS local time; when False, UTC
     context_limit: int | None = None  # max context tokens; None = use model default
-    molt_notice: float = 0.5  # context usage fraction at/above which agent_meta.context.molt suggests considering molt (0.0–1.0)
-    molt_pressure: float = 0.7  # context usage fraction at/above which agent_meta.context.molt becomes firm (0.0–1.0)
-    molt_urgency: float = 0.9  # context usage fraction at/above which agent_meta.context.molt requires immediate molt (0.0–1.0)
-    molt_prompt: str = ""  # optional override for the short molt message inside agent_meta.context.molt
+    # Molt thresholds are kernel-fixed (see MOLT_*_THRESHOLD above); they are
+    # NOT agent-configurable. These fields remain on AgentConfig so internal
+    # readers (meta_block.build_molt_context, tests) have a single source of
+    # truth, but the host MUST construct them from the kernel constants, never
+    # from init.json. Legacy init.json molt_notice/molt_pressure/molt_urgency
+    # values are ignored, not honored.
+    molt_notice: float = MOLT_NOTICE_THRESHOLD    # >= this fraction of context used -> "consider" stage
+    molt_pressure: float = MOLT_PRESSURE_THRESHOLD  # >= this -> "strong" stage
+    molt_urgency: float = MOLT_URGENCY_THRESHOLD   # >= this -> "immediate" stage (90% hard gate)
     ensure_ascii: bool = False  # JSON output: False = readable unicode, True = \uXXXX escapes
     insights_interval: int = 0  # turns between auto-insights; 0 = off
     consultation_past_count: int = 0  # K random past-snapshot consultations per fire; default 0 = current-context soul flow only
