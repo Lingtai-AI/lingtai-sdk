@@ -9,7 +9,13 @@ from typing import Any, Callable
 
 from .llm.base import ToolCall
 from .loop_guard import LoopGuard
-from .meta_block import stamp_meta, now_iso_plain
+from .meta_block import (
+    stamp_meta,
+    now_iso_plain,
+    build_tool_meta_overflow_comment,
+    TOOL_META_COMMENT_KEY,
+    TOOL_META_COMMENT_OVERFLOW_KEY,
+)
 from .tool_result_artifacts import (
     PREVENTIVE_MAX_CHARS as _DEFAULT_MAX_RESULT_CHARS,
     spill_oversized_result as _spill_oversized_result,
@@ -370,6 +376,11 @@ class ToolExecutor:
           spilled_char_count  — original sidecar character count when a spill occurred;
                                 omitted for ordinary non-spilled results
           status              — "error" when the result carries status=error; omitted otherwise
+          comment.overflow    — machine-generated per-result hint added only when the
+                                visible payload is capped/large (see
+                                ``_overflow_comment_applies``): where the full original
+                                is preserved (``logs/events.jsonl`` by ``tool_call_id``),
+                                how to retrieve it, and the summarize cleanup action.
         """
         if not isinstance(result, dict):
             return result
@@ -390,11 +401,43 @@ class ToolExecutor:
         if status == "error":
             tool_block["status"] = "error"
 
+        # Capped/large visible results get a single ``comment.overflow`` hint
+        # pointing at the preserved original.  Small ordinary results do not, so
+        # the common path stays as tiny as before.
+        if self._overflow_comment_applies(
+            char_count=char_count, spilled_char_count=spilled_char_count
+        ):
+            tool_block[TOOL_META_COMMENT_KEY] = {
+                TOOL_META_COMMENT_OVERFLOW_KEY: build_tool_meta_overflow_comment(
+                    tool_call_id
+                ),
+            }
+
         if not isinstance(meta, dict):
             meta = {}
             result["_meta"] = meta
         meta["tool_meta"] = tool_block
         return result
+
+    def _overflow_comment_applies(
+        self, *, char_count: int, spilled_char_count: int | None
+    ) -> bool:
+        """Decide whether a result earns a ``tool_meta.comment.overflow`` hint.
+
+        Two cases count as "capped/large" and earn the hint:
+
+        * **Spilled** — ``spilled_char_count`` is set, so the visible payload is a
+          compact manifest standing in for an oversized original.
+        * **Large but inline** — the visible ``char_count`` exceeds the executor's
+          large-result hint threshold (``summarize_notification_threshold``), the
+          same threshold that gates the batched large-result reminder.  When that
+          threshold is disabled (``0``) only the spill case applies, so ordinary
+          small results never carry the hint.
+        """
+        if spilled_char_count is not None:
+            return True
+        threshold = self._summarize_notification_threshold
+        return threshold > 0 and char_count > threshold
 
     def _append_advisory(self, result: Any, advisory: dict[str, Any] | None) -> Any:
         if not isinstance(result, dict) or not advisory:

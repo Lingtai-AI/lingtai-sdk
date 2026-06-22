@@ -65,6 +65,54 @@ GUIDANCE_KEY = "guidance"
 NOTIFICATIONS_KEY = "notifications"
 NOTIFICATION_GUIDANCE_KEY = "notification_guidance"
 
+# Per-result machine-generated guidance nested under ``tool_meta``.  ``comment``
+# is a small map of topic-keyed hints; today the only topic is ``overflow`` — a
+# hint stamped on capped/large visible tool results pointing the agent at the
+# preserved original and the cleanup action.  It is guidance, not a
+# notification, not global guidance, and not a strict state machine: a quiet
+# per-result note that rides on the permanent ``tool_meta`` block.
+TOOL_META_COMMENT_KEY = "comment"
+TOOL_META_COMMENT_OVERFLOW_KEY = "overflow"
+
+
+def build_tool_meta_overflow_comment(tool_call_id: str | None) -> dict:
+    """Return the ``tool_meta.comment.overflow`` hint for a capped/large result.
+
+    Stamped only when the model-visible payload is capped or large (the caller
+    decides; see :meth:`ToolExecutor._attach_tool_block`).  LingTai preserves the
+    full, un-capped original in the durable runtime log, so the hint points there
+    by ``tool_call_id`` rather than at any external sidecar/saved-path file.
+
+    There is deliberately exactly one comment topic for this feature —
+    ``overflow``.  All guidance (what happened, where the original is, how to
+    retrieve it, what to do after consuming it) lives under this single key, not
+    split across parallel ``comment.retrieval`` / ``comment.summarize`` headings.
+    """
+    call_id = tool_call_id or "<unknown>"
+    return {
+        "summary": (
+            "The model-visible context for this tool result is capped or large; "
+            "what you see here may be a preview or compacted form, not the full payload."
+        ),
+        "full_original": (
+            f"The full original is preserved in logs/events.jsonl under "
+            f"tool_call_id={call_id}."
+        ),
+        "how_to_retrieve": (
+            f"Retrieve it from the durable log by tool_call_id: "
+            f"grep '{call_id}' <workdir>/logs/events.jsonl, or use "
+            f"`lingtai-agent log query` (see the sqlite-log-query manual). For a "
+            f"broad extraction, delegate to a daemon/subagent with the "
+            f"tool_call_id and the exact question instead of pulling the whole "
+            f"original back into your own context."
+        ),
+        "after_consuming": (
+            "After you have consumed what you need, call "
+            "system(action=\"summarize\") for this tool_call_id to replace the "
+            "visible payload with your own agent-authored summary."
+        ),
+    }
+
 # Keys that are kernel/runtime scaffolding, not the formal tool-result payload.
 # Summarize and large-result reminder sizing must ignore these so notification
 # or guidance text is not treated as result content to be summarized.
