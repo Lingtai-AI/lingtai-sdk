@@ -352,8 +352,12 @@ def _context_molt(agent, args: dict) -> dict:
     agent._session._chat = None
     agent._session._interaction_id = None
 
-    # Track molt count and persist to manifest
+    # Track molt count + timestamp and persist to manifest. `last_molt_at`
+    # is the long-lived lifecycle fact rendered into the identity prompt
+    # (in place of the cache-poisoning process-start `started_at`).
+    from datetime import datetime, timezone
     agent._molt_count += 1
+    agent._last_molt_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     agent._workdir.write_manifest(agent._build_manifest())
 
     # Archive the pre-molt chat history.
@@ -591,7 +595,9 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0,
     agent._session._chat = None
     agent._session._interaction_id = None
 
+    from datetime import datetime, timezone
     agent._molt_count += 1
+    agent._last_molt_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     agent._workdir.write_manifest(agent._build_manifest())
 
     history_dir = agent._working_dir / "history"

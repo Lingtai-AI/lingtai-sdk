@@ -198,6 +198,108 @@ def test_identity_section_silent_when_preset_active_absent():
     assert "active preset" not in text
 
 
+# --- Identity lifecycle prose: no process-start time, molt-based wording. ---
+# Issue: `system.refresh` relaunches the process and regenerates `started_at`.
+# Rendering it as "woken <started_at> for this session" shifted the cacheable
+# system-prompt prefix on every refresh and poisoned the Codex prompt cache.
+# The lifecycle line now carries the long-lived molt facts instead.
+
+def test_identity_section_omits_process_start_time():
+    text = _build_identity_section({
+        "agent_name": "alice",
+        "created_at": "2026-01-01T00:00:00Z",
+        "started_at": "2026-06-22T08:30:00Z",
+        "molt_count": 2,
+    })
+    assert "2026-06-22T08:30:00Z" not in text  # started_at must not leak
+    assert "woken" not in text
+
+
+def test_identity_section_invariant_to_started_at():
+    # Two sections differing ONLY in started_at must be byte-identical — the
+    # property that keeps the Codex prompt-cache prefix stable across relaunch.
+    base = {
+        "agent_name": "alice",
+        "created_at": "2026-01-01T00:00:00Z",
+        "molt_count": 3,
+    }
+    a = _build_identity_section({**base, "started_at": "2026-06-22T08:00:00Z"})
+    b = _build_identity_section({**base, "started_at": "2026-06-22T09:45:11Z"})
+    assert a == b
+
+
+def test_identity_section_drops_born_woken_prose():
+    # Jason found the combined "You were born ..., woken ... for this session"
+    # line weird; it is gone. Birth stays in .agent.json metadata, not prose.
+    text = _build_identity_section({
+        "agent_name": "alice",
+        "created_at": "2026-01-01T00:00:00Z",
+        "started_at": "2026-06-22T08:30:00Z",
+        "molt_count": 0,
+    })
+    assert "born" not in text
+    assert "You were" not in text
+
+
+def test_identity_section_renders_molt_lifecycle_line():
+    text = _build_identity_section({"agent_name": "alice", "molt_count": 4})
+    assert "molted 4 times" in text
+    assert "woken" not in text
+
+
+def test_identity_section_molt_lifecycle_singular():
+    text = _build_identity_section({"agent_name": "alice", "molt_count": 1})
+    assert "molted 1 time" in text
+    assert "1 times" not in text
+
+
+def test_identity_section_no_molt_fallback():
+    # Stable fallback when the agent has never molted — no process start,
+    # no awkward born/woken prose.
+    text = _build_identity_section({"agent_name": "alice", "molt_count": 0})
+    assert "yet to molt" in text
+    assert "woken" not in text
+
+
+def test_identity_section_renders_last_molt_timestamp():
+    # When a last-molt timestamp is available it leads the lifecycle line
+    # (Jason's "you last molted at ..."). It is molt-stable, not process
+    # start, so it does not move on a bare refresh.
+    text = _build_identity_section({
+        "agent_name": "alice",
+        "molt_count": 3,
+        "last_molt_at": "2026-06-20T12:00:00Z",
+        "started_at": "2026-06-22T09:45:11Z",
+    })
+    assert "You last molted at 2026-06-20T12:00:00Z" in text
+    assert "molted 3 times" in text
+    assert "2026-06-22T09:45:11Z" not in text
+
+
+def test_identity_section_last_molt_invariant_to_started_at():
+    base = {
+        "agent_name": "alice",
+        "molt_count": 5,
+        "last_molt_at": "2026-06-20T12:00:00Z",
+    }
+    a = _build_identity_section({**base, "started_at": "2026-06-22T08:00:00Z"})
+    b = _build_identity_section({**base, "started_at": "2026-06-22T09:45:11Z"})
+    assert a == b
+
+
+def test_manifest_includes_last_molt_at(tmp_path):
+    # _build_manifest must surface last_molt_at so it survives refresh/resume
+    # and feeds the identity prose. Defaults to "" before any molt.
+    workdir = tmp_path / "molty"
+    workdir.mkdir(parents=True)
+    agent = Agent(service=_mock_service(), agent_name="molty", working_dir=workdir)
+    manifest = agent._build_manifest()
+    assert manifest["last_molt_at"] == ""
+    agent._last_molt_at = "2026-06-20T12:00:00Z"
+    assert agent._build_manifest()["last_molt_at"] == "2026-06-20T12:00:00Z"
+    agent.stop(timeout=1.0)
+
+
 def test_manifest_never_contains_api_key(tmp_path):
     workdir = tmp_path / "leaky"
     _write_init(

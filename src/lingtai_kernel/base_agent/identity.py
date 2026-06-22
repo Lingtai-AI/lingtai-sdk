@@ -77,6 +77,7 @@ def _build_manifest(agent) -> dict:
         "soul_delay": agent._soul_delay,
         "soul_voice": getattr(agent._config, "soul_voice", "inner"),
         "molt_count": agent._molt_count,
+        "last_molt_at": getattr(agent, "_last_molt_at", "") or "",
     }
     # Custom voice prompt is only meaningful when voice == "custom".
     # Surface it so /kanban (and any consumer reading .agent.json)

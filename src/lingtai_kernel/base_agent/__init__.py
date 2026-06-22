@@ -95,12 +95,11 @@ def _build_identity_section(manifest_data: dict, mailbox_name: str | None = None
     nickname = manifest_data.get("nickname") or ""
     agent_id = manifest_data.get("agent_id") or ""
     address = manifest_data.get("address") or ""
-    created = manifest_data.get("created_at") or ""
-    started = manifest_data.get("started_at") or ""
     admin = manifest_data.get("admin") or {}
     stamina = manifest_data.get("stamina") or 0
     soul_delay = manifest_data.get("soul_delay")
     molt_count = manifest_data.get("molt_count", 0)
+    last_molt_at = manifest_data.get("last_molt_at") or ""
 
     lines: list[str] = []
 
@@ -115,19 +114,27 @@ def _build_identity_section(manifest_data: dict, mailbox_name: str | None = None
     if address:
         lines.append(f"Your address is `{address}`.")
 
-    # Origins — birth, awakening, molts.
-    origins: list[str] = []
-    if created:
-        origins.append(f"born {created}")
-    if started:
-        origins.append(f"woken {started} for this session")
-    if origins:
-        lines.append("You were " + ", ".join(origins) + ".")
+    # Lifecycle — molts only.
+    #
+    # Deliberately NO process-start / wake timestamp here. `started_at` is
+    # regenerated on every `system.refresh` (the process relaunches), so
+    # rendering it into the system prompt poisons the cacheable prefix —
+    # every refresh shifts the prefix and forces a full prompt re-process
+    # (notably costly for Codex prompt-cache). The molt lifecycle is the
+    # long-lived identity fact worth carrying; the last-molt timestamp
+    # only changes on an actual molt, so it stays cache-stable between
+    # refreshes.
     if molt_count > 0:
-        lines.append(
-            f"You have undergone {molt_count} molt"
-            f"{'s' if molt_count != 1 else ''} since birth."
-        )
+        times = f"{molt_count} time{'s' if molt_count != 1 else ''}"
+        if last_molt_at:
+            lines.append(
+                f"You last molted at {last_molt_at} "
+                f"(molted {times} so far)."
+            )
+        else:
+            lines.append(f"You have molted {times}.")
+    else:
+        lines.append("You have yet to molt.")
 
     # Admin role.
     if admin:
@@ -390,6 +397,11 @@ class BaseAgent:
         self._agent_id: str = existing.get("agent_id", "")
         self._created_at: str = existing.get("created_at", "")
         self._molt_count: int = existing.get("molt_count", 0)
+        # Timestamp of the most recent molt (UTC ISO-8601). Persisted in the
+        # manifest so it survives refresh/resume and can be rendered into the
+        # identity prompt without leaking the process-start `started_at`.
+        # Empty until the agent's first molt.
+        self._last_molt_at: str = existing.get("last_molt_at", "")
         if not self._agent_id or not self._created_at:
             now = datetime.now(timezone.utc)
             if not self._agent_id:

@@ -304,6 +304,66 @@ def test_molt_returns_faint_memory(tmp_path):
         agent.stop()
 
 
+def test_molt_sets_last_molt_at_and_renders_in_identity(tmp_path):
+    """A real molt records `last_molt_at`, persists it to the manifest, and the
+    identity section renders 'You last molted at <ts>' — never the process
+    start time."""
+    from lingtai_kernel.llm.interface import ChatInterface, TextBlock, ToolCallBlock
+    from lingtai_kernel.base_agent import _build_identity_section
+
+    svc = make_mock_service()
+
+    def fake_create_session(**kwargs):
+        mock_chat = MagicMock()
+        iface = ChatInterface()
+        iface.add_system("You are helpful.")
+        mock_chat.interface = iface
+        mock_chat.context_window.return_value = 100_000
+        return mock_chat
+
+    svc.create_session.side_effect = fake_create_session
+
+    agent = Agent(service=svc, agent_name="test", working_dir=tmp_path / "test")
+    agent.start()
+    try:
+        assert agent._last_molt_at == ""  # never molted yet
+        agent._session.ensure_session()
+        agent._session._chat.interface.add_user_message("Hello")
+
+        journal_path = _write_session_journal(agent)
+        molt_wire_id = "toolu_test_molt_002"
+        molt_summary = "Summary text."
+        agent._session._chat.interface.add_assistant_message([
+            ToolCallBlock(
+                id=molt_wire_id, name="psyche",
+                args={"object": "context", "action": "molt", "summary": molt_summary,
+                      "session_journal_path": journal_path},
+            ),
+        ])
+        result = _call(agent, {
+            "object": "context", "action": "molt", "summary": molt_summary,
+            "_tc_id": molt_wire_id, "session_journal_path": journal_path,
+        })
+        assert result["status"] == "ok"
+
+        # Timestamp recorded on the agent and persisted to the manifest.
+        assert agent._last_molt_at
+        manifest = agent._build_manifest()
+        assert manifest["last_molt_at"] == agent._last_molt_at
+
+        # Identity prose renders it and omits the process-start time.
+        text = _build_identity_section(manifest)
+        assert f"You last molted at {agent._last_molt_at}" in text
+        # started_at must not appear as the wake/process-start prose. (Guard
+        # the rare same-second case where started_at == last_molt_at, which
+        # would legitimately appear as the molt timestamp.)
+        if manifest["started_at"] != agent._last_molt_at:
+            assert manifest["started_at"] not in text
+        assert "woken" not in text
+    finally:
+        agent.stop()
+
+
 def test_context_forget_still_works(tmp_path):
     """System-initiated molt (base_agent calls this when the warning ladder
     is exhausted) uses the localized default summary and succeeds without
