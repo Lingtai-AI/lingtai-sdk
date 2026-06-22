@@ -19,8 +19,6 @@ def _valid_init() -> dict:
             "soul": {"delay": 120},
             "stamina": 3600,
             "context_limit": None,
-            "molt_pressure": 0.8,
-            "molt_prompt": "",
             "max_turns": 50,
             "admin": {"karma": True},
             "streaming": False,
@@ -356,14 +354,44 @@ def test_manifest_required_fields_all_in_known():
 def test_manifest_known_fields_all_typed():
     """Every field in MANIFEST_KNOWN must appear in either MANIFEST_REQUIRED
     or MANIFEST_OPTIONAL, otherwise a user-supplied value passes without
-    any type check."""
-    from lingtai.init_schema import MANIFEST_OPTIONAL, MANIFEST_REQUIRED, MANIFEST_KNOWN
+    any type check.
+
+    Exception: MANIFEST_LEGACY_IGNORED fields are intentionally untyped —
+    they are recognized-and-ignored (tolerated on old init.json, never
+    honored), so type-checking them would be meaningless."""
+    from lingtai.init_schema import (
+        MANIFEST_OPTIONAL,
+        MANIFEST_REQUIRED,
+        MANIFEST_KNOWN,
+        MANIFEST_LEGACY_IGNORED,
+    )
     typed = set(MANIFEST_OPTIONAL) | set(MANIFEST_REQUIRED)
-    untyped = MANIFEST_KNOWN - typed
+    untyped = MANIFEST_KNOWN - typed - MANIFEST_LEGACY_IGNORED
     assert not untyped, (
         f"Fields in MANIFEST_KNOWN but not type-checked (missing from "
         f"MANIFEST_OPTIONAL or MANIFEST_REQUIRED): {sorted(untyped)}"
     )
+
+
+def test_legacy_molt_fields_tolerated_but_ignored():
+    """Stale init.json molt_notice/molt_pressure/molt_urgency/molt_prompt fields
+    must not break validation (no error, no 'unknown field' warning) — they are
+    recognized-and-ignored now that molt thresholds are kernel-fixed and the
+    context.molt message is hardcoded in meta_block.build_molt_context."""
+    from lingtai.init_schema import MANIFEST_LEGACY_IGNORED
+
+    data = _valid_init()
+    # Legacy values, including a deliberately out-of-range / wrong-feeling one,
+    # must be tolerated since they are no longer honored or type-checked.
+    data["manifest"]["molt_notice"] = 0.3
+    data["manifest"]["molt_pressure"] = 0.8
+    data["manifest"]["molt_urgency"] = 0.99
+    data["manifest"]["molt_prompt"] = "ignored custom message"
+    warnings = validate_init(data)  # must not raise
+    for field in MANIFEST_LEGACY_IGNORED:
+        assert not any(field in w for w in warnings), (
+            f"legacy field {field} should be silently tolerated, got warnings: {warnings}"
+        )
 
 
 def test_top_optional_fields_all_in_known():

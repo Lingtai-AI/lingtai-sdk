@@ -1202,10 +1202,14 @@ class Agent(BaseAgent):
             activeness=m.get("activeness", "balanced"),
             context_limit=m.get("context_limit"),
             thinking=llm.get("thinking", "high"),
-            molt_notice=m.get("molt_notice", 0.5),
-            molt_pressure=m.get("molt_pressure", 0.7),
-            molt_urgency=m.get("molt_urgency", 0.9),
-            molt_prompt=m.get("molt_prompt", ""),
+            # Molt thresholds and the context.molt message are kernel-fixed
+            # runtime constants and are NOT agent-configurable. Any stale
+            # init.json molt_notice/molt_pressure/molt_urgency/molt_prompt
+            # values are deliberately ignored — we leave thresholds at the
+            # AgentConfig kernel-default (MOLT_*_THRESHOLD in config.py) so an
+            # agent cannot raise its own thresholds to dodge molting under
+            # pressure, and the molt message is hardcoded in
+            # meta_block.build_molt_context.
             snapshot_interval=m.get("snapshot_interval"),
             time_awareness=m.get("time_awareness", True),
             timezone_awareness=m.get("timezone_awareness", True),

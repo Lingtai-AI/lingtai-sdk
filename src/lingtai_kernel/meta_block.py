@@ -41,6 +41,11 @@ import json as _json
 import time as _time
 from importlib import resources as _resources
 
+from .config import (
+    MOLT_NOTICE_THRESHOLD,
+    MOLT_PRESSURE_THRESHOLD,
+    MOLT_URGENCY_THRESHOLD,
+)
 from .i18n import t as _t
 from .time_veil import now_iso
 
@@ -408,10 +413,12 @@ def build_molt_context(agent, usage: float) -> dict | None:
         return None
     if usage < 0:
         return None
-    config = getattr(agent, "_config", None)
-    notice = float(getattr(config, "molt_notice", 0.5))
-    strong = float(getattr(config, "molt_pressure", 0.7))
-    immediate = float(getattr(config, "molt_urgency", 0.9))
+    # Thresholds are kernel-owned constants.  Legacy config/init fields
+    # (molt_notice/molt_pressure/molt_urgency) are tolerated elsewhere for
+    # backward compatibility but must not affect runtime pressure stages.
+    notice = MOLT_NOTICE_THRESHOLD
+    strong = MOLT_PRESSURE_THRESHOLD
+    immediate = MOLT_URGENCY_THRESHOLD
     if usage < notice:
         return None
 
@@ -419,25 +426,25 @@ def build_molt_context(agent, usage: float) -> dict | None:
         stage = "immediate"
         level = "critical"
         default_message = (
-            "Context is above 90%; act now. Temporary spikes are not the issue: "
-            "if system(action=\"summarize\") can quickly lower pressure, do it "
-            "immediately; otherwise molt now."
+            "Context is above 90%; act now. If system(action=\"summarize\") can quickly "
+            "lower pressure, do it immediately; otherwise molt now. Shorter context "
+            "costs less. Temporary spikes are not the issue."
         )
     elif usage >= strong:
         stage = "strong"
         level = "warning"
         default_message = (
-            "Context is above 70%; prepare durable stores and molt soon if pressure remains. "
-            "Temporary spikes are not the issue; use system(action=\"summarize\") "
-            "first if it can lower pressure."
+            "Context is above 70%; use system(action=\"summarize\") first if it lowers "
+            "pressure, else molt soon. If idle with no pending work, molt now — "
+            "shorter context costs less. Ignore temporary spikes."
         )
     else:
         stage = "consider"
         level = "notice"
         default_message = (
-            "Context is above 50%; consider whether a molt would help if pressure remains. "
-            "Temporary spikes are not the issue; use system(action=\"summarize\") "
-            "first if it can lower pressure."
+            "Context is above 50%; if idle with no pending work, molt now proactively — "
+            "shorter context costs less. Else use system(action=\"summarize\") first if "
+            "it lowers pressure. Ignore temporary spikes."
         )
 
     return {
@@ -445,7 +452,7 @@ def build_molt_context(agent, usage: float) -> dict | None:
         "pressure": usage,
         "level": level,
         "stage": stage,
-        "message": getattr(config, "molt_prompt", "") or default_message,
+        "message": default_message,
         "procedure_ref": "procedures.md#performing-a-molt",
         "manual": "psyche-manual",
         "thresholds": {

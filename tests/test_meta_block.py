@@ -1189,7 +1189,7 @@ def test_attach_active_runtime_is_wired_into_turn_boundary():
 # ---------------------------------------------------------------------------
 
 
-def _molt_agent(*, notice=0.5, strong=0.7, immediate=0.9, prompt="", psyche=True):
+def _molt_agent(*, notice=0.5, strong=0.7, immediate=0.9, psyche=True):
     """Minimal agent stand-in for build_molt_context: reads _intrinsics + _config."""
     return SimpleNamespace(
         _intrinsics={"psyche": object()} if psyche else {},
@@ -1197,7 +1197,6 @@ def _molt_agent(*, notice=0.5, strong=0.7, immediate=0.9, prompt="", psyche=True
             molt_notice=notice,
             molt_pressure=strong,
             molt_urgency=immediate,
-            molt_prompt=prompt,
             context_limit=None,
             time_awareness=True,
             timezone_awareness=True,
@@ -1225,6 +1224,9 @@ def test_build_molt_context_consider_stage_50_to_70():
         assert molt["stage"] == "consider"
         assert molt["level"] == "notice"
         assert molt["usage"] == usage
+        # Strengthened guidance: idle -> proactively molt; shorter context is cheaper.
+        assert "idle" in molt["message"]
+        assert "costs less" in molt["message"]
 
 
 def test_build_molt_context_strong_stage_70_to_90():
@@ -1234,6 +1236,11 @@ def test_build_molt_context_strong_stage_70_to_90():
         assert molt is not None, f"expected molt at {usage}"
         assert molt["stage"] == "strong"
         assert molt["level"] == "warning"
+        # Strengthened guidance: idle -> proactively molt; shorter context is cheaper;
+        # summarize-first preserved.
+        assert "idle" in molt["message"]
+        assert "costs less" in molt["message"]
+        assert 'system(action="summarize")' in molt["message"]
 
 
 def test_build_molt_context_immediate_stage_90_plus():
@@ -1263,26 +1270,42 @@ def test_build_molt_context_shape_is_short_with_pointer_not_full_procedure():
     assert "session_journal_path" not in molt["message"]
     # Context pressure is a hygiene signal: reduce bulky tool results first
     # when summarize can bring pressure down; do not overreact to temporary spikes.
-    assert "Temporary spikes" in molt["message"]
+    assert "temporary spikes" in molt["message"].lower()
     assert 'system(action="summarize")' in molt["message"]
+    # Strengthened guidance: a shorter context is cheaper per turn.
+    assert "costs less" in molt["message"]
     # Thresholds echo the configured stages.
     assert molt["thresholds"] == {"consider": 0.5, "strong": 0.7, "immediate": 0.9}
 
 
-def test_build_molt_context_prompt_override_replaces_default_message():
-    agent = _molt_agent(prompt="ship it: molt now please")
+def test_build_molt_context_ignores_legacy_molt_prompt():
+    """A stale molt_prompt on the config must be ignored — the context.molt
+    message is always the hardcoded runtime default now (Jason #4140)."""
+    agent = _molt_agent()
+    # Simulate a legacy config that still carries a molt_prompt attribute.
+    agent._config.molt_prompt = "ship it: molt now please"
     molt = build_molt_context(agent, 0.93)
     assert molt is not None
-    assert molt["message"] == "ship it: molt now please"
+    # The hardcoded default message is used, NOT the stale override.
+    assert molt["message"] != "ship it: molt now please"
+    assert "Context is above 90%" in molt["message"]
 
 
-def test_build_molt_context_respects_custom_thresholds():
-    # Custom thresholds shift the stage boundaries.
+def test_build_molt_context_ignores_legacy_custom_thresholds():
+    # Stale/custom config thresholds must not shift the kernel-owned stage
+    # boundaries.  Old init/config fields are accepted for compatibility but
+    # ignored at runtime.
     agent = _molt_agent(notice=0.6, strong=0.8, immediate=0.95)
-    assert build_molt_context(agent, 0.55) is None  # below custom notice
-    assert build_molt_context(agent, 0.6)["stage"] == "consider"
-    assert build_molt_context(agent, 0.8)["stage"] == "strong"
-    assert build_molt_context(agent, 0.95)["stage"] == "immediate"
+
+    assert build_molt_context(agent, 0.49) is None
+    assert build_molt_context(agent, 0.55)["stage"] == "consider"
+    assert build_molt_context(agent, 0.70)["stage"] == "strong"
+    assert build_molt_context(agent, 0.90)["stage"] == "immediate"
+    assert build_molt_context(agent, 0.55)["thresholds"] == {
+        "consider": 0.5,
+        "strong": 0.7,
+        "immediate": 0.9,
+    }
 
 
 def test_build_meta_attaches_context_molt_only_above_threshold():
