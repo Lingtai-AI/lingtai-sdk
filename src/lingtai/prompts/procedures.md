@@ -29,7 +29,16 @@ long scans, batch analysis, and exploratory branches instead of dragging their
 full context through the main agent. Daemon turns carry no resident system prompt,
 so they are often the token-efficient body for temporary work. Choose the daemon
 or model by exercising judgment about the task; when the human gives an explicit
-instruction, follow that instruction. For the full daemon methodology — pad
+instruction, follow that instruction.
+
+Treat daemon use as a practice to learn from, not a rigid policy: daemon need not
+always come first. Observe how humans route work to daemons and subagents — what
+they correct, what they approve, what they reject — and after a meaningful daemon
+workflow, deposit the lesson into the right durable layer: pad for active workflow
+state, lingtai/character for durable operating style, knowledge for private project
+facts and patterns, skills for reusable procedures. The parent stays responsible
+for framing, review, synthesis, and human-facing decisions; the daemon protects
+the main context by executing bounded work. For the full daemon methodology — pad
 workflow, cost efficiency, context hygiene, and parent/daemon division of labor —
 read `system-manual` → `reference/procedures-manual/SKILL.md`.
 

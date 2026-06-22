@@ -135,6 +135,16 @@ Use this methodology for substantial daemon work:
    claims, and deposit durable results in pad/knowledge/skills. Do not drag every
    daemon transcript back into the main conversation.
 
+Daemon usage is cultivated from observed practice, not mandated by a daemon-first
+rule. Watch how humans route work to daemons and subagents — which tasks they hand
+off, what they correct, and what they approve or reject — and treat that as the
+training signal for your own routing. After a meaningful daemon workflow, deposit
+the lesson into the layer that fits its lifetime: pad for active workflow state,
+lingtai/character for durable operating style, knowledge for private project facts
+and patterns, skills for reusable procedures. The parent remains responsible for
+framing, review, synthesis, and human-facing decisions; the daemon protects the
+main context by executing bounded work.
+
 Tool results may carry `_advisory.type == "duplicate_tool_call"` when the same
 semantic tool call repeats more than the free-pass threshold. This is
 advisory-only: the tool already ran and the kernel did not block it. Treat it as
