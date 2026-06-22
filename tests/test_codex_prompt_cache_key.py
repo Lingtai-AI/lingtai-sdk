@@ -17,6 +17,9 @@ import re
 from dataclasses import dataclass
 from types import SimpleNamespace
 
+import pytest
+
+import lingtai.llm.openai.adapter as adapter_mod
 from lingtai.llm.openai.adapter import (
     CodexOpenAIAdapter,
     CodexResponsesSession,
@@ -24,6 +27,20 @@ from lingtai.llm.openai.adapter import (
     _lingtai_user_agent,
 )
 from lingtai_kernel.llm.base import FunctionSchema
+
+
+@pytest.fixture(autouse=True)
+def _clean_codex_rolling_state():
+    """Isolate the module-level rolling prompt-key state between tests.
+
+    The rolling experiment keeps previous-API-call times in a module dict keyed
+    by the per-agent base id; without a reset, a session built on the same anchor
+    in an earlier test would make a *later* test's first request roll instead of
+    using the stable fallback. Reset before AND after so order never matters.
+    """
+    adapter_mod._reset_codex_prev_call_times()
+    yield
+    adapter_mod._reset_codex_prev_call_times()
 
 
 @dataclass
@@ -309,7 +326,12 @@ def test_codex_bare_adapter_omits_session_thread_headers():
     assert sent["prompt_cache_key"] == "lingtai-codex:gpt-5.5:v1"
 
 
-def test_codex_sends_stable_headers_from_session_anchor():
+def test_codex_sends_stable_headers_from_session_anchor(monkeypatch):
+    # Stable-mode contract: with the rolling experiment pinned OFF, the per-agent
+    # id is byte-stable across requests (the pre-experiment behavior, still
+    # reachable via ``_CODEX_PROMPT_KEY_MODE``). The rolling default is covered
+    # in tests/test_codex_rolling_prompt_key.py.
+    monkeypatch.setattr(adapter_mod, "_CODEX_PROMPT_KEY_MODE", "stable")
     anchor = "/agents/alice/init.json"
     session = _create_codex_session_cfg(
         [_completed(), _completed()],
@@ -361,13 +383,17 @@ def test_codex_headers_differ_for_different_agents():
     assert hb["session_id"] == hb["thread_id"]
 
 
-def test_codex_thread_salt_does_not_split_thread_from_session():
+def test_codex_thread_salt_does_not_split_thread_from_session(monkeypatch):
     """A legacy ``codex_thread_salt`` no longer derives a separate thread.
 
     The salt is accepted as a manifest pass-through for backward compatibility,
     but the root/main thread tracks the session id exactly, so two different
     salts on the same anchor still produce byte-identical session/thread/key.
+
+    Pinned to stable mode: this guards the salt-irrelevance contract, which is
+    about the durable per-agent id, not the rolling experiment.
     """
+    monkeypatch.setattr(adapter_mod, "_CODEX_PROMPT_KEY_MODE", "stable")
     anchor = "/agents/alice/init.json"
     salt0 = _create_codex_session_cfg(
         [_completed()],
@@ -608,11 +634,14 @@ def test_codex_account_id_preserves_app_name_identity():
     assert headers["User-Agent"].startswith("codex_cli_rs/")
 
 
-def test_codex_account_id_does_not_affect_cache_affinity():
+def test_codex_account_id_does_not_affect_cache_affinity(monkeypatch):
     """Adding the account header leaves session/thread/prompt_cache_key untouched.
 
     Regression guard: the ChatGPT-Account-ID plumbing must not perturb the
-    cache-affinity identity (issue #378) in any way."""
+    cache-affinity identity (issue #378) in any way. Pinned to stable mode so two
+    sessions sharing one explicit id stay byte-identical (under rolling they
+    would roll off each other's recorded call time — covered separately)."""
+    monkeypatch.setattr(adapter_mod, "_CODEX_PROMPT_KEY_MODE", "stable")
     explicit = "11111111-2222-3333-4444-555555555555"
     with_acct = _create_codex_session_cfg(
         [_completed()],

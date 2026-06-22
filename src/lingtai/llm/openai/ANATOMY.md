@@ -92,11 +92,13 @@ Both paths return sessions wrapped via `_wrap_with_gate()` for rate limiting.
 
 ### Codex REST cache-affinity ids (`session_id` / `thread_id` / `prompt_cache_key`)
 
-**Codex-only.** The three cache-affinity values are a **single stable per-agent id**, byte-identical and NEVER changed for the life of the agent's identity:
+**Codex-only.** Within **every** request the three cache-affinity values are byte-identical:
 
 ```
-prompt_cache_key == session_id == thread_id == <stable per-agent id>
+prompt_cache_key == session_id == thread_id == <per-request affinity id>
 ```
+
+What that single id *is* across requests depends on `_CODEX_PROMPT_KEY_MODE` (see **Rolling prompt-key experiment** below). In `"stable"` mode it is one fixed per-agent id NEVER changed for the life of the agent's identity (the historical behavior described next). In the experiment default `"rolling_prev_call_time"` it changes per request after the first. The within-request equality holds in **both** modes.
 
 `CodexResponsesSession.__init__` **normalizes** whatever candidates it receives (`prompt_cache_key`, `session_id`, `thread_id`) into one id and uses it byte-identically for all three. Priority is `prompt_cache_key` > `session_id` > `thread_id` (the explicit request-body cache-affinity key wins). This closes the leak where an explicit override or a directly-constructed session could send three different values.
 
@@ -107,7 +109,21 @@ The REST `/backend-api/codex/responses` endpoint does **not** accept `previous_r
 - **Header carve-out (NON-NEGOTIABLE).** `session_id` / `thread_id` route the backend cache slot and MUST be per-agent. Headers are emitted **only when an explicit `session_id`/`thread_id` was supplied** (`has_header_identity`); a *lone* `prompt_cache_key` — the model-only fallback `lingtai-codex:{model}:v1`, shared by every agent on a model — stays a **body-only** cache key and promotes **no** headers. Promoting it would collapse all agents onto one session/thread, which is exactly the bug the per-agent design exists to avoid. So `_cache_affinity_headers()` emits headers iff the session was given header identity; a bare/test session with no ids sends neither. The adapter has no per-agent identity of its own, so the host wiring passes the agent path down by default (see below).
 - **Default wiring (the normal path — not opt-in, not opt-out).** For a Codex agent, `service.build_provider_defaults_from_manifest_llm(llm, ..., working_dir=...)` injects `codex_session_anchor = str((working_dir / "init.json").resolve())` (the agent path / durable identity anchor). The adapter hashes it into the id and uses it for all three values via `_resolve_codex_ids` (returns `(id, id)` — the thread tracks the session id exactly) and `_default_prompt_cache_key` (returns the same `id`). The default wiring does **not** read the token ledger, molt time, or any clock, so the same `working_dir` always yields the same id.
 - The `codex_session_id` / `codex_session_anchor` / `codex_thread_salt` keys remain settable on the manifest `llm` block (allowlisted in `../service.py` `_PROVIDER_DEFAULTS_PASS_THROUGH_KEYS`) as an **internal override / testing escape hatch** — an explicit `codex_session_id` is used verbatim for all three; `codex_thread_salt` survives as a legacy pass-through but no longer derives a separate thread id. `_resolve_codex_ids(model)` returns `(None, None)` only when no anchor/id was passed down at all (the bare/test path).
-- **Token-ledger dump.** `CodexResponsesSession._usage_extra` copies the `session_id` / `thread_id` / `prompt_cache_key` for the request into `UsageMetadata.extra` as `codex_session_id` / `codex_thread_id` / `codex_prompt_cache_key`. Because of the normalization above these three are the **same value** — the ledger never records mismatched affinity ids. `BaseAgent._save_chat_history()` merges all non-None usage extra fields into `logs/token_ledger.jsonl`, so the ids sit beside input/output/thinking/cached token counts. The values are short, non-secret derived affinity ids — no request body, messages, or OAuth secret ride along. A body-only/bare session contributes only the fields whose levers were actually sent.
+- **Token-ledger dump.** `CodexResponsesSession._usage_extra` copies the `session_id` / `thread_id` / `prompt_cache_key` for the request into `UsageMetadata.extra` as `codex_session_id` / `codex_thread_id` / `codex_prompt_cache_key`. Because of the normalization above these three are the **same value** — the ledger never records mismatched affinity ids. `BaseAgent._save_chat_history()` merges all non-None usage extra fields into `logs/token_ledger.jsonl`, so the ids sit beside input/output/thinking/cached token counts. The values are short, non-secret derived affinity ids — no request body, messages, or OAuth secret ride along. A body-only/bare session contributes only the fields whose levers were actually sent. (Under the rolling experiment these record the *rolled* id actually used for the request, so the per-request roll is visible in the ledger.)
+
+### Rolling prompt-key experiment (`_CODEX_PROMPT_KEY_MODE`)
+
+**Codex-only, experiment (Jason, 2026-06-22).** A single module switch `_CODEX_PROMPT_KEY_MODE` selects how the per-agent affinity id evolves across the requests of one ongoing session. It is fully reversible — flip to `"stable"` to restore the historical byte-stable behavior described above; nothing else changes.
+
+- `"stable"` — the old behavior: one byte-stable per-agent id (`_codex_session_id(anchor)` or an explicit override) on every request.
+- `"rolling_prev_call_time"` (**experiment default**) — the **first** request of a session still uses the stable per-agent id (no previous API-call time exists yet, so it falls back). Every **later** request uses `_codex_rolling_key(base_id, previous_api_call_time)` = `sha256(f"{base_id}:{prev_ms}").hexdigest()[:8]`, where `base_id` is the durable per-agent id and `prev_ms` is the **start time of the immediately preceding request** in integer milliseconds.
+
+Mechanics:
+- **Previous-call-time state** lives in the module dict `_CODEX_PREV_CALL_TIME_MS`, keyed by the session's stable `base_id` (globally unique per agent). `CodexResponsesSession._resolve_rolling_id()` reads the prior timestamp, then **stamps the current time** (`_codex_now_ms()`, monkeypatchable) so the *next* request rolls off *this* request's start. So the recorded instant is **request start**, and request N's key is derived from request N−1's start. `_reset_codex_prev_call_times()` clears it (test helper).
+- **Within-request invariant preserved.** `_effective_affinity()` resolves the rolled id once and writes it back to `_prompt_cache_key` / `_session_id` / `_thread_id` before the request is built, so `prompt_cache_key == session_id == thread_id` and the metadata envelope (`x-codex-window-id = <id>:0`, turn-metadata `session_id`/`thread_id`) all carry the same rolled id for that request.
+- **`x-client-request-id` is untouched.** It was already a fresh per-request UUID (matching the official client) and was never tied to the cache key, so rolling leaves it exactly as-is — only the cache-affinity trio rolls.
+- **Bare/no-anchor path never rolls.** The model-only fallback `lingtai-codex:{model}:v1` is shared across agents and has no per-agent header identity, so `base_id` is `None` there and the path keeps its stable body-only key (no headers), regardless of mode.
+- **No `codex-cache-key` resurrected.** The experiment reuses only `prompt_cache_key` / `session_id` / `thread_id`; the removed `codex-cache-key` request header stays gone.
 
 ### Codex client-identity headers (`originator` / `User-Agent`)
 
@@ -131,7 +147,7 @@ When a Codex session has a stable LingTai session/thread identity, `CodexRespons
 - **`OpenAIChatSession._request_timeout`** — per-request HTTP timeout set by caller before dispatch (line 319). Prevents race between watchdog and SDK.
 - **`OpenAIResponsesSession._response_id`** — server-side session chain pointer. Updated after each `send()` / streamed response.
 - **`CodexResponsesSession._response_id`** — transient debug aid only; never threaded into next request (line 1538).
-- **`CodexResponsesSession._current_id`** — the single stable per-agent affinity id (a pure hash of the agent path), used byte-identically for `_prompt_cache_key` / `_session_id` / `_thread_id`. Set once at construction and never changed (no rotation, no epoch, no clock).
+- **`CodexResponsesSession._current_id`** — the per-agent affinity id resolved at construction (a pure hash of the agent path, or an explicit override), used byte-identically for `_prompt_cache_key` / `_session_id` / `_thread_id`. In `"stable"` mode it is fixed for the session's life; in the rolling experiment `_effective_affinity()` rewrites the trio per request off `_codex_base_id` (the same construction id) + the previous call time. See **Rolling prompt-key experiment**.
 - **Codex Responses trace** — opt-in diagnostics write JSONL metadata to `logs/codex_responses_trace.jsonl` when `LINGTAI_CODEX_RESPONSES_TRACE=1` (override path with `LINGTAI_CODEX_RESPONSES_TRACE_PATH`). Default off; stores event/item shapes, lengths/hashes, usage, and accumulator counts, not raw content.
 - **`OpenAIAdapter._client`** — shared `openai.OpenAI` instance. `_client_kwargs` stored for session `reset()`.
 - **`OpenAIAdapter._session_class`** — class var, subclasses override (e.g. DeepSeek and MiMo inject `reasoning_content` round-trip fallbacks).

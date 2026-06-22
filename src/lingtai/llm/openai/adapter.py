@@ -106,6 +106,69 @@ def _codex_session_id(anchor: str) -> str:
     """
     return hashlib.sha256(anchor.encode("utf-8")).hexdigest()[:8]
 
+
+# --- Rolling prompt-cache-key experiment (Jason, 2026-06-22, issue #471 line) -
+#
+# EXPERIMENT: instead of pinning ONE stable per-agent affinity id for the life
+# of the session, derive a NEW affinity id for each request after the first from
+# ``hash(agent_anchor + previous_api_call_time)``. The hypothesis is that a
+# rolling key probes how the ChatGPT backend keys/segments its prompt cache
+# across requests of one ongoing session (vs. the stable-id baseline).
+#
+# Invariant preserved (verified in fresh ``codex exec`` / ``codex-tui``
+# captures): WITHIN each request ``prompt_cache_key == session_id == thread_id``
+# byte-identically. Rolling moves all three together to the same new id; it does
+# NOT touch ``x-client-request-id`` / ``turn_id``, which were already fresh
+# per-request UUIDs (the official client and the pre-experiment code both emit a
+# fresh ``x-client-request-id`` every request — it was never tied to the cache
+# key, so we leave that behavior exactly as-is).
+#
+# REVERSIBLE: a single module switch. Set ``_CODEX_PROMPT_KEY_MODE = "stable"``
+# to restore the old byte-stable per-agent id wholesale; nothing else changes.
+#
+#   "rolling_prev_call_time" (experiment default) -> request #1 uses the stable
+#       per-agent fallback (no previous call time yet); request N (N>1) uses
+#       ``hash(base_id + previous_api_call_time)``.
+#   "stable"                                       -> the old behavior: one
+#       byte-stable per-agent id on every request.
+_CODEX_PROMPT_KEY_MODE = "rolling_prev_call_time"
+
+# Previous API-call time per agent, in integer milliseconds, keyed by the
+# session's stable base id (the per-agent hash or explicit override — the value
+# that uniquely identifies the ongoing agent/session). A module-level dict is
+# acceptable for this experiment: the rolling key must persist across the
+# distinct request calls of one long-lived session, and the session base id is
+# globally unique per agent. Recorded at request START (see ``send_stream``), so
+# request N rolls off request N-1's start time.
+_CODEX_PREV_CALL_TIME_MS: dict[str, int] = {}
+
+
+def _codex_now_ms() -> int:
+    """Current wall-clock time in integer milliseconds.
+
+    Factored out so tests can monkeypatch a deterministic clock without touching
+    ``time.time`` globally.
+    """
+    return int(time.time() * 1000)
+
+
+def _reset_codex_prev_call_times() -> None:
+    """Clear the per-agent previous-call-time state (test helper)."""
+    _CODEX_PREV_CALL_TIME_MS.clear()
+
+
+def _codex_rolling_key(base_id: str, prev_call_time_ms: int) -> str:
+    """Derive a rolling 8-char Codex affinity id from a base id + a timestamp.
+
+    ``base_id`` is the session's stable per-agent id (the ``init.json``-path hash
+    or an explicit override) — i.e. the durable agent/session anchor. The result
+    is shaped exactly like :func:`_codex_session_id` (8-char lowercase-hex
+    sha256 prefix) so it drops into ``session_id`` / ``thread_id`` /
+    ``prompt_cache_key`` byte-identically. Pure function: same inputs -> same id.
+    """
+    material = f"{base_id}:{int(prev_call_time_ms)}"
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:8]
+
 # Codex cache-affinity identity is a SINGLE STABLE per-agent value: a pure
 # deterministic hash of the agent's durable identity anchor (the resolved
 # ``init.json`` / agent-dir path), used byte-identically for ``session_id`` /
@@ -1787,6 +1850,15 @@ class CodexResponsesSession(OpenAIResponsesSession):
         else:
             self._session_id = None
             self._thread_id = None
+        # Stable base id for the rolling prompt-key experiment: the durable
+        # per-agent anchor (the per-agent hash or an explicit override). It is
+        # the value rolled with the previous API-call time and the key into the
+        # module-level previous-call-time state. Only the per-agent header path
+        # rolls — the bare/no-anchor path's body-only ``prompt_cache_key`` is the
+        # SHARED model-only fallback (``lingtai-codex:{model}:v1``); rolling it
+        # would invent a fake per-agent key for an adapter that has no per-agent
+        # identity, so that path is left ``None`` and never rolls.
+        self._codex_base_id = self._current_id if self._has_header_identity else None
 
     def _cache_affinity_headers(self) -> dict[str, str]:
         """Return the stable ``session_id`` / ``thread_id`` headers, if any.
@@ -1833,14 +1905,52 @@ class CodexResponsesSession(OpenAIResponsesSession):
             return {}
         return {"x-codex-installation-id": self._installation_id}
 
+    def _resolve_rolling_id(self) -> str | None:
+        """Resolve THIS request's effective affinity id, honoring the mode.
+
+        Stable mode (or no per-agent base id) -> the durable stable id,
+        unchanged. Rolling mode -> the stable id for request #1 (no previous
+        API-call time recorded yet) and ``hash(base_id + previous_call_time)``
+        for every later request. The previous call time is then (re)stamped to
+        *now* so the NEXT request rolls off this request's start (see
+        ``send_stream``, which calls this before building the request).
+
+        Returns ``None`` only on the bare/no-anchor path, which keeps its
+        model-only body ``prompt_cache_key`` and never rolls.
+        """
+        base = self._codex_base_id
+        if not base:
+            return None  # bare/no-anchor path: nothing to roll, no headers
+        if _CODEX_PROMPT_KEY_MODE != "rolling_prev_call_time":
+            return base  # stable mode: byte-stable per-agent id
+        prev = _CODEX_PREV_CALL_TIME_MS.get(base)
+        # Record this request's start time so the NEXT request can roll off it.
+        # First request: ``prev`` is None -> stable fallback this time.
+        _CODEX_PREV_CALL_TIME_MS[base] = _codex_now_ms()
+        if prev is None:
+            return base
+        return _codex_rolling_key(base, prev)
+
     def _effective_affinity(self) -> tuple[str | None, dict[str, str]]:
         """Resolve this request's (prompt_cache_key, headers) pair.
 
-        Always the single stable per-agent id — fixed for the life of the
-        session, used byte-identically for ``prompt_cache_key`` / ``session_id``
-        / ``thread_id`` on every request. No rotation, no epoch, no time
-        dependence.
+        Honors ``_CODEX_PROMPT_KEY_MODE``. In the (default) rolling mode the
+        per-agent affinity id changes per request — derived from the previous
+        API-call time — while the WITHIN-request invariant is preserved: the
+        single resolved id is written back to ``prompt_cache_key`` /
+        ``session_id`` / ``thread_id`` so all three (and the metadata envelope
+        that reads them) stay byte-identical for this request. In stable mode the
+        id is the fixed per-agent hash on every request, as before.
         """
+        rolled = self._resolve_rolling_id()
+        if rolled is not None:
+            self._prompt_cache_key = rolled
+            # Keep the header trio in lockstep with the body cache key, but only
+            # where the per-agent header identity exists (the bare path stays
+            # header-silent — see ``__init__``).
+            if self._has_header_identity:
+                self._session_id = rolled
+                self._thread_id = rolled
         return self._prompt_cache_key, self._cache_affinity_headers()
 
     @staticmethod
