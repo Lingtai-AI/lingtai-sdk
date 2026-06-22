@@ -403,3 +403,75 @@ def test_load_init_runs_agent_migrations_before_validation(tmp_path):
     digest = hashlib.sha256(legacy.encode("utf-8")).hexdigest()
     archive = tmp_path / "system" / "migrations" / f"init-procedures-{digest}.md"
     assert archive.read_text(encoding="utf-8") == legacy
+
+
+# ---------------------------------------------------------------------------
+# _check_duplicate_process — must match the working-dir argument exactly
+# ---------------------------------------------------------------------------
+
+
+def _ps_line(pid: int, working_dir) -> str:
+    """A realistic `ps -eo pid=,command=` line for a `lingtai run <dir>` agent."""
+    py = "/usr/local/.../Python"
+    return f"{pid} {py} -m lingtai run {working_dir}"
+
+
+def test_check_duplicate_process_ignores_prefix_sibling(tmp_path):
+    """Starting `.../codex` must not be blocked by a running `.../codex_colleague`.
+
+    Regression: `codex` is a prefix of `codex_colleague`, and the old substring
+    match treated the colleague's `ps` line as a duplicate codex process.
+    """
+    from lingtai.cli import _check_duplicate_process
+
+    codex = tmp_path / "codex"
+    colleague = tmp_path / "codex_colleague"
+    codex.mkdir()
+    colleague.mkdir()
+
+    ps_out = _ps_line(42779, colleague.resolve()) + "\n"
+    with patch("subprocess.check_output", return_value=ps_out):
+        # Must NOT raise SystemExit — the colleague is a different agent.
+        _check_duplicate_process(codex)
+
+
+def test_check_duplicate_process_detects_exact_match(tmp_path):
+    """A genuine same-workdir `lingtai run` process is still flagged."""
+    from lingtai.cli import _check_duplicate_process
+
+    codex = tmp_path / "codex"
+    codex.mkdir()
+
+    ps_out = _ps_line(99999, codex.resolve()) + "\n"
+    with patch("subprocess.check_output", return_value=ps_out):
+        with pytest.raises(SystemExit):
+            _check_duplicate_process(codex)
+
+
+def test_check_duplicate_process_ignores_shell_wrapper(tmp_path):
+    """A shell wrapper that merely *evals* the run command is not a duplicate.
+
+    Regression (discussions/covenant-distillation-and-per-agent-profile.md): a
+    `zsh -ic '... lingtai run <dir> ...'` wrapper carries the whole command as a
+    single quoted argv token, so `run` is never its own token and must not match.
+    """
+    from lingtai.cli import _check_duplicate_process
+
+    codex = tmp_path / "codex"
+    codex.mkdir()
+
+    wrapper = f"67192 /bin/zsh -ic 'lingtai run {codex.resolve()} && echo done'"
+    with patch("subprocess.check_output", return_value=wrapper + "\n"):
+        _check_duplicate_process(codex)
+
+
+def test_check_duplicate_process_excludes_own_pid(tmp_path):
+    """The current process's own `ps` line must never count as a duplicate."""
+    from lingtai.cli import _check_duplicate_process
+
+    codex = tmp_path / "codex"
+    codex.mkdir()
+
+    ps_out = _ps_line(os.getpid(), codex.resolve()) + "\n"
+    with patch("subprocess.check_output", return_value=ps_out):
+        _check_duplicate_process(codex)

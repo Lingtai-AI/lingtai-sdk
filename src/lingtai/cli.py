@@ -184,21 +184,49 @@ def _check_duplicate_process(working_dir: Path) -> None:
         )
     except Exception:
         return  # ps unavailable — fall through to flock
-    needle = f"lingtai run {abs_dir}"
+    # Match the working-dir argument exactly. A substring test false-positives
+    # on prefix-sharing siblings (e.g. starting "codex" while "codex_colleague"
+    # is alive — "codex" is a prefix of "codex_colleague") and on shell wrappers
+    # whose argv merely contains the path, so tokenize each command line and
+    # require a `lingtai ... run <abs_dir>` invocation where the token after
+    # `run` resolves to exactly our working dir.
+    import shlex as _shlex
+    my_pid = os.getpid()
     for line in out.splitlines():
         trimmed = line.strip()
-        if needle in trimmed:
-            # Exclude our own PID
-            pid_str = trimmed.split(None, 1)[0]
-            if pid_str.isdigit() and int(pid_str) == os.getpid():
+        if not trimmed:
+            continue
+        parts = trimmed.split(None, 1)
+        if len(parts) != 2:
+            continue
+        pid_str, command = parts
+        if not pid_str.isdigit() or int(pid_str) == my_pid:
+            continue
+        try:
+            tokens = _shlex.split(command)
+        except ValueError:
+            continue  # unparseable command line — let flock be the backstop
+        matched = False
+        for i in range(1, len(tokens) - 1):
+            if tokens[i] != "run" or "lingtai" not in tokens[i - 1]:
                 continue
-            print(
-                f"error: another lingtai agent is already running in {abs_dir}\n"
-                f"  PID {pid_str}: {trimmed}\n"
-                f"  If this is a stale process, kill it first.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
+            candidate = tokens[i + 1]
+            try:
+                candidate = str(Path(candidate).resolve())
+            except Exception:
+                pass
+            if candidate == abs_dir:
+                matched = True
+                break
+        if not matched:
+            continue
+        print(
+            f"error: another lingtai agent is already running in {abs_dir}\n"
+            f"  PID {pid_str}: {trimmed}\n"
+            f"  If this is a stale process, kill it first.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 def run(working_dir: Path) -> None:
