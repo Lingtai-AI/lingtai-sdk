@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>LingTai kernel v0.14.1 release report</title>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;max-width:980px;margin:32px auto;padding:0 20px;line-height:1.55;color:#17202a}code,pre{background:#f6f8fa;border-radius:6px}code{padding:2px 4px}pre{padding:12px;overflow:auto}.ok{color:#116329;font-weight:600}.muted{color:#57606a}table{border-collapse:collapse}td,th{border:1px solid #d0d7de;padding:6px 10px;text-align:left}</style>
+<h1>LingTai kernel v0.14.1 release report</h1>
+<p class="muted">Generated 2026-06-23T08:43:13Z. Candidate head <code>873bb5ac9c4bb477da0fe337c2652d8f09468b7c</code>; previous tag <code>v0.14.0</code>.</p>
+<h2>Highlights</h2>
+<ul>
+<li>Codex Responses WebSocket reuse, incremental continuation, tool-output freeze, baseline restore, and epoch reset.</li>
+<li>Codex-specific summarize/cache guidance: repeated summarize calls force fresh <code>ws_full</code> epochs; ordinary long results should be batched.</li>
+<li>Default Codex identity is honest LingTai; official CLI-shaped identity remains explicit local opt-in.</li>
+<li>Daemon/runtime notification and metadata durability improvements since v0.14.0.</li>
+<li>ANATOMY citation refresh: 599 citations checked, 0 issues.</li>
+</ul>
+<h2>Validation</h2>
+<ul>
+<li class="ok">Full pytest: 2715 passed, 4 skipped in 304.41s.</li>
+<li class="ok">Target Codex identity/comment tests: 42 passed.</li>
+<li class="ok">Build and twine check passed.</li>
+<li class="ok">Wheel/sdist pycache/pyc inspection: 0 bad entries.</li>
+</ul>
+<h2>Artifacts</h2>
+<table><tr><th>Artifact</th><th>SHA-256</th></tr>
+<tr><td><code>lingtai-0.14.1-cp312-cp312-macosx_11_0_arm64.whl</code></td><td><code>952be6499f75df3f83624276c3b9adb0ade8a8862f3f1f57575e0d9a148f7321</code></td></tr>
+<tr><td><code>lingtai-0.14.1.tar.gz</code></td><td><code>9574b9a81f0deb673e71fa090ba925aa3f05f84c2dbf9ccafa040e1381e756a3</code></td></tr>
+</table>
+<h2>Commits since v0.14.0</h2>
+<pre>60bc74f fix(daemon): preserve terminal-state notifications
+11fc193 experiment: mirror codex app identity
+0509010 Merge pull request #469 from Lingtai-AI/fix/codex-http-1to1-20260622
+39f2122 Merge pull request #466 from Lingtai-AI/fix/daemon-terminal-state-gate-20260622
+07538f5 docs: make tool-result summary readme proactive
+d718049 feat(meta): add tool_meta.comment.overflow hint for capped/large results
+b564bbf Merge pull request #471 from Lingtai-AI/docs/proactive-summarize-guidance-20260622
+4712c26 Merge pull request #472 from Lingtai-AI/tool-meta-comment-overflow-20260622
+f4afadb Add gated Codex websocket session reuse (#473)
+fb12e28 Stabilize Codex websocket tool outputs (#474)
+7888752 Add Codex websocket epoch reset (#475)
+ed875ea Refresh Codex docs, comments, and anatomy citations (#476)
+873bb5a Bump kernel version to 0.14.1 (#477)</pre>
+</html>
