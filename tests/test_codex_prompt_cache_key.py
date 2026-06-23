@@ -17,13 +17,29 @@ import re
 from dataclasses import dataclass
 from types import SimpleNamespace
 
+import pytest
+
 from lingtai.llm.openai.adapter import (
     CodexOpenAIAdapter,
     CodexResponsesSession,
     OpenAIResponsesSession,
+    _CODEX_WS_ENABLED_ENV,
     _lingtai_user_agent,
 )
 from lingtai_kernel.llm.base import FunctionSchema
+
+
+@pytest.fixture(autouse=True)
+def _force_codex_ws_off(monkeypatch):
+    """Pin these HTTP-path prompt-cache tests to the stateless replay transport.
+
+    Codex WS is on by default (``LINGTAI_CODEX_WS`` unset → enabled). These tests
+    assert the HTTP request kwargs and inject a ``FakeClient`` rather than a WS
+    transport, so leaving WS on would make each ``send`` attempt a real websocket
+    connect that only falls back to HTTP after a network timeout — correct result,
+    but slow and network-fragile. Forcing the gate off keeps them deterministic.
+    """
+    monkeypatch.setenv(_CODEX_WS_ENABLED_ENV, "0")
 
 
 @dataclass

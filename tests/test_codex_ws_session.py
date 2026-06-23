@@ -30,6 +30,7 @@ from lingtai.llm.openai.codex_ws import SyncCodexWebsocketTransport
 from lingtai.llm.openai.adapter import (
     CodexResponsesSession,
     _CodexWsFallback,
+    _codex_ws_enabled,
 )
 
 
@@ -291,8 +292,8 @@ def test_fallback_to_http_when_delta_mismatch():
     assert "hello" in flat and "again" in flat
 
 
-def test_ws_disabled_by_default_uses_http():
-    """Without the gate, the session uses the existing HTTP path (no transport)."""
+def test_ws_explicitly_disabled_uses_http():
+    """With the gate explicitly off, the session uses the HTTP path (no transport)."""
     session = CodexResponsesSession(
         client=_HttpFallbackClient(),
         model="gpt-5.5",
@@ -302,13 +303,58 @@ def test_ws_disabled_by_default_uses_http():
         extra_kwargs={},
         session_id="sess-stable",
         thread_id="sess-stable",
-        # ws_enabled defaults to False
+        ws_enabled=False,
     )
 
     session.send("hello")
 
     assert len(session._client.responses.kwargs) == 1
     assert session._client.responses.kwargs[0]["store"] is False
+
+
+def test_codex_ws_enabled_defaults_on_when_env_unset(monkeypatch):
+    """Unset ``LINGTAI_CODEX_WS`` means the websocket transport is on by default."""
+    monkeypatch.delenv("LINGTAI_CODEX_WS", raising=False)
+    assert _codex_ws_enabled() is True
+
+
+@pytest.mark.parametrize("value", ["0", "false", "no", "off", "FALSE", "Off", " no "])
+def test_codex_ws_enabled_explicit_off_disables(monkeypatch, value):
+    """An explicit falsy value forces the HTTP full-replay path."""
+    monkeypatch.setenv("LINGTAI_CODEX_WS", value)
+    assert _codex_ws_enabled() is False
+
+
+@pytest.mark.parametrize("value", ["1", "true", "yes", "on", "", "anything"])
+def test_codex_ws_enabled_other_values_stay_on(monkeypatch, value):
+    """Any non-falsy value (including empty/unrecognized) leaves the default on."""
+    monkeypatch.setenv("LINGTAI_CODEX_WS", value)
+    assert _codex_ws_enabled() is True
+
+
+def test_ws_enabled_by_default_when_env_unset_uses_transport(monkeypatch):
+    """With env unset and a transport factory available, the session uses WS."""
+    monkeypatch.delenv("LINGTAI_CODEX_WS", raising=False)
+    transport = FakeWsTransport()
+    session = CodexResponsesSession(
+        client=_HttpFallbackClient(),
+        model="gpt-5.5",
+        instructions="system prompt",
+        tools=None,
+        tool_choice=None,
+        extra_kwargs={},
+        session_id="sess-stable",
+        thread_id="sess-stable",
+        ws_transport_factory=lambda url, headers: transport,
+        # ws_enabled left as None -> resolved from env default (on)
+    )
+
+    assert session._ws_enabled is True
+    session.send("hello")
+
+    # WS path used: the injected transport saw the frame, HTTP fallback untouched.
+    assert transport.sent_frames
+    assert len(session._client.responses.kwargs) == 0
 
 
 class _ErrorWsConnection:

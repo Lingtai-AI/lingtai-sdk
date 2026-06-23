@@ -249,11 +249,11 @@ _CODEX_WS_BETA_HEADER = "OpenAI-Beta"
 _CODEX_WS_BETA_VALUE = "responses_websockets=2026-02-06"
 _CODEX_TURN_STATE_HEADER = "x-codex-turn-state"
 
-# Env gate for the experimental websocket transport. Off by default: when unset
-# (or not truthy) the session uses the existing, proven HTTP full-replay path.
-# Set ``LINGTAI_CODEX_WS=1`` to enable the websocket path (which still falls back
-# to HTTP on any handshake/connection/auth error, unsupported runtime, or delta
-# mismatch).
+# Env gate for the websocket transport. On by default: when unset the session
+# uses the websocket path (which still falls back to HTTP full-replay on any
+# handshake/connection/auth error, unsupported runtime, or delta mismatch).
+# Set ``LINGTAI_CODEX_WS=0`` (or ``false``/``no``/``off``) to force the existing,
+# proven HTTP full-replay path.
 _CODEX_WS_ENABLED_ENV = "LINGTAI_CODEX_WS"
 _CODEX_WS_EPOCH_RESET_TURNS_ENV = "LINGTAI_CODEX_WS_EPOCH_RESET_TURNS"
 _CODEX_WS_EPOCH_RESET_TURNS_DEFAULT = 20
@@ -265,8 +265,16 @@ _CODEX_WS_EPOCH_RESET_TURNS_DEFAULT = 20
 
 
 def _codex_ws_enabled() -> bool:
-    """Return True when the experimental websocket transport is enabled."""
-    return os.environ.get(_CODEX_WS_ENABLED_ENV, "").lower() in {"1", "true", "yes", "on"}
+    """Return True when the websocket transport is enabled (default on).
+
+    Unset env means enabled. An explicit falsy value (``0``/``false``/``no``/
+    ``off``, case-insensitive) disables it and forces the HTTP full-replay path.
+    Any other value leaves the default (enabled) in place.
+    """
+    raw = os.environ.get(_CODEX_WS_ENABLED_ENV)
+    if raw is None:
+        return True
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _codex_ws_epoch_reset_turns() -> int:
@@ -2112,8 +2120,9 @@ class CodexResponsesSession(OpenAIResponsesSession):
     ):
         super().__init__(*args, **kwargs)
         # EXPERIMENTAL Codex Responses-over-WebSocket transport (#471). Gated:
-        # ``ws_enabled`` defaults to the ``LINGTAI_CODEX_WS`` env switch (off
-        # unless explicitly turned on). ``ws_transport_factory`` is an injection
+        # ``ws_enabled`` defaults to the ``LINGTAI_CODEX_WS`` env switch (on
+        # unless explicitly disabled with ``0``/``false``/``no``/``off``).
+        # ``ws_transport_factory`` is an injection
         # seam used by the mock tests; when ``None`` and the gate is on, the real
         # factory is used (and itself falls back to HTTP if ``websockets`` is
         # missing). ``_ws_session`` holds the per-turn last_request/last_response
