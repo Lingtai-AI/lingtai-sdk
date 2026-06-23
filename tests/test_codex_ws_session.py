@@ -717,12 +717,12 @@ def test_codex_adapter_comment_explains_epoch_reset_and_summarize_delay():
     assert comment["feature"] == "responses_websocket_epoch_reset"
     assert comment["epoch_reset_turns"] == 20
     assert comment["turns_since_epoch_reset"] == 0
-    assert "ws_full" in comment["summarize_ws_full_note"]
-    assert "previous_response_id" in comment["summary"]
-    assert "local chat_history" in comment["summary"]
-    assert "system(action='summarize')" in comment["summarize_ws_full_note"]
-    assert "proactively use" in comment["summarize_ws_full_note"]
-    assert "stale meta blocks" in comment["summarize_ws_full_note"]
+    note = comment["summarize_ws_full_note"]
+    assert "ws_full" in note
+    assert "ws_incremental" in note
+    assert "five turns" in note
+    assert "Codex-specific" in note
+    assert "summarize them together" in note
 
 
 def test_history_summarized_forces_next_ws_full_epoch_reset():

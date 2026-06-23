@@ -2634,15 +2634,13 @@ class CodexResponsesSession(OpenAIResponsesSession):
                 "or summarize LingTai local chat_history."
             ),
             "summarize_ws_full_note": (
-                "Default periodic cleanup waits for this interval, but if old tool "
-                "results, stale meta, or other noisy context are no longer needed, "
-                "proactively use system(action='summarize') instead of waiting. "
-                "When summarize succeeds, LingTai triggers that fresh-epoch rebuild "
-                "on the next Codex request immediately. The ledger may label this "
-                "request as ws_full, meaning: do not reference the old "
-                "previous_response_id chain; send the complete request reconstructed "
-                "from the now-summarized local history, so stale meta blocks already "
-                "captured in remote state are left behind."
+                "Codex-specific caution: each summarize forces the next request "
+                "to start a fresh ws_full epoch instead of continuing as "
+                "ws_incremental, so it can hurt the previous_response_id cache "
+                "chain. Strongly avoid consecutive summarize calls within about "
+                "five turns; for ordinary long results, group several finished "
+                "items and summarize them together. Other providers are much less "
+                "sensitive to this Codex cache boundary."
             ),
         }
 
