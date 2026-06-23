@@ -336,29 +336,146 @@ def _codex_incremental_items(
     Returns ``None`` whenever a strict extension cannot be proven, so the caller
     falls back to sending the full input rather than a bad delta.
     """
+    delta, _reason = _codex_incremental_diagnose(
+        previous_request,
+        previous_items_added,
+        request,
+        allow_empty_delta=allow_empty_delta,
+    )
+    return delta
+
+
+def _codex_diff_keys(prev_no_input: dict[str, Any], cur_no_input: dict[str, Any]) -> list[str]:
+    """Return the sorted set of non-input request keys that changed.
+
+    Used only for safe diagnostics: it records WHICH non-input field names
+    diverged (e.g. ``tools``, ``include``), never their values, so the reason
+    string carries no prompt/tool/secret content.
+    """
+    keys = set(prev_no_input) | set(cur_no_input)
+    return sorted(k for k in keys if prev_no_input.get(k) != cur_no_input.get(k))
+
+
+def _codex_item_safe_diag(item: Any) -> dict[str, str]:
+    """Return safe, content-free diagnostics for one Responses input item."""
+    if not isinstance(item, dict):
+        return {"type": type(item).__name__, "role": "", "keys": "", "hash": ""}
+    payload = json.dumps(item, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+    return {
+        "type": str(item.get("type") or "")[:80],
+        "role": str(item.get("role") or "")[:80],
+        "keys": ",".join(sorted(str(k) for k in item.keys()))[:160],
+        # Short hash only: enough to tell whether two opaque items differ,
+        # without leaking prompt/tool/result content into provider metadata.
+        "hash": hashlib.sha256(payload.encode("utf-8", "replace")).hexdigest()[:12],
+    }
+
+
+def _codex_incremental_diagnose(
+    previous_request: dict[str, Any],
+    previous_items_added: list[dict[str, Any]],
+    request: dict[str, Any],
+    *,
+    allow_empty_delta: bool,
+) -> tuple[list[dict[str, Any]] | None, dict[str, Any]]:
+    """Like :func:`_codex_incremental_items` but also return a safe diagnostic.
+
+    The second element is a small metadata dict explaining the decision. It
+    records ONLY classes/counts/lengths/short-hash/booleans — never prompt,
+    tool-result, reasoning, token, header, or secret content — so it is safe to
+    surface in provider metadata / the token ledger:
+
+      * ``reason``: ``ok`` | ``non_input_fields_changed`` | ``prefix_mismatch``
+        | ``empty_delta_rejected``
+      * ``changed_fields``: list of non-input KEY NAMES that diverged (no values)
+      * ``baseline_len`` / ``cur_input_len`` / ``delta_len``: item counts
+      * ``mismatch_index``: first baseline index where the prefix diverged (or -1)
+    """
     prev_no_input = {k: v for k, v in previous_request.items() if k != "input"}
     cur_no_input = {k: v for k, v in request.items() if k != "input"}
-    if prev_no_input != cur_no_input:
-        return None
 
     baseline = list(previous_request.get("input") or [])
     baseline.extend(previous_items_added or [])
     baseline_len = len(baseline)
-
     cur_input = list(request.get("input") or [])
-    starts_with = cur_input[:baseline_len] == baseline
-    if starts_with and (allow_empty_delta or baseline_len < len(cur_input)):
-        return cur_input[baseline_len:]
-    return None
+    cur_len = len(cur_input)
+
+    diag: dict[str, Any] = {
+        "reason": "ok",
+        "changed_fields": [],
+        "baseline_len": baseline_len,
+        "cur_input_len": cur_len,
+        "delta_len": 0,
+        "mismatch_index": -1,
+    }
+
+    if prev_no_input != cur_no_input:
+        diag["reason"] = "non_input_fields_changed"
+        diag["changed_fields"] = _codex_diff_keys(prev_no_input, cur_no_input)
+        return None, diag
+
+    # Find the first position where the current input diverges from the baseline.
+    prefix = cur_input[:baseline_len]
+    if prefix != baseline:
+        mismatch = baseline_len  # default: current input is shorter than baseline
+        for idx in range(min(len(prefix), baseline_len)):
+            if prefix[idx] != baseline[idx]:
+                mismatch = idx
+                break
+        diag["reason"] = "prefix_mismatch"
+        diag["mismatch_index"] = mismatch
+        if mismatch < baseline_len:
+            prev_diag = _codex_item_safe_diag(baseline[mismatch])
+            diag["mismatch_prev_type"] = prev_diag.get("type")
+            diag["mismatch_prev_role"] = prev_diag.get("role")
+            diag["mismatch_prev_keys"] = prev_diag.get("keys")
+            diag["mismatch_prev_hash"] = prev_diag.get("hash")
+        if mismatch < cur_len:
+            cur_diag = _codex_item_safe_diag(cur_input[mismatch])
+            diag["mismatch_cur_type"] = cur_diag.get("type")
+            diag["mismatch_cur_role"] = cur_diag.get("role")
+            diag["mismatch_cur_keys"] = cur_diag.get("keys")
+            diag["mismatch_cur_hash"] = cur_diag.get("hash")
+        return None, diag
+
+    if not (allow_empty_delta or baseline_len < cur_len):
+        diag["reason"] = "empty_delta_rejected"
+        return None, diag
+
+    delta = cur_input[baseline_len:]
+    diag["delta_len"] = len(delta)
+    return delta, diag
+
+
+def _ws_is_synthesized_orphan_output(item: Any) -> bool:
+    """True if ``item`` is the synthesized orphan ``function_call_output`` guard.
+
+    ``to_responses_input`` injects a placeholder ``function_call_output`` for any
+    unanswered ``function_call`` (issue #170). That placeholder must not enter the
+    websocket delta baseline: the real tool-result continuation replaces it next
+    turn, so a baseline containing it can never strict-prefix-match. Detect it by
+    the sentinel output string so the baseline builder can trim it.
+    """
+    from ..interface_converters import _RESPONSES_ORPHAN_OUTPUT_PLACEHOLDER
+
+    return (
+        isinstance(item, dict)
+        and item.get("type") == "function_call_output"
+        and item.get("output") == _RESPONSES_ORPHAN_OUTPUT_PLACEHOLDER
+    )
 
 
 def _ws_dump_item(item: Any) -> dict[str, Any] | None:
-    """Normalize a streamed output item to a plain dict for the delta baseline.
+    """Normalize a streamed output item to a plain dict.
 
-    The baseline (previous request input + server output items) must compare
-    equal to the next request's serialized input items, which are plain dicts
-    from ``to_responses_input``. SDK event items are pydantic models, so dump
-    them; pass through dicts; ignore anything else.
+    Retained as a small, well-tested normalizer for SDK event items (pydantic
+    models -> dict; dicts pass through; anything else -> ``None``). It is NO
+    LONGER the delta-baseline source: the server's streamed output items are in
+    the Responses *output* schema and never strict-prefix-match the *input*
+    schema this session re-derives next turn, which forced ``ws_full`` every
+    turn. The baseline is now built from the converter via
+    ``CodexResponsesSession._ws_record_baseline_from_interface``. This helper is
+    kept for diagnostics / potential reuse and to preserve its unit contract.
     """
     if item is None:
         return None
@@ -1947,6 +2064,13 @@ class CodexResponsesSession(OpenAIResponsesSession):
         self._ws_base_url = base_url
         self._ws_api_key = api_key if isinstance(api_key, str) and api_key else None
         self._ws_session = _CodexWebsocketSession()
+        # Set while a websocket request is in flight: the full converted input we
+        # sent this turn, used by ``_ws_record_baseline_from_interface`` to derive
+        # a converter-stable delta baseline once the assistant turn is recorded.
+        self._ws_pending_baseline_input: list[dict[str, Any]] | None = None
+        # Last websocket delta decision diagnostic (safe metadata only): why the
+        # request went ``ws_incremental`` vs ``ws_full``. Surfaced in usage.extra.
+        self._ws_last_diag: dict[str, Any] = {}
         # One Codex websocket connection may carry multiple ``response.create``
         # frames. Live smoke showed ChatGPT Codex resolves
         # ``previous_response_id`` only when the follow-up request stays on the
@@ -2056,6 +2180,7 @@ class CodexResponsesSession(OpenAIResponsesSession):
         store: bool | None = None,
         fallback_error_type: str | None = None,
         fallback_error_message: str | None = None,
+        ws_diag: dict[str, Any] | None = None,
     ) -> dict[str, str]:
         """Build the token-ledger ``UsageMetadata.extra`` for this request.
 
@@ -2063,6 +2188,13 @@ class CodexResponsesSession(OpenAIResponsesSession):
         visible in ``token_ledger.jsonl`` alongside the pre-rotation requests.
         Only the short non-secret affinity ids ride here — no prompt body, no
         tokens, no OAuth secret.
+
+        ``ws_diag`` carries the websocket delta decision — ONLY safe metadata
+        (reason class, item counts, changed non-input KEY names, a mismatch
+        index). It explains why a turn went ``ws_full`` vs ``ws_incremental``
+        (``no_baseline`` / ``missing_response_id`` / ``missing_output_items`` /
+        ``prefix_mismatch`` / ``non_input_fields_changed`` / ``ok`` …). No prompt,
+        tool-result, reasoning, token, header, or secret content is included.
         """
         extra: dict[str, str] = {}
         if affinity_headers.get("session_id"):
@@ -2081,6 +2213,30 @@ class CodexResponsesSession(OpenAIResponsesSession):
             extra["codex_fallback_error_type"] = fallback_error_type
         if fallback_error_message:
             extra["codex_fallback_error_message"] = fallback_error_message[:240]
+        if ws_diag:
+            reason = ws_diag.get("reason")
+            if reason:
+                extra["codex_ws_delta_reason"] = str(reason)
+            changed = ws_diag.get("changed_fields")
+            if changed:
+                # Key NAMES only (e.g. "tools,include"), never their values.
+                extra["codex_ws_changed_fields"] = ",".join(str(k) for k in changed)[:240]
+            for key in (
+                "baseline_len",
+                "cur_input_len",
+                "delta_len",
+                "mismatch_index",
+                "mismatch_prev_type",
+                "mismatch_prev_role",
+                "mismatch_prev_keys",
+                "mismatch_prev_hash",
+                "mismatch_cur_type",
+                "mismatch_cur_role",
+                "mismatch_cur_keys",
+                "mismatch_cur_hash",
+            ):
+                if ws_diag.get(key) is not None:
+                    extra[f"codex_ws_{key}"] = str(ws_diag[key])[:240]
         return extra
 
     def send(self, message) -> LLMResponse:
@@ -2144,18 +2300,38 @@ class CodexResponsesSession(OpenAIResponsesSession):
         previous_response_id: str | None = None
         frame_input = full_replay_input_items
         request_mode = "ws_full"
+        # Safe fallback diagnostics (no prompt/tool/secret content): explains why
+        # we are sending full input instead of a delta. Surfaced via
+        # ``self._ws_last_diag`` so ``send_stream`` can ride it into ``usage.extra``
+        # / the token ledger. Only classes / counts / key-names / a short hash.
+        diag: dict[str, Any]
         last = self._ws_session.last_response
-        if last is not None and last.response_id:
-            delta = _codex_incremental_items(
-                self._ws_session.last_request or {},
+        if last is None:
+            diag = {"reason": "no_baseline"}
+        elif not last.response_id:
+            diag = {"reason": "missing_response_id"}
+        elif self._ws_session.last_request is None:
+            diag = {"reason": "missing_baseline_request"}
+        else:
+            delta, diag = _codex_incremental_diagnose(
+                self._ws_session.last_request,
                 last.items_added,
                 full_request,
                 allow_empty_delta=True,
             )
+            if delta is None and not last.items_added:
+                # Baseline lacks the server's output items (e.g. the previous turn
+                # completed but produced no recordable output item). Make the
+                # reason explicit rather than a generic prefix mismatch.
+                if diag.get("reason") == "prefix_mismatch" and diag.get("baseline_len") == len(
+                    self._ws_session.last_request.get("input") or []
+                ):
+                    diag = {**diag, "reason": "missing_output_items"}
             if delta is not None:
                 previous_response_id = last.response_id
                 frame_input = delta
                 request_mode = "ws_incremental"
+        self._ws_last_diag = dict(diag)
 
         # Build the transmitted frame (delta or full).
         frame = dict(full_request)
@@ -2198,38 +2374,52 @@ class CodexResponsesSession(OpenAIResponsesSession):
         previous_last_request = self._ws_session.last_request
         previous_last_response = self._ws_session.last_response
         self._ws_session.last_request = full_request
+        # Park the baseline for THIS request's input length so the post-stream
+        # baseline (recomputed from the canonical interface in ``send_stream``)
+        # knows where the server-added output items begin. The previous-baseline
+        # values above are restored on any stream failure.
+        self._ws_pending_baseline_input = list(full_replay_input_items)
 
         def _events():
             response_id_local: str | None = None
-            items_added: list[dict[str, Any]] = []
             try:
                 for event in transport.stream(frame):
                     etype = getattr(event, "type", None)
-                    if etype == "response.output_item.done":
-                        item = getattr(event, "item", None)
-                        dumped = _ws_dump_item(item)
-                        if dumped is not None:
-                            items_added.append(dumped)
-                    elif etype == "response.completed":
+                    if etype == "response.completed":
                         response_id_local = getattr(getattr(event, "response", None), "id", None)
                     yield event
             except _CodexWsFallback:
                 self._ws_session.last_request = previous_last_request
                 self._ws_session.last_response = previous_last_response
+                self._ws_pending_baseline_input = None
                 self._close_ws_transport(transport)
                 raise
             except Exception:
                 self._ws_session.last_request = previous_last_request
                 self._ws_session.last_response = previous_last_response
+                self._ws_pending_baseline_input = None
                 self._close_ws_transport(transport)
                 raise
             # Record the completed response so the next request can delta off it,
             # then notify the server it was processed (official posts
             # ``response.processed`` after handling a completed response).
+            #
+            # NOTE: ``items_added`` is intentionally left EMPTY here. The server's
+            # streamed ``response.output_item.done`` items are in the Responses
+            # *output* schema (``{"type":"message","id":...,"status":...,
+            # "content":[{"type":"output_text",...}]}``), which does NOT compare
+            # equal to the *input* schema this session re-derives next turn via
+            # ``to_responses_input`` (``{"role":"assistant","content":<str>}`` +
+            # ``{"type":"reasoning","summary":[...]}``). Using the raw output items
+            # as the delta baseline therefore failed the strict-prefix check on
+            # EVERY follow-up turn, collapsing every real agent turn to ``ws_full``.
+            # The correct, converter-stable baseline is filled in by
+            # ``_ws_record_baseline_from_interface`` after ``send_stream`` records
+            # the assistant turn into the canonical interface (#471 delta fix).
             if response_id_local:
                 self._ws_session.last_response = _CodexLastResponse(
                     response_id=response_id_local,
-                    items_added=items_added,
+                    items_added=[],
                 )
                 try:
                     transport.send_response_processed(response_id_local)
@@ -2237,6 +2427,51 @@ class CodexResponsesSession(OpenAIResponsesSession):
                     logger.debug("codex ws response.processed failed: %s", exc)
 
         return _events(), request_mode, previous_response_id
+
+    def _ws_record_baseline_from_interface(self) -> None:
+        """Fill the WS delta baseline from the converter, not raw server output.
+
+        Called by ``send_stream`` AFTER the just-completed assistant turn has been
+        recorded into the canonical interface. The next turn's full input is
+        ``to_responses_input(interface)`` (plus that turn's new user/tool items),
+        so the only baseline that can ever strict-prefix-match it is one expressed
+        in the SAME converter schema. We therefore derive ``items_added`` as the
+        suffix of the current full converted input beyond the input we actually
+        sent this turn — i.e. exactly the assistant turn the server added,
+        rendered in input schema. This is the conservative fix for the
+        ``ws_full``-every-turn root cause: it makes the baseline and the next full
+        request byte-comparable by construction. No prompt/secret content leaves
+        the process; this only rearranges in-memory request dicts.
+        """
+        pending = getattr(self, "_ws_pending_baseline_input", None)
+        last = self._ws_session.last_response
+        if pending is None or last is None or not last.response_id:
+            self._ws_pending_baseline_input = None
+            return
+        full_now = to_responses_input(self._interface)
+        base_len = len(pending)
+        # Only treat the tail as server-added output when the interface still
+        # strictly extends what we sent (it always should: we appended an
+        # assistant turn). If it does not, leave ``items_added`` empty so the next
+        # turn falls back to ``ws_full`` with a ``missing_output_items`` reason
+        # rather than chaining off a baseline we cannot prove.
+        if full_now[:base_len] == pending and base_len <= len(full_now):
+            tail = full_now[base_len:]
+            # Drop trailing SYNTHESIZED orphan tool-result placeholders from the
+            # baseline. When the assistant turn ends on an unanswered
+            # ``function_call``, ``to_responses_input`` injects a placeholder
+            # ``function_call_output`` (issue #170 wire guard). That placeholder is
+            # NOT what the next tool-result continuation actually sends (the real
+            # output replaces it), so keeping it in the baseline guarantees a
+            # ``prefix_mismatch`` and forces ``ws_full`` on every tool loop. Trim
+            # the trailing placeholder(s) so the real continuation strictly extends
+            # the baseline and stays ``ws_incremental``.
+            while tail and _ws_is_synthesized_orphan_output(tail[-1]):
+                tail = tail[:-1]
+            last.items_added = tail
+        else:
+            last.items_added = []
+        self._ws_pending_baseline_input = None
 
     def _close_ws_transport(self, transport=None) -> None:
         current = self._ws_transport
@@ -2564,6 +2799,7 @@ class CodexResponsesSession(OpenAIResponsesSession):
                                 store=request_store,
                                 fallback_error_type=fallback_error_type,
                                 fallback_error_message=fallback_error_message,
+                                ws_diag=(self._ws_last_diag if self._ws_enabled else None),
                             ),
                         )
         except Exception:
@@ -2622,6 +2858,14 @@ class CodexResponsesSession(OpenAIResponsesSession):
                 "thinking_tokens": usage.thinking_tokens,
             },
         )
+
+        # Fix the ``ws_full``-every-turn root cause: now that the assistant turn
+        # is in the canonical interface, recompute the websocket delta baseline in
+        # the SAME converter schema the next full request will use, so a strict
+        # prefix can actually match. Only runs on the websocket path; a no-op on
+        # the HTTP fallback. See ``_ws_record_baseline_from_interface``.
+        if self._ws_enabled:
+            self._ws_record_baseline_from_interface()
 
         # Stateless: don't persist the response_id beyond this single turn.
         # Stored only as a transient debug aid; never threaded into the next

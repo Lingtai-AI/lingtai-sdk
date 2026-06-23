@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from lingtai.llm.openai.adapter import (
     _CodexLastResponse,
+    _codex_incremental_diagnose,
     _codex_incremental_items,
 )
 
@@ -79,3 +80,85 @@ def test_incremental_empty_delta_rejected_unless_allowed():
 
     assert _codex_incremental_items(prev, [], cur, allow_empty_delta=False) is None
     assert _codex_incremental_items(prev, [], cur, allow_empty_delta=True) == []
+
+
+# ---------------------------------------------------------------------------
+# Safe diagnostics: the diagnose() sibling explains WHY a delta was/ wasn't
+# possible using only classes/counts/key-names — never prompt/secret content.
+# ---------------------------------------------------------------------------
+
+
+def test_diagnose_ok_returns_delta_and_safe_metadata():
+    prev = _req([{"role": "user", "content": "a"}])
+    last = _CodexLastResponse(
+        response_id="resp_1",
+        items_added=[{"role": "assistant", "content": "b"}],
+    )
+    cur = _req(
+        [
+            {"role": "user", "content": "a"},
+            {"role": "assistant", "content": "b"},
+            {"role": "user", "content": "c"},
+        ]
+    )
+
+    delta, diag = _codex_incremental_diagnose(
+        prev, last.items_added, cur, allow_empty_delta=False
+    )
+
+    assert delta == [{"role": "user", "content": "c"}]
+    assert diag["reason"] == "ok"
+    assert diag["baseline_len"] == 2
+    assert diag["cur_input_len"] == 3
+    assert diag["delta_len"] == 1
+    assert diag["mismatch_index"] == -1
+
+
+def test_diagnose_non_input_change_names_only_keys_not_values():
+    prev = _req([{"role": "user", "content": "a"}], tools=[{"name": "secret_tool"}])
+    cur = _req(
+        [{"role": "user", "content": "a"}, {"role": "user", "content": "c"}],
+        tools=[{"name": "OTHER"}],
+    )
+
+    delta, diag = _codex_incremental_diagnose(prev, [], cur, allow_empty_delta=False)
+
+    assert delta is None
+    assert diag["reason"] == "non_input_fields_changed"
+    assert diag["changed_fields"] == ["tools"]
+    # The values (which could be sensitive) never appear in the diagnostic.
+    import json as _json
+
+    blob = _json.dumps(diag)
+    assert "secret_tool" not in blob and "OTHER" not in blob
+
+
+def test_diagnose_prefix_mismatch_reports_first_divergent_index():
+    prev = _req([{"role": "user", "content": "a"}, {"role": "user", "content": "b"}])
+    cur = _req(
+        [
+            {"role": "user", "content": "a"},
+            {"role": "user", "content": "EDITED"},
+            {"role": "user", "content": "c"},
+        ]
+    )
+
+    delta, diag = _codex_incremental_diagnose(prev, [], cur, allow_empty_delta=False)
+
+    assert delta is None
+    assert diag["reason"] == "prefix_mismatch"
+    assert diag["mismatch_index"] == 1
+    # Content never leaks into the diagnostic.
+    import json as _json
+
+    assert "EDITED" not in _json.dumps(diag)
+
+
+def test_diagnose_empty_delta_reason_when_not_allowed():
+    prev = _req([{"role": "user", "content": "a"}])
+    cur = _req([{"role": "user", "content": "a"}])
+
+    delta, diag = _codex_incremental_diagnose(prev, [], cur, allow_empty_delta=False)
+
+    assert delta is None
+    assert diag["reason"] == "empty_delta_rejected"

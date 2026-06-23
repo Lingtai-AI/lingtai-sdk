@@ -402,5 +402,220 @@ def test_ws_url_builder_maps_https_to_wss():
     assert _codex_ws_url(None).startswith("wss://")
 
 
+# ---------------------------------------------------------------------------
+# Converter-stable delta baseline (#471 ws_full root-cause fix).
+#
+# The server streams output items in the Responses *output* schema, but this
+# session re-derives its input next turn via ``to_responses_input`` in the
+# *input* schema. Using the raw output items as the delta baseline can never
+# strict-prefix-match the next full input, so every real agent turn collapsed to
+# ``ws_full``. The fix records the baseline from the converter after the
+# assistant turn lands in the interface. These tests pin that behavior end to
+# end with a transport that streams realistic output items.
+# ---------------------------------------------------------------------------
+
+
+class _MessageItem:
+    """A streamed ``response.output_item.done`` message in the OUTPUT schema."""
+
+    def __init__(self, text: str):
+        self.type = "message"
+        self.id = "msg_out_1"
+        self.role = "assistant"
+        self.status = "completed"
+        self._text = text
+
+    def model_dump(self, exclude_none=True):
+        return {
+            "type": "message",
+            "id": self.id,
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": self._text}],
+        }
+
+
+class _ToolCallItem:
+    def __init__(self, call_id="call_a", name="do_x"):
+        self.type = "function_call"
+        self.call_id = call_id
+        self.name = name
+
+
+class RealisticWsTransport(FakeWsTransport):
+    """Streams an assistant *message* output item then completes.
+
+    Mirrors the live wire: a text delta, an ``output_item.done`` carrying the
+    message in the OUTPUT schema, then ``response.completed``. The point is that
+    the raw output item must NOT be what the next-turn baseline compares against.
+    """
+
+    def __init__(self, *, text="hi there", **kw):
+        super().__init__(**kw)
+        self._text = text
+
+    def stream(self, frame):
+        self.sent_frames.append(frame)
+        self._resp_counter += 1
+        rid = f"resp_ws_{self._resp_counter}"
+        yield Event("response.output_text.delta", delta=self._text)
+        yield Event("response.output_item.done", item=_MessageItem(self._text))
+        yield _completed(rid)
+
+
+class ToolCallWsTransport(FakeWsTransport):
+    """First stream returns an assistant tool call; later streams return text."""
+
+    def stream(self, frame):
+        self.sent_frames.append(frame)
+        self._resp_counter += 1
+        rid = f"resp_ws_{self._resp_counter}"
+        if self._resp_counter == 1:
+            yield Event("response.output_item.added", item=_ToolCallItem())
+            yield Event("response.function_call_arguments.delta", delta='{"a": 1}')
+            yield Event("response.output_item.done", item=_ToolCallItem())
+        else:
+            yield Event("response.output_text.delta", delta="done")
+        yield _completed(rid)
+
+
+def test_second_turn_is_incremental_with_realistic_output_items():
+    """Root-cause regression: a normal text turn followed by a new user turn
+    sends a clean delta + ``previous_response_id`` even though the server streamed
+    the assistant message in the OUTPUT schema. Before the fix this was
+    ``ws_full`` because the output item never prefix-matched the re-derived input.
+    """
+    t = RealisticWsTransport()
+    session = _make_session(t)
+
+    first = session.send("hello")
+    assert first.usage.extra["codex_request_mode"] == "ws_full"
+    assert first.usage.extra["codex_ws_delta_reason"] == "no_baseline"
+
+    second = session.send("again")
+
+    assert second.usage.extra["codex_request_mode"] == "ws_incremental"
+    assert second.usage.extra["codex_ws_delta_reason"] == "ok"
+    frame = t.sent_frames[1]
+    assert frame["previous_response_id"] == "resp_ws_1"
+    # Only the new user turn is sent; the prior turn is NOT replayed.
+    flat = "".join(str(i) for i in frame["input"])
+    assert "hello" not in flat and "hi there" not in flat
+    assert "again" in flat
+    assert int(second.usage.extra["codex_ws_delta_len"]) == 1
+
+
+def test_tool_result_continuation_stays_incremental():
+    """A tool-result continuation (the assistant ended on an unanswered
+    ``function_call``) must NOT reset to ``ws_full``. The converter injects an
+    orphan-output placeholder into the baseline; the fix trims it so the real
+    tool result strictly extends the baseline and rides as a delta."""
+    from lingtai_kernel.llm.interface import ToolResultBlock
+
+    t = ToolCallWsTransport()
+    session = _make_session(t)
+
+    session.send("call the tool")  # turn 1: assistant emits a tool call
+    result = session.send([ToolResultBlock(id="call_a", name="do_x", content={"ok": True})])
+
+    assert result.usage.extra["codex_request_mode"] == "ws_incremental"
+    assert result.usage.extra["codex_ws_delta_reason"] == "ok"
+    frame = t.sent_frames[1]
+    assert frame["previous_response_id"] == "resp_ws_1"
+    # The delta carries the REAL function_call_output, not the synthesized
+    # placeholder, and does not replay the prior user turn or the tool call.
+    assert len(frame["input"]) == 1
+    only = frame["input"][0]
+    assert only["type"] == "function_call_output"
+    assert only["call_id"] == "call_a"
+    assert "synthesized placeholder" not in str(only)
+
+
+def test_mismatch_falls_back_to_ws_full_with_safe_reason():
+    """A non-input field change (tools) forces ``ws_full`` with a safe diagnostic
+    naming only the changed KEY, never any value."""
+    t = RealisticWsTransport()
+    session = _make_session(t)
+
+    session.send("hello")
+    session._tools = [{"type": "function", "name": "newtool", "parameters": {}}]
+    result = session.send("again")
+
+    assert result.usage.extra["codex_request_mode"] == "ws_full"
+    assert result.usage.extra["codex_ws_delta_reason"] == "non_input_fields_changed"
+    assert "tools" in result.usage.extra["codex_ws_changed_fields"]
+    # The diagnostic carries only key names + counts — no prompt/tool/secret body.
+    blob = json.dumps(result.usage.extra, default=str)
+    assert "hello" not in blob and "again" not in blob and "newtool" not in blob
+    # Full input replayed over WS, no previous id.
+    assert "previous_response_id" not in t.sent_frames[1]
+
+
+def test_baseline_updates_after_each_successful_response():
+    """After a successful turn the baseline advances so the NEXT turn chains off
+    the latest response id, not the first."""
+    t = RealisticWsTransport()
+    session = _make_session(t)
+
+    session.send("a")
+    session.send("b")
+    third = session.send("c")
+
+    assert third.usage.extra["codex_request_mode"] == "ws_incremental"
+    assert t.sent_frames[2]["previous_response_id"] == "resp_ws_2"
+
+
+def test_failed_stream_restores_prior_baseline_and_next_turn_chains_off_it():
+    """If a turn's stream fails mid-flight, the prior baseline is restored, so a
+    retry after a fresh successful turn still chains off the last GOOD response —
+    the failed turn never poisons the delta chain."""
+    class _FailSecond(RealisticWsTransport):
+        def stream(self, frame):
+            self.sent_frames.append(frame)
+            self._resp_counter += 1
+            if self._resp_counter == 2:
+                raise _CodexWsFallback("stream blew up after first")
+            rid = f"resp_ws_{self._resp_counter}"
+            yield Event("response.output_text.delta", delta="hi")
+            yield Event("response.output_item.done", item=_MessageItem("hi"))
+            yield _completed(rid)
+
+    t = _FailSecond()
+    session = _make_session(t)
+
+    session.send("first")
+    good_request = session._ws_session.last_request
+    good_response = session._ws_session.last_response
+
+    with pytest.raises(_CodexWsFallback):
+        session.send("second")
+
+    # Baseline restored to the last good turn; transport closed.
+    assert session._ws_session.last_request == good_request
+    assert session._ws_session.last_response == good_response
+    assert session._ws_transport is None
+
+
+def test_new_user_turn_after_tool_loop_keeps_incremental_chain():
+    """Boundary: tool call -> tool result -> new user text all stay incremental
+    within the same websocket session (no spurious reset breaks the delta)."""
+    from lingtai_kernel.llm.interface import ToolResultBlock
+
+    t = ToolCallWsTransport()
+    session = _make_session(t)
+
+    session.send("call the tool")  # ws_full (first)
+    r2 = session.send([ToolResultBlock(id="call_a", name="do_x", content={"ok": True})])
+    r3 = session.send("now continue in plain text")
+
+    assert r2.usage.extra["codex_request_mode"] == "ws_incremental"
+    assert r3.usage.extra["codex_request_mode"] == "ws_incremental"
+    assert t.sent_frames[2]["previous_response_id"] == "resp_ws_2"
+    flat3 = "".join(str(i) for i in t.sent_frames[2]["input"])
+    assert "now continue in plain text" in flat3
+    # Earlier turns are not replayed in the third delta.
+    assert "call the tool" not in flat3
+
+
 # Imported here (not at top) so a missing symbol fails the import test loudly.
 from lingtai.llm.openai.adapter import _CODEX_TURN_STATE_HEADER as _CodexTurnStateHeader  # noqa: E402
