@@ -566,3 +566,81 @@ def test_system_event_dismiss_with_malformed_data_is_noop(tmp_path: Path) -> Non
     assert result["removed"] == 0
     assert result["remaining"] == 0
     assert collect_notifications(tmp_path)["system"]["data"] == ["not", "a", "dict"]
+
+
+# ---------------------------------------------------------------------------
+# Codex ws_full / fresh-epoch reset on notification dismiss/cleanup.
+#
+# Dismissing or clearing a notification rewrites the resident
+# ``_meta.notifications`` block on older tool results, breaking the Codex WS
+# incremental (previous_response_id) chain — exactly like summarize. So a real
+# dismiss must notify the chat session via ``on_notification_dismissed`` so the
+# adapter starts a fresh ws_full epoch. A no-op / refused dismiss must NOT.
+# ---------------------------------------------------------------------------
+
+
+class _RecordingChat:
+    """Records ``on_notification_dismissed`` invocations from the dismiss path."""
+
+    def __init__(self) -> None:
+        self.dismiss_calls: list[object] = []
+
+    def on_notification_dismissed(self, channel=None) -> None:
+        self.dismiss_calls.append(channel)
+
+
+def _agent_with_chat(tmp_path: Path):
+    agent = _StubAgent(tmp_path)
+    agent._chat = _RecordingChat()
+    return agent
+
+
+def test_real_channel_clear_signals_chat_for_ws_full_epoch(tmp_path: Path) -> None:
+    agent = _agent_with_chat(tmp_path)
+    publish(tmp_path, "soul", {"header": "soul flow"})
+    _mark_delivered(agent)
+
+    res = _dismiss_channel(agent, "soul")
+
+    assert res["cleared"] is True
+    assert agent._chat.dismiss_calls == ["soul"]
+
+
+def test_real_event_dismiss_signals_chat_for_ws_full_epoch(tmp_path: Path) -> None:
+    agent = _agent_with_chat(tmp_path)
+    publish(
+        tmp_path,
+        "system",
+        {
+            "header": "1 system notification",
+            "data": {"events": [{"event_id": "evt_a", "source": "btw"}]},
+        },
+    )
+    agent._notification_fp = notification_fingerprint(tmp_path)
+
+    res = _dismiss_event(agent, event_id="evt_a")
+
+    assert res["removed"] == 1
+    assert agent._chat.dismiss_calls == ["system"]
+
+
+def test_noop_dismiss_does_not_signal_chat(tmp_path: Path) -> None:
+    agent = _agent_with_chat(tmp_path)
+
+    res = _dismiss_channel(agent, "soul")
+
+    assert res["cleared"] is False
+    assert agent._chat.dismiss_calls == []
+
+
+def test_refused_dismiss_does_not_signal_chat(tmp_path: Path) -> None:
+    import lingtai_kernel.intrinsics.email  # noqa: F401 - import performs registration
+
+    agent = _agent_with_chat(tmp_path)
+    publish(tmp_path, "email", {"header": "1 unread"})
+
+    res = _dismiss_channel(agent, "email")
+
+    assert res["status"] == "error"
+    assert res["reason"] == "guarded"
+    assert agent._chat.dismiss_calls == []

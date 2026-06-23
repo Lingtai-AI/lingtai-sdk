@@ -56,6 +56,11 @@ class _GatedSession:
         if callable(hook):
             hook(summarized_ids)
 
+    def on_notification_dismissed(self, channel=None):
+        hook = getattr(self._inner, "on_notification_dismissed", None)
+        if callable(hook):
+            hook(channel)
+
     def __getattr__(self, name):
         # Only fires when normal attribute lookup on the proxy fails.
         return getattr(self._inner, name)

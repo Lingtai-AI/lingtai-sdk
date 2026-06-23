@@ -1039,9 +1039,57 @@ def dismiss_channel(
 
     if channel == "system":
         with agent._system_notification_lock:
-            return _dismiss_system_event()
+            result = _dismiss_system_event()
+    else:
+        result = _clear_current_channel()
 
-    return _clear_current_channel()
+    if _dismiss_changed_surface(result):
+        _signal_notification_dismissed(agent, channel)
+    return result
+
+
+def _dismiss_changed_surface(result: dict) -> bool:
+    """Return True iff a dismiss result reflects a real change to the surface.
+
+    A real change is what rewrites the resident ``_meta.notifications`` block on
+    older tool results and therefore breaks the Codex WS incremental chain. A
+    no-op (file already absent), a refusal (guarded/protected/stale/invalid), or
+    a zero-match event dismiss leaves the surface untouched and must NOT trigger
+    a fresh-epoch reset.
+    """
+    if not isinstance(result, dict) or result.get("status") != "ok":
+        return False
+    return bool(
+        result.get("cleared")
+        or result.get("removed")
+        or result.get("acked_large_result_refs")
+    )
+
+
+def _signal_notification_dismissed(agent, channel: str) -> None:
+    """Tell the chat session a dismiss rewrote the notification surface.
+
+    Mirrors ``on_history_summarized``: a notification dismiss/cleanup forces the
+    next Codex request to start a fresh ws_full epoch instead of continuing as
+    ws_incremental. Best-effort and adapter-agnostic — adapters without the hook
+    (or providers that don't care about the boundary) treat it as a no-op.
+    """
+    chat = getattr(agent, "_chat", None)
+    if chat is None:
+        return
+    hook = getattr(chat, "on_notification_dismissed", None)
+    if not callable(hook):
+        return
+    try:
+        hook(channel)
+    except Exception:  # pragma: no cover - defensive hook isolation
+        try:
+            agent._log(
+                "notification_dismiss_hook_failed",
+                channel=channel,
+            )
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------

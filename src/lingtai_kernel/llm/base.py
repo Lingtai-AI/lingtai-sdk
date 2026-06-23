@@ -169,6 +169,16 @@ class ChatSession(ABC):
 
         return None
 
+    def on_notification_dismissed(self, channel: str | None = None) -> None:
+        """Hook called after a notification dismiss/cleanup mutates the surface.
+
+        A dismiss rewrites the resident notification meta on prior tool results,
+        so — like ``on_history_summarized`` — adapters that reuse remote state
+        (e.g. Codex WS) use this to start a fresh ws_full epoch. Default no-op.
+        """
+
+        return None
+
     @property
     @abstractmethod
     def interface(self) -> ChatInterface:

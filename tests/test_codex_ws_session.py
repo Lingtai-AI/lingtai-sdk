@@ -97,6 +97,7 @@ class FakeWsTransport:
 
 def _make_session(transport: FakeWsTransport, **kwargs):
     """A Codex session wired to use the injected transport, gate forced on."""
+    kwargs.setdefault("ws_enabled", True)
     return CodexResponsesSession(
         client=_HttpFallbackClient(),
         model="gpt-5.5",
@@ -106,7 +107,6 @@ def _make_session(transport: FakeWsTransport, **kwargs):
         extra_kwargs={},
         session_id="sess-stable",
         thread_id="sess-stable",
-        ws_enabled=True,
         ws_transport_factory=lambda url, headers: transport,
         **kwargs,
     )
@@ -709,11 +709,14 @@ def test_new_user_turn_after_tool_loop_keeps_incremental_chain():
 
 
 def test_codex_adapter_comment_explains_epoch_reset_and_summarize_delay():
-    session = _make_session(FakeWsTransport())
+    # WS-enabled path: the comment describes the previous_response_id epoch
+    # reset and the ws_full/ws_incremental cache boundary that actually exists.
+    session = _make_session(FakeWsTransport(), ws_enabled=True)
 
     comment = session.adapter_comment()
 
     assert comment["adapter"] == "codex"
+    assert comment["ws_enabled"] is True
     assert comment["feature"] == "responses_websocket_epoch_reset"
     assert comment["epoch_reset_turns"] == 20
     assert comment["turns_since_epoch_reset"] == 0
@@ -723,6 +726,42 @@ def test_codex_adapter_comment_explains_epoch_reset_and_summarize_delay():
     assert "five turns" in note
     assert "Codex-specific" in note
     assert "summarize them together" in note
+    # The note must also warn that notification dismiss/cleanup breaks the
+    # incremental/cache chain and forces a fresh ws_full epoch, just like
+    # summarize — so the agent does not assume only summarize is sensitive.
+    assert "notification" in note
+    assert "dismiss" in note
+
+
+def test_codex_adapter_comment_is_honest_when_ws_disabled():
+    # Stateless HTTP path (the default runtime): there is NO previous_response_id
+    # chain and NO ws_full/ws_incremental boundary, so the comment must not claim
+    # one. Every request is already a full stateless replay rebuilt from local
+    # chat_history; summarize/dismiss take effect by shrinking that next full
+    # request, not by toggling an incremental chain.
+    session = _make_session(FakeWsTransport(), ws_enabled=False)
+
+    comment = session.adapter_comment()
+
+    assert comment["adapter"] == "codex"
+    assert comment["ws_enabled"] is False
+    # The inert WS epoch counter must not masquerade as a live signal.
+    assert comment["feature"] != "responses_websocket_epoch_reset"
+    assert "turns_since_epoch_reset" not in comment
+    assert "next_reset_in" not in comment
+    note = comment["summarize_ws_full_note"]
+    # Stateless honesty: no incremental chain to preserve, every request is a
+    # full replay; summarize and notification dismiss/cleanup both take effect
+    # by shrinking the next full request from mutated local history.
+    assert "stateless" in note
+    # Must not claim a live ws_full/ws_incremental boundary; if it mentions the
+    # term at all it is to say there is NO such chain.
+    assert "ws_full epoch" not in note
+    assert "no ws_incremental" in note
+    assert "full replay" in note
+    assert "summarize" in note
+    assert "notification" in note
+    assert "dismiss" in note
 
 
 def test_history_summarized_forces_next_ws_full_epoch_reset():
@@ -739,6 +778,26 @@ def test_history_summarized_forces_next_ws_full_epoch_reset():
     assert third.usage.extra["codex_request_mode"] == "ws_full"
     assert third.usage.extra["codex_ws_delta_reason"] == "epoch_reset"
     assert third.usage.extra["codex_ws_epoch_reset_reason"] == "summarize"
+    assert "previous_response_id" not in t.sent_frames[2]
+
+
+def test_notification_dismissed_forces_next_ws_full_epoch_reset():
+    t = FakeWsTransport()
+    session = _make_session(t)
+
+    first = session.send("one")
+    second = session.send("two")
+    # A notification dismiss/cleanup rewrites the resident-meta off older
+    # tool results, so — exactly like summarize — it must force the next
+    # request to start a fresh ws_full epoch instead of ws_incremental.
+    session.on_notification_dismissed("system")
+    third = session.send("three")
+
+    assert first.usage.extra["codex_request_mode"] == "ws_full"
+    assert second.usage.extra["codex_request_mode"] == "ws_incremental"
+    assert third.usage.extra["codex_request_mode"] == "ws_full"
+    assert third.usage.extra["codex_ws_delta_reason"] == "epoch_reset"
+    assert third.usage.extra["codex_ws_epoch_reset_reason"] == "notification_dismiss"
     assert "previous_response_id" not in t.sent_frames[2]
 
 

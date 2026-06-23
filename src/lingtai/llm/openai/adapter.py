@@ -2609,7 +2609,65 @@ class CodexResponsesSession(OpenAIResponsesSession):
             return
         self._reset_ws_epoch("summarize")
 
+    def on_notification_dismissed(self, channel: str | None = None) -> None:
+        """Hook called after a notification dismiss/cleanup mutates the surface.
+
+        Dismissing or clearing a notification rewrites the resident
+        ``_meta.notifications`` block carried on prior tool results, which
+        breaks the strict-prefix comparison the WS incremental chain relies on
+        — exactly the same hazard ``on_history_summarized`` guards against. So
+        a dismiss intentionally starts a fresh ws_full epoch instead of letting
+        the next request continue as ws_incremental against a now-stale remote
+        baseline. ``channel`` is accepted for diagnostics/symmetry; the reset is
+        unconditional once a dismiss has actually cleared state (the caller only
+        invokes this hook on a real clear).
+        """
+        if not self._ws_enabled:
+            return
+        self._reset_ws_epoch("notification_dismiss")
+
     def adapter_comment(self):
+        # Be honest about the *active* transport. The previous_response_id epoch
+        # machinery (ws_full/ws_incremental, turns_since_epoch_reset) only exists
+        # on the experimental websocket path; when WS is disabled every request
+        # is already a full stateless replay (store=false, no previous_response_id)
+        # rebuilt from local chat_history, so advertising a ws_full/ws_incremental
+        # boundary would mislead the agent (it never resets, and the counter is
+        # permanently 0). See self-trace 2026-06-23T21:02Z: ws_enabled=false yet
+        # the comment claimed a ws_full reset, which looked like summarize "not
+        # triggering ws_full".
+        if not self._ws_enabled:
+            return {
+                "adapter": "codex",
+                "feature": "stateless_full_replay",
+                "ws_enabled": False,
+                "summary": (
+                    "Codex runs in stateless mode here (store=false, no "
+                    "previous_response_id chain). Every request is a complete "
+                    "replay rebuilt from the current local chat_history, so there "
+                    "is no remote epoch to reset and no incremental chain to "
+                    "preserve. Context-shaping actions take effect immediately on "
+                    "the next request because it is always a full replay; the "
+                    "kernel does not delete or summarize local chat_history on "
+                    "your behalf."
+                ),
+                "summarize_ws_full_note": (
+                    "Codex-specific note: this runtime is stateless (no "
+                    "ws_incremental chain). system(action='summarize') and "
+                    "notification dismiss/cleanup (notification(action='dismiss_*') "
+                    "and channel clears) both take effect by shrinking or "
+                    "rewriting the next full replay built from local chat_history "
+                    "— summarize replaces the visible tool-result payload with "
+                    "your summary, and dismiss removes the resident notification "
+                    "meta. Each such change starts a fresh full prefix, so it "
+                    "breaks the prompt cache for that request; batch summaries and "
+                    "notification dismissals (group finished items, clear several "
+                    "at once) instead of doing them one at a time to limit cache "
+                    "churn. Other providers are much less sensitive to this "
+                    "boundary."
+                ),
+            }
+
         self._refresh_ws_epoch_reset_turn_limit()
         limit = self._ws_epoch_reset_turn_limit
         next_reset_in = None
@@ -2637,10 +2695,15 @@ class CodexResponsesSession(OpenAIResponsesSession):
                 "Codex-specific caution: each summarize forces the next request "
                 "to start a fresh ws_full epoch instead of continuing as "
                 "ws_incremental, so it can hurt the previous_response_id cache "
-                "chain. Strongly avoid consecutive summarize calls within about "
+                "chain. Notification dismiss/cleanup (notification(action='dismiss_*') "
+                "and channel clears) does the same thing: it rewrites the resident "
+                "notification meta on older tool results, breaking the incremental "
+                "chain and forcing the next request to start a fresh ws_full epoch. "
+                "Strongly avoid consecutive summarize or dismiss calls within about "
                 "five turns; for ordinary long results, group several finished "
-                "items and summarize them together. Other providers are much less "
-                "sensitive to this Codex cache boundary."
+                "items and summarize them together, and batch notification dismissals "
+                "rather than clearing them one at a time. Other providers are much "
+                "less sensitive to this Codex cache boundary."
             ),
         }
 
