@@ -224,6 +224,13 @@ class SessionManager:
         """
         self.ensure_session()
 
+        if isinstance(message, str):
+            reset_provider_turn_state = getattr(
+                type(self._chat), "reset_provider_turn_state", None
+            )
+            if callable(reset_provider_turn_state):
+                reset_provider_turn_state(self._chat)
+
         # Rebuild system prompt and tools every turn — they may have changed
         # (e.g. memory loaded, identity updated, capabilities added after refresh).
         # If the content is identical, this is a no-op at the LLM level.

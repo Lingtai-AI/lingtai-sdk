@@ -168,6 +168,15 @@ class ChatSession(ABC):
         - A list of ToolResultBlock (canonical tool results)
         """
 
+    def reset_provider_turn_state(self) -> None:
+        """Reset transient provider turn state before a new user text turn.
+
+        Most providers have no extra turn-scoped transport state. Adapters that
+        do (for example Codex Responses-over-WebSocket turn-state headers) may
+        override this hook. The kernel calls it only before string user-text
+        messages, not before tool-result continuations.
+        """
+
     def get_history(self) -> list[dict]:
         """Return serializable conversation history (canonical format)."""
         return self.interface.to_dict()

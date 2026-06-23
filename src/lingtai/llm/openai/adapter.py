@@ -14,8 +14,9 @@ import json
 import os
 import time
 import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlsplit
 
 import httpx
@@ -238,6 +239,185 @@ def _codex_identity_headers() -> dict[str, str]:
     the identity-policy note above (#436 / #471).
     """
     return {"originator": _CODEX_ORIGINATOR, "User-Agent": _lingtai_user_agent()}
+
+
+# ---------------------------------------------------------------------------
+# Codex Responses-over-WebSocket incremental turn state (EXPERIMENTAL, #471).
+#
+# This mirrors the official Codex CLI source path (repo openai/codex, tag
+# ``rust-v0.130.0``, commit 58573da). The high-cache/stateful behavior on the
+# ChatGPT Codex backend is NOT server-side Responses storage (``store`` is
+# ``false`` there by construction — ``codex-rs/core/src/client.rs:722``); it is
+# Responses-over-WebSocket incremental ``response.create`` frames that carry
+# ``previous_response_id`` plus only the delta input when the new full request is
+# a strict extension of (previous request input + previous response output
+# items). See ``get_incremental_items`` (``client.rs:949-985``) and
+# ``prepare_websocket_request`` (``client.rs:998-1024``).
+#
+# These objects are pure Python data + a pure algorithm so the request-shape
+# logic is unit-testable without any network. The actual websocket wire goes
+# through an injectable transport (``_CodexWebsocketTransport``) so tests can
+# substitute a fake.
+# ---------------------------------------------------------------------------
+
+# Official websocket beta header value (``client.rs:142``) and the per-turn
+# sticky-routing state header (``client.rs:134`` /
+# ``responses_websocket.rs:155``). Kept as data so the wire stays auditable.
+_CODEX_WS_BETA_HEADER = "OpenAI-Beta"
+_CODEX_WS_BETA_VALUE = "responses_websockets=2026-02-06"
+_CODEX_TURN_STATE_HEADER = "x-codex-turn-state"
+
+# Env gate for the experimental websocket transport. Off by default: when unset
+# (or not truthy) the session uses the existing, proven HTTP full-replay path.
+# Set ``LINGTAI_CODEX_WS=1`` to enable the websocket path (which still falls back
+# to HTTP on any handshake/connection/auth error, unsupported runtime, or delta
+# mismatch).
+_CODEX_WS_ENABLED_ENV = "LINGTAI_CODEX_WS"
+
+# Non-input request fields that must match between two requests for an
+# incremental delta to be valid. Mirrors the official ``get_incremental_items``
+# which clones both requests, clears ``.input`` on each, and compares the rest
+# for strict equality (``client.rs:960-970``).
+
+
+def _codex_ws_enabled() -> bool:
+    """Return True when the experimental websocket transport is enabled."""
+    return os.environ.get(_CODEX_WS_ENABLED_ENV, "").lower() in {"1", "true", "yes", "on"}
+
+
+@dataclass
+class _CodexLastResponse:
+    """The previous completed websocket response, for delta computation.
+
+    Mirrors the official ``LastResponse`` (``client.rs:1748-1774``): the
+    ``response_id`` becomes the next request's ``previous_response_id``, and
+    ``items_added`` are the server-added output items that form part of the
+    delta baseline so they are never resent.
+    """
+
+    response_id: str
+    items_added: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class _CodexWebsocketSession:
+    """Per-turn websocket state: last full request + last completed response.
+
+    Mirrors the fields the official ``ModelClientSession`` caches for the turn
+    (``client.rs:214-226``): ``last_request`` (the full request) and the last
+    response. The captured ``turn_state`` token is sticky-routing state replayed
+    within the same turn and reset across turns (``client.rs:227-240``).
+    """
+
+    last_request: dict[str, Any] | None = None
+    last_response: _CodexLastResponse | None = None
+    turn_state: str | None = None
+
+
+def _codex_incremental_items(
+    previous_request: dict[str, Any],
+    previous_items_added: list[dict[str, Any]],
+    request: dict[str, Any],
+    *,
+    allow_empty_delta: bool,
+) -> list[dict[str, Any]] | None:
+    """Compute the incremental input delta, or ``None`` to send full input.
+
+    Faithful port of the official ``get_incremental_items``
+    (``codex-rs/core/src/client.rs:949-985``):
+
+      1. All non-input request fields must be identical between the previous and
+         current request (compare both with ``input`` cleared).
+      2. The baseline is ``previous_request.input + previous_items_added``.
+      3. The current ``input`` must start with that baseline; the suffix after
+         the baseline is the delta. An empty delta is only returned when
+         ``allow_empty_delta`` is true (the websocket prewarm/no-op case).
+
+    Returns ``None`` whenever a strict extension cannot be proven, so the caller
+    falls back to sending the full input rather than a bad delta.
+    """
+    prev_no_input = {k: v for k, v in previous_request.items() if k != "input"}
+    cur_no_input = {k: v for k, v in request.items() if k != "input"}
+    if prev_no_input != cur_no_input:
+        return None
+
+    baseline = list(previous_request.get("input") or [])
+    baseline.extend(previous_items_added or [])
+    baseline_len = len(baseline)
+
+    cur_input = list(request.get("input") or [])
+    starts_with = cur_input[:baseline_len] == baseline
+    if starts_with and (allow_empty_delta or baseline_len < len(cur_input)):
+        return cur_input[baseline_len:]
+    return None
+
+
+def _ws_dump_item(item: Any) -> dict[str, Any] | None:
+    """Normalize a streamed output item to a plain dict for the delta baseline.
+
+    The baseline (previous request input + server output items) must compare
+    equal to the next request's serialized input items, which are plain dicts
+    from ``to_responses_input``. SDK event items are pydantic models, so dump
+    them; pass through dicts; ignore anything else.
+    """
+    if item is None:
+        return None
+    if hasattr(item, "model_dump"):
+        try:
+            return item.model_dump(exclude_none=True)
+        except Exception:  # pragma: no cover - defensive
+            return None
+    if isinstance(item, dict):
+        return item
+    return None
+
+
+class _CodexWsFallback(Exception):
+    """Raised by a websocket transport to request a fall back to HTTP.
+
+    Mirrors the official ``WebsocketStreamOutcome::FallbackToHttp`` decision
+    (``client.rs:1361-1364``): a handshake ``426 UPGRADE_REQUIRED``, a
+    connection/handshake failure, an unsupported runtime (e.g. the optional
+    ``websockets`` dependency is absent), or any condition under which we cannot
+    safely use the websocket path. The caller catches it and replays the full
+    input over HTTP with ``store=false``.
+    """
+
+
+def _codex_ws_url(base_url: str | None) -> str:
+    """Convert the Codex HTTP base URL to the websocket ``responses`` URL.
+
+    Mirrors ``Provider::websocket_url_for_path`` (``provider.rs:92-103``):
+    ``https://chatgpt.com/backend-api/codex`` -> ``wss://.../responses``.
+    """
+    base = (base_url or "https://chatgpt.com/backend-api/codex").rstrip("/")
+    path = base + "/responses"
+    if path.startswith("https://"):
+        return "wss://" + path[len("https://"):]
+    if path.startswith("http://"):
+        return "ws://" + path[len("http://"):]
+    return path
+
+
+def _default_codex_ws_transport_factory(url: str, headers: dict[str, str]):
+    """Build the real websocket transport, or raise ``_CodexWsFallback``.
+
+    Lazily imports the optional ``websockets`` package; if it is not installed
+    (the kernel does not hard-depend on it), the websocket path is treated as an
+    unsupported runtime and the caller falls back to HTTP. The real transport is
+    intentionally NOT exercised by the unit tests (which inject a fake) — a live
+    smoke test is gated behind ``LINGTAI_CODEX_WS`` + parent approval.
+    """
+    try:  # pragma: no cover - import guard, exercised only with the dep present
+        import websockets  # noqa: F401
+    except Exception as exc:  # pragma: no cover
+        raise _CodexWsFallback(f"websockets unavailable: {exc}") from exc
+    # The synchronous wire driver lives in a companion module to keep the import
+    # cost and event-loop plumbing out of the hot adapter import path. It is only
+    # reached on a live run, never in the mock tests.
+    from .codex_ws import SyncCodexWebsocketTransport  # pragma: no cover
+
+    return SyncCodexWebsocketTransport(url=url, headers=headers)  # pragma: no cover
 
 
 def _base_url_namespace(base_url: str | None) -> str:
@@ -1747,9 +1927,32 @@ class CodexResponsesSession(OpenAIResponsesSession):
         account_id: str | None = None,
         installation_id: str | None = None,
         metadata_sandbox: str = "lingtai",
+        ws_enabled: bool | None = None,
+        ws_transport_factory: "Callable[[str, dict[str, str]], Any] | None" = None,
+        base_url: str | None = None,
+        api_key: str | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
+        # EXPERIMENTAL Codex Responses-over-WebSocket transport (#471). Gated:
+        # ``ws_enabled`` defaults to the ``LINGTAI_CODEX_WS`` env switch (off
+        # unless explicitly turned on). ``ws_transport_factory`` is an injection
+        # seam used by the mock tests; when ``None`` and the gate is on, the real
+        # factory is used (and itself falls back to HTTP if ``websockets`` is
+        # missing). ``_ws_session`` holds the per-turn last_request/last_response
+        # + captured ``x-codex-turn-state`` used to compute incremental deltas
+        # exactly like the official ``ModelClientSession`` (``client.rs:214-240``).
+        self._ws_enabled = _codex_ws_enabled() if ws_enabled is None else bool(ws_enabled)
+        self._ws_transport_factory = ws_transport_factory
+        self._ws_base_url = base_url
+        self._ws_api_key = api_key if isinstance(api_key, str) and api_key else None
+        self._ws_session = _CodexWebsocketSession()
+        # One Codex websocket connection may carry multiple ``response.create``
+        # frames. Live smoke showed ChatGPT Codex resolves
+        # ``previous_response_id`` only when the follow-up request stays on the
+        # same websocket session. Keep the transport alive across sequential
+        # sends in this ChatSession, and close/reset it on transport failures.
+        self._ws_transport = None
         # The user's own ChatGPT account id (decoded upstream from their OAuth
         # auth data). When present it is sent as the ``ChatGPT-Account-ID`` HTTP
         # header so the request is attributed to the right ChatGPT account. It is
@@ -1845,7 +2048,14 @@ class CodexResponsesSession(OpenAIResponsesSession):
 
     @staticmethod
     def _usage_extra(
-        affinity_headers: dict[str, str], cache_key: str | None
+        affinity_headers: dict[str, str],
+        cache_key: str | None,
+        *,
+        request_mode: str | None = None,
+        previous_response_id: str | None = None,
+        store: bool | None = None,
+        fallback_error_type: str | None = None,
+        fallback_error_message: str | None = None,
     ) -> dict[str, str]:
         """Build the token-ledger ``UsageMetadata.extra`` for this request.
 
@@ -1861,32 +2071,231 @@ class CodexResponsesSession(OpenAIResponsesSession):
             extra["codex_thread_id"] = affinity_headers["thread_id"]
         if cache_key:
             extra["codex_prompt_cache_key"] = cache_key
+        if request_mode:
+            extra["codex_request_mode"] = request_mode
+        if previous_response_id:
+            extra["codex_previous_response_id"] = previous_response_id
+        if store is not None:
+            extra["codex_store"] = str(bool(store)).lower()
+        if fallback_error_type:
+            extra["codex_fallback_error_type"] = fallback_error_type
+        if fallback_error_message:
+            extra["codex_fallback_error_message"] = fallback_error_message[:240]
         return extra
 
     def send(self, message) -> LLMResponse:
         # Force the streaming path — Codex doesn't serve non-streaming JSON.
         return self.send_stream(message, on_chunk=None)
 
+    # -- Experimental Responses-over-WebSocket transport (#471) ---------------
+
+    # Request-body keys that are NOT part of the websocket ``response.create``
+    # frame's comparable shape — SDK transport-only kwargs. They are excluded
+    # when building the request dict used for the delta-extension check (the
+    # official algorithm compares the request struct, which never contains
+    # transport headers). ``input`` is compared separately by the algorithm.
+    _WS_NON_FRAME_KEYS = ("extra_headers", "extra_body", "timeout")
+
+    def _ws_frame_request(self, kwargs: dict[str, Any], input_items: list[dict[str, Any]]) -> dict[str, Any]:
+        """Build the comparable ``response.create`` request dict from ``kwargs``.
+
+        Drops SDK transport-only keys (headers/body/timeout) and forces
+        ``store=false`` (the ChatGPT Codex backend rejects ``store=true`` —
+        ``client.rs:722``). ``client_metadata`` from ``extra_body`` is folded in
+        as a body field so it participates in the non-input equality check, like
+        the official request struct's ``client_metadata`` (``common.rs:189``).
+        """
+        frame: dict[str, Any] = {
+            k: v for k, v in kwargs.items() if k not in self._WS_NON_FRAME_KEYS
+        }
+        frame["type"] = "response.create"
+        frame["store"] = False
+        frame["stream"] = True
+        frame["input"] = list(input_items)
+        extra_body = kwargs.get("extra_body") or {}
+        if isinstance(extra_body, dict) and extra_body.get("client_metadata"):
+            frame["client_metadata"] = extra_body["client_metadata"]
+        return frame
+
+    def _codex_ws_open(
+        self,
+        kwargs: dict[str, Any],
+        *,
+        full_replay_input_items: list[dict[str, Any]],
+    ) -> tuple[Any, str, str | None]:
+        """Open a websocket ``response.create`` stream, or raise ``_CodexWsFallback``.
+
+        Returns ``(event_iterable, request_mode, previous_response_id_or_None)``.
+
+        Mirrors the official path: build the full request, then via
+        ``prepare_websocket_request`` (``client.rs:998-1024``) decide whether to
+        send only the delta input with ``previous_response_id`` (when the new
+        full request is a strict extension of the previous request + its output
+        items) or the full input with no previous id (first request / mismatch).
+        The connection captures ``x-codex-turn-state`` from the handshake and
+        replays it within the turn; ``response.processed`` is sent after the
+        completed response (``responses_websocket.rs:208-240``).
+        """
+        # The full request shape (full input) is what we record as
+        # ``last_request`` for the NEXT turn's delta baseline, regardless of what
+        # we actually transmit this turn.
+        full_request = self._ws_frame_request(kwargs, full_replay_input_items)
+
+        previous_response_id: str | None = None
+        frame_input = full_replay_input_items
+        request_mode = "ws_full"
+        last = self._ws_session.last_response
+        if last is not None and last.response_id:
+            delta = _codex_incremental_items(
+                self._ws_session.last_request or {},
+                last.items_added,
+                full_request,
+                allow_empty_delta=True,
+            )
+            if delta is not None:
+                previous_response_id = last.response_id
+                frame_input = delta
+                request_mode = "ws_incremental"
+
+        # Build the transmitted frame (delta or full).
+        frame = dict(full_request)
+        frame["input"] = list(frame_input)
+        if previous_response_id:
+            frame["previous_response_id"] = previous_response_id
+
+        # Handshake headers: the per-request Codex headers plus the websocket
+        # beta header, plus the captured per-turn ``x-codex-turn-state`` (only
+        # after it has been captured earlier in the same turn).
+        headers = dict(kwargs.get("extra_headers") or {})
+        if self._ws_api_key and not any(k.lower() == "authorization" for k in headers):
+            bearer = self._ws_api_key.strip()
+            if not bearer.lower().startswith("bearer "):
+                bearer = f"Bearer {bearer}"
+            headers["Authorization"] = bearer
+        headers[_CODEX_WS_BETA_HEADER] = _CODEX_WS_BETA_VALUE
+        if self._ws_session.turn_state:
+            headers[_CODEX_TURN_STATE_HEADER] = self._ws_session.turn_state
+
+        transport = self._ws_transport
+        if transport is None:
+            factory = self._ws_transport_factory or _default_codex_ws_transport_factory
+            url = _codex_ws_url(self._ws_base_url)
+            transport = factory(url, headers)
+
+            # connect() may raise _CodexWsFallback (426/connect/auth); let it
+            # propagate to the caller which falls back to HTTP.
+            captured_turn_state = transport.connect(headers=headers)
+            if captured_turn_state and not self._ws_session.turn_state:
+                # Capture once per turn. With a persistent websocket connection
+                # there may be no second handshake to replay this header on, but
+                # keep it for reconnects within the same turn.
+                self._ws_session.turn_state = captured_turn_state
+            self._ws_transport = transport
+
+        # Record the FULL request as the next delta baseline before streaming.
+        # If streaming fails before a completed response, restore the previous
+        # baseline so a later retry does not compare against an unaccepted turn.
+        previous_last_request = self._ws_session.last_request
+        previous_last_response = self._ws_session.last_response
+        self._ws_session.last_request = full_request
+
+        def _events():
+            response_id_local: str | None = None
+            items_added: list[dict[str, Any]] = []
+            try:
+                for event in transport.stream(frame):
+                    etype = getattr(event, "type", None)
+                    if etype == "response.output_item.done":
+                        item = getattr(event, "item", None)
+                        dumped = _ws_dump_item(item)
+                        if dumped is not None:
+                            items_added.append(dumped)
+                    elif etype == "response.completed":
+                        response_id_local = getattr(getattr(event, "response", None), "id", None)
+                    yield event
+            except _CodexWsFallback:
+                self._ws_session.last_request = previous_last_request
+                self._ws_session.last_response = previous_last_response
+                self._close_ws_transport(transport)
+                raise
+            except Exception:
+                self._ws_session.last_request = previous_last_request
+                self._ws_session.last_response = previous_last_response
+                self._close_ws_transport(transport)
+                raise
+            # Record the completed response so the next request can delta off it,
+            # then notify the server it was processed (official posts
+            # ``response.processed`` after handling a completed response).
+            if response_id_local:
+                self._ws_session.last_response = _CodexLastResponse(
+                    response_id=response_id_local,
+                    items_added=items_added,
+                )
+                try:
+                    transport.send_response_processed(response_id_local)
+                except Exception as exc:  # pragma: no cover - best-effort ack
+                    logger.debug("codex ws response.processed failed: %s", exc)
+
+        return _events(), request_mode, previous_response_id
+
+    def _close_ws_transport(self, transport=None) -> None:
+        current = self._ws_transport
+        if transport is not None and current is not transport:
+            return
+        self._ws_transport = None
+        if current is not None:
+            try:
+                current.close()
+            except Exception:
+                pass
+
+    def reset_provider_turn_state(self) -> None:
+        self.reset_ws_turn()
+
+    def reset_ws_turn(self) -> None:
+        """Reset per-turn websocket state at a new user turn boundary.
+
+        The official ``x-codex-turn-state`` is per-turn volatile: captured on the
+        first request of a turn, replayed within the turn, and reset for the next
+        user turn (``client.rs:227-240`` / ``turn_state.rs`` tests). Callers that
+        track turn boundaries invoke this between user turns; within a tool loop
+        it must NOT be called so the token (and incremental chain) persist.
+        """
+        self._ws_session.turn_state = None
+
+    @staticmethod
+    def _interface_entries_to_responses_input(entries: list[Any]) -> list[dict[str, Any]]:
+        """Serialize newly-added ChatInterface entries for stateful Codex turns."""
+
+        if not entries:
+            return []
+        delta_interface = ChatInterface()
+        # ChatInterface.entries intentionally exposes the mutable backing list;
+        # populate a temporary interface so the normal converter preserves
+        # reasoning/tool-result shapes and pairing behavior for the delta.
+        delta_interface.entries.extend(entries)
+        return to_responses_input(delta_interface)
+
     def send_stream(self, message, on_chunk=None) -> LLMResponse:
-        # Codex's backend is stateless — no previous_response_id, so the full
-        # conversation must ride along on every request. Record the new
-        # message into the canonical interface, then build wire input from
-        # the entire interface (mirrors OpenAIChatSession.send's contract).
-        # ``message is None`` is the "continue from wire" signal — the
-        # caller pre-staged the canonical interface (e.g. notification
-        # sync), so we just replay it without any additional append.
+        # Maintain the canonical interface for local recovery and full-replay
+        # fallback, but capture the entries added by this turn so subsequent
+        # stored-response requests can send only the incremental delta.
+        interface_start = len(self._interface.entries)
+        trailing_entries = 0
         if message is None:
             pass
         elif isinstance(message, str):
             self._interface.add_user_message(message)
+            trailing_entries = 1
         elif isinstance(message, list):
             # ToolResultBlock list, the canonical kernel shape coming back
             # from ToolExecutor via _make_tool_result_fn.
             if message and all(isinstance(b, ToolResultBlock) for b in message):
                 self._interface.add_tool_results(message)
+                trailing_entries = len(message)
             else:
                 # Pre-built wire dicts (legacy / tests). Fall back to the
-                # parent's converter so behavior matches what callers
+                # parent's converter below so behavior matches what callers
                 # passing dicts expect.
                 pass
         elif isinstance(message, dict):
@@ -1894,35 +2303,47 @@ class CodexResponsesSession(OpenAIResponsesSession):
         else:
             raise TypeError(f"Unsupported message type: {type(message)}")
 
-        # Pre-request hook — kernel-side splice point. The Codex stateless
-        # path replays the full canonical interface on every request, so
-        # any (call, result) pair the hook splices in is included in the
-        # current request's input items. See OpenAIChatSession.send for
-        # the contract.
+        # Pre-request hook — kernel-side splice point. Include hook-spliced
+        # entries in the delta so notification wake pairs remain visible in the
+        # same request even when previous_response_id is active.
         if self.pre_request_hook is not None:
             self.pre_request_hook(self._interface)
 
         try:
             self._interface.enforce_tool_pairing()
-            input_items = to_responses_input(self._interface)
-            # If the caller passed pre-built wire dicts (not str / not
-            # ToolResultBlock list), append them after the replay so the
-            # behavior is additive rather than dropped.
+            prebuilt_items: list[dict[str, Any]] = []
             if isinstance(message, dict):
-                input_items.append(message)
+                prebuilt_items.append(message)
             elif isinstance(message, list) and not (
                 message and all(isinstance(b, ToolResultBlock) for b in message)
             ):
-                for item in self._convert_input(message):
-                    input_items.append(item)
+                prebuilt_items.extend(self._convert_input(message))
+
+            full_replay_input_items = to_responses_input(self._interface)
+            full_replay_input_items.extend(prebuilt_items)
+
+            delta_entries = self._interface.entries[interface_start:]
+            delta_input_items = self._interface_entries_to_responses_input(delta_entries)
+            delta_input_items.extend(prebuilt_items)
+
+            stateful_store_enabled = False
+            previous_response_id = (
+                self._response_id if stateful_store_enabled and self._response_id and delta_input_items else None
+            )
+            input_items = delta_input_items if previous_response_id else full_replay_input_items
+            request_mode = "stateful_incremental" if previous_response_id else "stateless_full_store_forced_false"
 
             kwargs: dict[str, Any] = {
                 "model": self._model,
                 "input": input_items,
                 "stream": True,
-                "store": False,
                 **self._extra_kwargs,
             }
+            # The ChatGPT Codex endpoint explicitly rejects store=True with
+            # `{'detail': 'Store must be set to false'}`. Keep store=false for
+            # normal turns; future turn-state experiments must use Codex-specific
+            # state headers/body, not Responses API storage.
+            kwargs["store"] = bool(previous_response_id)
             # Ensure reasoning.encrypted_content is requested so the raw
             # reasoning item can be preserved for prompt-cache-stable replay.
             existing_include = kwargs.get("include") or []
@@ -1941,7 +2362,8 @@ class CodexResponsesSession(OpenAIResponsesSession):
                 kwargs["tools"] = self._tools
                 if self._tool_choice:
                     kwargs["tool_choice"] = self._tool_choice
-            # Deliberately omit previous_response_id — backend is stateless.
+            if previous_response_id:
+                kwargs["previous_response_id"] = previous_response_id
             if self._compact_threshold:
                 kwargs["context_management"] = [
                     {"type": "compaction", "compact_threshold": self._compact_threshold}
@@ -1995,8 +2417,59 @@ class CodexResponsesSession(OpenAIResponsesSession):
             # Raw reasoning item dicts for replay, in provider output order.
             raw_reasoning_items: list[dict[str, Any]] = []
             trace_path = _codex_responses_trace_path()
+            fallback_error_type: str | None = None
+            fallback_error_message: str | None = None
 
-            stream = self._client.responses.create(**kwargs)
+            request_store = bool(kwargs.get("store"))
+
+            # EXPERIMENTAL websocket path (#471). When enabled, try to send a
+            # Responses ``response.create`` frame over the websocket with an
+            # incremental delta + ``previous_response_id`` (or full input on the
+            # first request / on any mismatch). On ANY websocket problem
+            # (handshake 426, connect/auth error, missing runtime, delta
+            # mismatch) we raise ``_CodexWsFallback`` internally and drop to the
+            # existing HTTP full-replay path below. ``store`` stays ``false``.
+            ws_stream = None
+            if self._ws_enabled:
+                try:
+                    ws_stream, ws_mode, ws_prev_id = self._codex_ws_open(
+                        kwargs,
+                        full_replay_input_items=full_replay_input_items,
+                    )
+                except _CodexWsFallback as exc:
+                    logger.info(
+                        "Codex websocket path unavailable; using HTTP full replay: %s",
+                        str(exc)[:240],
+                    )
+                    ws_stream = None
+                else:
+                    request_mode = ws_mode
+                    previous_response_id = ws_prev_id
+                    request_store = False
+
+            if ws_stream is not None:
+                stream = ws_stream
+            else:
+                try:
+                    stream = self._client.responses.create(**kwargs)
+                except Exception as exc:
+                    if not (previous_response_id or request_store):
+                        raise
+                    fallback_error_type = type(exc).__name__
+                    fallback_error_message = str(exc)
+                    logger.info(
+                        "Codex stateful Responses request failed; falling back to full replay store=false: %s: %s",
+                        fallback_error_type,
+                        fallback_error_message[:240],
+                    )
+                    fallback_kwargs = dict(kwargs)
+                    fallback_kwargs["input"] = full_replay_input_items
+                    fallback_kwargs["store"] = False
+                    fallback_kwargs.pop("previous_response_id", None)
+                    request_mode = "stateless_full_fallback"
+                    previous_response_id = None
+                    request_store = False
+                    stream = self._client.responses.create(**fallback_kwargs)
             for event in stream:
                 thoughts_before = acc.thoughts
                 pending_thought_chars_before = len("".join(acc._thought_parts))
@@ -2084,7 +2557,13 @@ class CodexResponsesSession(OpenAIResponsesSession):
                             or 0,
                             cached_tokens=cached_tokens,
                             extra=self._usage_extra(
-                                affinity_headers, effective_cache_key
+                                affinity_headers,
+                                effective_cache_key,
+                                request_mode=request_mode,
+                                previous_response_id=previous_response_id,
+                                store=request_store,
+                                fallback_error_type=fallback_error_type,
+                                fallback_error_message=fallback_error_message,
                             ),
                         )
         except Exception:
@@ -2217,6 +2696,16 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         (e.g. a bare adapter built directly in a test). In the normal host path
         the agent path is always supplied, so both ids are the same stable
         per-agent hash — the thread id tracks the session id exactly.
+
+        Restored to the stable-identity form (was an experimental
+        ``(None, None)`` prompt-cache-only probe) because the official Codex CLI
+        source path depends on a stable ``session_id`` / ``thread_id`` /
+        ``prompt_cache_key`` identity: the websocket incremental
+        ``previous_response_id`` path and per-turn ``x-codex-turn-state`` sticky
+        routing all ride on top of a stable session/thread (see
+        ``codex-rs/core/src/client.rs:863-864, 873`` — ``build_session_headers``
+        with both ids on every request). Dropping the headers would defeat the
+        official path this experiment is mirroring.
         """
         return self._codex_id, self._codex_id
 
@@ -2295,4 +2784,6 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             # token refresh that changes it is reflected on newly built sessions).
             account_id=self.codex_account_id,
             installation_id=self._codex_installation_id,
+            base_url=self.base_url,
+            api_key=self._client_kwargs.get("api_key"),
         )

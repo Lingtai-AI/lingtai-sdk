@@ -923,12 +923,22 @@ def test_codex_usage_extra_carries_cache_affinity_ids_for_token_ledger():
     headers = sent["extra_headers"]
     # The actual ids used this request ride in usage.extra so token_ledger.jsonl
     # can record them — all three the same normalized effective id, so a
-    # cache-affinity rotation (Jason's follow-up) is visible too.
-    assert result.usage.extra == {
+    # cache-affinity rotation (Jason's follow-up) is visible too. The WS
+    # experiment additionally records the request mode + store flag (additive
+    # observability), so assert the affinity ids as a subset rather than exact
+    # dict equality.
+    affinity = {
+        k: v for k, v in result.usage.extra.items() if k.startswith("codex_") and k.endswith(("_id", "_key"))
+    }
+    assert affinity == {
         "codex_session_id": "custom-key:v2",
         "codex_thread_id": "custom-key:v2",
         "codex_prompt_cache_key": "custom-key:v2",
     }
+    # The new request-mode / store telemetry is present and reflects the
+    # stateless full-replay store=false contract for a normal HTTP turn.
+    assert result.usage.extra["codex_store"] == "false"
+    assert "full" in result.usage.extra["codex_request_mode"]
     assert headers["session_id"] == headers["thread_id"] == sent["prompt_cache_key"]
     # The affinity ids are short, non-secret derived values; the request body,
     # messages, and OAuth secret never ride in the usage extra payload.
@@ -952,10 +962,14 @@ def test_codex_usage_extra_empty_when_no_cache_affinity_headers():
     result = session.send("hi")
 
     # Identity headers are always sent (#436), but no cache-affinity headers and
-    # therefore no token-ledger id fields on the bare path.
+    # therefore no token-ledger id fields on the bare path. The WS experiment's
+    # request-mode / store telemetry is still recorded (additive); only the
+    # cache-affinity id fields are absent without a per-agent identity.
     headers = session._client.responses.kwargs[0].get("extra_headers", {})
     assert "session_id" not in headers and "thread_id" not in headers
-    assert result.usage.extra == {}
+    assert "codex_session_id" not in result.usage.extra
+    assert "codex_thread_id" not in result.usage.extra
+    assert "codex_prompt_cache_key" not in result.usage.extra
 
 
 def test_token_ledger_entry_merges_usage_extra(tmp_path):
