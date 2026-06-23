@@ -14,7 +14,7 @@ it remains a `system` action (context hygiene, not a notification verb).
 
 - `__init__.py` — dispatch over four actions.
   - `get_description` / `get_schema` (re-exported from `schema.py`) — tool registration.
-  - `handle()` (`__init__.py:148-162`) — dispatcher over `check`, `dismiss_channel`, `dismiss_event`, `dismiss_ref`. Unknown actions return a `status="error"` dict.
+  - `handle()` (`__init__.py:148-158`) — dispatcher over `check`, `dismiss_channel`, `dismiss_event`, `dismiss_ref`. Unknown actions return a `status="error"` dict.
   - `_check()` (`__init__.py:67-72`) — voluntary read of the notification surface. Returns a placeholder dict (`_notification_placeholder: True` + message). The live payload (`_meta.notifications` + `_meta.notification_guidance`) is stamped onto this same result by `meta_block.attach_active_notifications`, which walks backward for the freshest *dict-shaped* tool result (`meta_block.py:244-258`) — tool-name-agnostic, so `notification(action=check)` receives the identical stamp the old `system(action="notification")` placeholder did.
   - `_dismiss_channel()` (`__init__.py:75-104`) — whole-channel clear. Rejects `event_id`/`ref_id` (those are atomic-event verbs). Delegates to `notifications.dismiss_channel(..., invoked_by="notification")`.
   - `_dismiss_event()` (`__init__.py:107-122`) — remove one `system` event by `event_id`; `channel` defaults to `system`. Delegates to the same helper with `event_id=...`.

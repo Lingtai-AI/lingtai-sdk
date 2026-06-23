@@ -6,7 +6,7 @@ Filesystem-based email system — mailbox I/O, composition, search, contacts, re
 
 ## Components
 
-- `__init__.py` — Package surface. Re-exports the full public API of the former monolithic `email.py` for backward compatibility: all primitives, schema functions, and `EmailManager`. Registers the `email` generic-dismiss guard at import (`__init__.py:27-32`) because `.notification/email.json` mirrors durable unread state. Contains the module-level `handle()` dispatcher (`__init__.py:80-93`) and idempotent `boot()` hook (`__init__.py:96-122`); `boot()` stops any prior manager's scheduler before wiring the fresh manager. External callers import `handle`, `boot`, `get_schema`, `get_description`, `EmailManager`, `_new_mailbox_id`, `mode_field` from this package.
+- `__init__.py` — Package surface. Re-exports the full public API of the former monolithic `email.py` for backward compatibility: all primitives, schema functions, and `EmailManager`. Registers the `email` generic-dismiss guard at import (`__init__.py:27-32`) because `.notification/email.json` mirrors durable unread state. Contains the module-level `handle()` dispatcher (`__init__.py:80-93`) and idempotent `boot()` hook (`__init__.py:98-113`); `boot()` stops any prior manager's scheduler before wiring the fresh manager. External callers import `handle`, `boot`, `get_schema`, `get_description`, `EmailManager`, `_new_mailbox_id`, `mode_field` from this package.
 
 - `primitives.py` — Mailbox I/O and display helpers. Module-level functions operating on the agent's `mailbox/` directory tree.
   - ID and path helpers: `_new_mailbox_id` (`primitives.py:22-26`), `mode_field` (`primitives.py:29-34`), `_mailbox_dir` / `_inbox_dir` / `_outbox_dir` / `_sent_dir` (`primitives.py:37-50`).
@@ -16,9 +16,9 @@ Filesystem-based email system — mailbox I/O, composition, search, contacts, re
   - Delivery: `_is_self_send` (`primitives.py:150-159`), `_persist_to_inbox` (`primitives.py:162-173`), `_persist_to_outbox` (`primitives.py:176-188`), `_move_to_sent` (`primitives.py:191-207`), `_mailman` (`primitives.py:210-267`) — daemon thread that waits, dispatches, and archives.
   - Filtering helpers: `_coerce_address_list` (`primitives.py:274-286`), `_preview` (`primitives.py:289-293`), `_email_time` (`primitives.py:296-298`).
 
-- `schema.py` — Tool registration. `get_description` (`schema.py:10-11`) and `get_schema` (`schema.py:14-147`) build the JSON Schema for the email tool. Imports `mode_field` from `primitives`.
+- `schema.py` — Tool registration. `get_description` (`schema.py:10-11`) and `get_schema` (`schema.py:14-132`) build the JSON Schema for the email tool. Imports `mode_field` from `primitives`.
 
-- `manager.py` — `EmailManager` class (`manager.py:46-1082`). The core filesystem-based email manager. Key sections:
+- `manager.py` — `EmailManager` class (`manager.py:46-876`). The core filesystem-based email manager. Key sections:
   - Lifecycle: `__init__` (`manager.py:48-55`), `start_scheduler` (`manager.py:57-66`), `stop_scheduler` (`manager.py:68-72`).
   - Filesystem helpers: `_load_email` (`manager.py:81-107`), `_list_emails` (`manager.py:109-132`), `_email_summary` (`manager.py:134-156`), `_inject_identity` (`manager.py:158-175`).
   - Action dispatch: `handle` (`manager.py:180-209`).
@@ -27,7 +27,7 @@ Filesystem-based email system — mailbox I/O, composition, search, contacts, re
   - CRUD: `_check` (`manager.py:657-699`), `_read`, `_dismiss`, `_reply`, `_reply_all`, `_search`, `_archive`, `_delete`. `_dismiss` is the lightweight cousin of `_read` — same effect on read state and notification but returns no email bodies; intended for the "I already saw it in the digest" path. All four read-state mutators (`_read`, `_dismiss`, `_archive`, `_delete`) call `EmailManager._rerender_unread_digest()` after the mutation so `.notification/email.json` mirrors the new state.
   - Reply routing: `_resolve_reply_target` picks ``(address, mode)`` for `_reply` / `_reply_all`. Preference order is (1) inbound `_return_route` (embedded by abs sends), (2) absolute-path `from`, (3) bare `from` in peer mode. An ambiguity guard refuses to send when a peer-mode bare `from` would resolve to the responder's own workdir while the original message's `identity.agent_id` differs from the responder's own agent id — the live failure mode from issue #145 where two `.lingtai/` networks both host an agent with the same short name (e.g. both have "mimo-1").
   - Notification refresh: `_rerender_unread_digest` (method on `EmailManager`) — lazy-imports the kernel-side helper from `base_agent/messaging.py` and runs it. Centralised here so all read-state mutators share one call site.
-  - Contacts: `_contacts_path` / `_load_contacts` / `_save_contacts` / `_contacts` / `_add_contact` / `_remove_contact` / `_edit_contact` (`manager.py:947-1082`).
+  - Contacts: `_contacts_path` / `_load_contacts` / `_save_contacts` / `_contacts` / `_add_contact` / `_remove_contact` / `_edit_contact` (`manager.py:801-876`).
 
 ## Connections
 

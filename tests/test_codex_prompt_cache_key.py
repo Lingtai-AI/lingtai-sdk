@@ -110,21 +110,22 @@ def test_codex_request_includes_default_prompt_cache_key():
     assert sent["prompt_cache_key"] == "lingtai-codex:gpt-5.5:v1"
 
 
-def test_codex_request_sends_official_cli_identity_headers():
-    """Every Codex request carries the official-Codex-CLI app-name identity
-    (#471 cache-miss experiment): ``originator: lingtai`` and a
-    ``LingTai/<version> (...)`` User-Agent matching the official CLI shape.
+def test_codex_request_sends_lingtai_identity_headers():
+    """Every Codex request carries honest LingTai app-name identity.
 
-    The default is the honest LingTai identity. The legacy official-CLI-shaped
-    identity remains behind the single module flag
-    (``_CODEX_IMPERSONATE_OFFICIAL_CLI``) for local experiments only."""
+    Stable affinity/cache metadata still follows the Codex-compatible shape, but
+    default app-name identity is ``originator: lingtai`` and a
+    ``LingTai/<version>`` User-Agent. The legacy ``codex_cli_rs`` originator/UA
+    remains behind an explicit switch (``_CODEX_IMPERSONATE_OFFICIAL_CLI``) for
+    local experiments only.
+    """
     session = _create_codex_session([_completed()], model="gpt-5.5")
 
     session.send("please answer via tool")
 
     headers = session._client.responses.kwargs[0]["extra_headers"]
     assert headers["originator"] == "lingtai"
-    # UA mirrors the official CLI shape ``{originator}/{version} (...)``.
+    # UA uses LingTai's own app name and installed kernel version.
     ua = headers["User-Agent"]
     assert re.fullmatch(r"LingTai/\d+\.\d+\.\d+.*", ua), f"unexpected UA: {ua!r}"
     # The legacy official-CLI originator is not presented by default.
@@ -549,7 +550,7 @@ def test_codex_bare_session_omits_cache_headers_but_sends_identity():
     assert "session_id" not in headers
     assert "thread_id" not in headers
     assert "codex-cache-key" not in headers
-    # Identity headers are always present (impersonated official CLI by default).
+    # Identity headers are always present (honest LingTai by default).
     assert headers["originator"] == "lingtai"
     assert headers["User-Agent"].startswith("LingTai/")
 
@@ -557,7 +558,7 @@ def test_codex_bare_session_omits_cache_headers_but_sends_identity():
 # ---------------------------------------------------------------------------
 # ChatGPT-Account-ID header — the user's own account id, when available.
 # Sent so the request is attributed to the right ChatGPT account WITHOUT
-# impersonating the official Codex CLI (honest originator/User-Agent unchanged).
+# changing the honest LingTai originator/User-Agent.
 # ---------------------------------------------------------------------------
 
 # Placeholder, non-secret account-id value used only in tests.
@@ -588,9 +589,11 @@ def test_codex_omits_chatgpt_account_id_header_when_absent():
 
 
 def test_codex_account_id_preserves_app_name_identity():
-    """Sending ChatGPT-Account-ID does NOT perturb the app-name identity — the
-    account header layers on top of (and is independent of) the impersonated
-    official-CLI originator/User-Agent (#471)."""
+    """Account routing header should not change request app-name identity.
+
+    The account header layers on top of (and is independent of) the default
+    honest LingTai originator/User-Agent.
+    """
     session = _create_codex_session_cfg(
         [_completed()], codex_account_id=_TEST_ACCOUNT_ID
     )
@@ -599,7 +602,7 @@ def test_codex_account_id_preserves_app_name_identity():
 
     headers = session._client.responses.kwargs[0]["extra_headers"]
     assert headers["ChatGPT-Account-ID"] == _TEST_ACCOUNT_ID
-    # App-name identity is the impersonated official CLI; account header is orthogonal.
+    # App-name identity is honest LingTai by default; account header is orthogonal.
     assert headers["originator"] == "lingtai"
     assert headers["User-Agent"].startswith("LingTai/")
 

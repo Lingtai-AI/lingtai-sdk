@@ -127,43 +127,25 @@ def _codex_session_id(anchor: str) -> str:
 
 # Client-identity headers for the Codex ``/backend-api/codex/responses`` path.
 #
-# IDENTITY POLICY (issue #436 -> #471 experiment): the official Codex CLI sends
-# ``originator`` + a Codex ``User-Agent`` to identify itself. We previously
-# identified HONESTLY as LingTai (``originator: lingtai`` / ``User-Agent:
-# LingTai/<ver>``) to avoid first-party impersonation. The current experiment
-# (Jason, 2026-06-22) deliberately FLIPS this default: present the official
-# Codex CLI app-name identity instead, on the hypothesis that the ChatGPT
-# backend keys/segments its prompt cache (and/or routing) on a recognized
-# first-party app name and rejects/cold-slots an unrecognized ``lingtai``
-# originator — i.e. that the honest identity is itself causing cache misses.
+# Default policy: identify LingTai honestly to ChatGPT Codex:
+#   originator: lingtai
+#   User-Agent: LingTai/<installed-version>
 #
-# This is a single, centralized, REVERSIBLE switch. Set
-# ``_CODEX_IMPERSONATE_OFFICIAL_CLI = False`` to restore the honest LingTai
-# identity wholesale; nothing else changes. Caller-supplied ``extra_headers``
-# still win over this default (the identity is only the base layer).
+# During the #471 websocket/cache investigation we used an official Codex
+# CLI-shaped identity as a local diagnostic. Keep that path as an explicit
+# opt-in comparison switch only; do not ship impersonation as the default.
+# Caller-supplied ``extra_headers`` still win over this base layer.
 #
-# The exact tokens are taken from the installed official binary
-# (``codex-cli 0.130.0``; ``codex_login::auth::default_client``): the default
-# CLI originator is ``codex_cli_rs`` and the User-Agent is built as
-# ``{originator}/{version} ({os} {os_version}; {arch})``. The non-interactive
-# ``exec`` subcommand overrides the originator to ``codex_exec`` via
-# ``CODEX_INTERNAL_ORIGINATOR_OVERRIDE``; we mirror the *default* interactive
-# originator (``codex_cli_rs``), which is the broadest first-party identity.
-#
-# Caveat recorded for the parent review: per the prior #436 investigation the
-# identity headers did NOT change the cache rate in an A/B (only the stable
-# ``session_id``/``thread_id`` headers routed the slot). This experiment
-# re-tests that conclusion at Jason's request; if the cache rate is unchanged,
-# flip the switch back.
+# Do not log bearer tokens or full request headers while changing this area.
 _CODEX_IMPERSONATE_OFFICIAL_CLI = False
 
 # Official Codex CLI app-name identity (version pinned to the installed
-# ``codex-cli`` build we inspected). Kept as data so the impersonated UA is a
-# single, auditable place to update when the CLI version moves.
+# ``codex-cli`` build we inspected). Kept as data so the official-shaped UA is
+# a deliberate code switch rather than hidden string literals.
 _CODEX_CLI_ORIGINATOR = "codex_cli_rs"
 _CODEX_CLI_VERSION = "0.130.0"
 
-# Honest LingTai identity (fallback when impersonation is disabled).
+# Honest LingTai identity (the shipped default).
 _LINGTAI_ORIGINATOR = "lingtai"
 
 # Effective originator for this build. Flipping the switch above swaps both the
@@ -230,13 +212,13 @@ def _codex_installation_id(anchor: str | None) -> str | None:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"lingtai-codex-installation:{anchor}"))
 
 def _codex_identity_headers() -> dict[str, str]:
-    """Client-identity headers sent on every Codex request.
+    """Return Codex client identity headers.
 
-    Returns the official-Codex-CLI app-name identity when
-    ``_CODEX_IMPERSONATE_OFFICIAL_CLI`` is set (current default — the cache-miss
-    experiment), or the honest LingTai identity when the switch is off. The
-    originator and User-Agent are always resolved together so they agree. See
-    the identity-policy note above (#436 / #471).
+    The shipped default is explicit LingTai identity. The official-Codex-CLI
+    app-name identity is available only when ``_CODEX_IMPERSONATE_OFFICIAL_CLI``
+    is explicitly enabled for local protocol comparisons. The originator and
+    User-Agent are always resolved together so they agree. See
+    ``tests/test_codex_prompt_cache_key.py`` for the request-level guardrails.
     """
     return {"originator": _CODEX_ORIGINATOR, "User-Agent": _lingtai_user_agent()}
 
@@ -2173,10 +2155,10 @@ class CodexResponsesSession(OpenAIResponsesSession):
         self._ws_epoch_reset_reason_pending: str | None = None
         # The user's own ChatGPT account id (decoded upstream from their OAuth
         # auth data). When present it is sent as the ``ChatGPT-Account-ID`` HTTP
-        # header so the request is attributed to the right ChatGPT account. It is
+        # Account routing is a ChatGPT-account concern and intentionally
         # orthogonal to the app-name identity (``originator``/``User-Agent``),
-        # which the #471 experiment sets to the official Codex CLI by default
-        # (see ``_codex_identity_headers`` / ``_CODEX_IMPERSONATE_OFFICIAL_CLI``).
+        # which remains honest LingTai by default (see
+        # ``_codex_identity_headers`` / ``_CODEX_IMPERSONATE_OFFICIAL_CLI``).
         # It is a non-secret account identifier and is never copied into usage
         # metadata or logs.
         self._account_id = account_id if isinstance(account_id, str) and account_id else None
@@ -2814,8 +2796,8 @@ class CodexResponsesSession(OpenAIResponsesSession):
             # slot and are a single stable per-agent value (never rotated).
             # Client identity (#436 → #471 experiment) forms the base;
             # cache-affinity and caller-supplied headers layer on top so they
-            # always win. The identity default now impersonates the official
-            # Codex CLI app name (``originator: codex_cli_rs`` / matching UA);
+            # always win. The default app-name identity is honest LingTai;
+            # stable affinity/metadata headers remain LingTai-owned.
             # see ``_codex_identity_headers`` / ``_CODEX_IMPERSONATE_OFFICIAL_CLI``.
             extra_headers = {
                 **_codex_identity_headers(),
