@@ -180,6 +180,22 @@ def test_summarize_single_item_success():
     assert result["items"][0]["tool_call_id"] == "tc-001"
 
 
+def test_summarize_notifies_chat_after_successful_history_mutation():
+    iface = ChatInterface()
+    _add_tool_pair(iface, "call_1", "bash", {"ok": True})
+    agent = _make_stub_agent(iface)
+    called = []
+    agent._chat.on_history_summarized = lambda ids: called.append(ids)
+
+    result = _summarize(
+        agent,
+        {"items": [{"tool_call_id": "call_1", "summary": "kept facts"}]},
+    )
+
+    assert result["status"] == "ok"
+    assert called == [["call_1"]]
+
+
 def test_summarize_replaces_block_content():
     iface = ChatInterface()
     original = "A" * 8000

@@ -708,5 +708,109 @@ def test_new_user_turn_after_tool_loop_keeps_incremental_chain():
     assert "call the tool" not in flat3
 
 
+def test_codex_adapter_comment_explains_epoch_reset_and_summarize_delay():
+    session = _make_session(FakeWsTransport())
+
+    comment = session.adapter_comment()
+
+    assert comment["adapter"] == "codex"
+    assert comment["feature"] == "responses_websocket_epoch_reset"
+    assert comment["epoch_reset_turns"] == 20
+    assert comment["turns_since_epoch_reset"] == 0
+    assert "ws_full" in comment["summarize_ws_full_note"]
+    assert "previous_response_id" in comment["summary"]
+    assert "local chat_history" in comment["summary"]
+    assert "system(action='summarize')" in comment["summarize_ws_full_note"]
+    assert "proactively use" in comment["summarize_ws_full_note"]
+    assert "stale meta blocks" in comment["summarize_ws_full_note"]
+
+
+def test_history_summarized_forces_next_ws_full_epoch_reset():
+    t = FakeWsTransport()
+    session = _make_session(t)
+
+    first = session.send("one")
+    second = session.send("two")
+    session.on_history_summarized(["call_old"])
+    third = session.send("three")
+
+    assert first.usage.extra["codex_request_mode"] == "ws_full"
+    assert second.usage.extra["codex_request_mode"] == "ws_incremental"
+    assert third.usage.extra["codex_request_mode"] == "ws_full"
+    assert third.usage.extra["codex_ws_delta_reason"] == "epoch_reset"
+    assert third.usage.extra["codex_ws_epoch_reset_reason"] == "summarize"
+    assert "previous_response_id" not in t.sent_frames[2]
+
+
+def test_ws_epoch_reset_default_limit_refreshes_for_existing_sessions(monkeypatch):
+    t = FakeWsTransport()
+    session = _make_session(t)
+    # Simulate a live session object created before the default changed.
+    session._ws_epoch_reset_turn_limit = 10
+    session._ws_epoch_reset_turns_explicit = False
+    session._ws_turns_since_epoch_reset = 5
+    monkeypatch.setenv("LINGTAI_CODEX_WS_EPOCH_RESET_TURNS", "5")
+
+    session.send("refresh default")
+
+    assert session._ws_last_diag["reason"] == "epoch_reset"
+    assert session._ws_last_diag["epoch_reset_turns"] == 5
+
+
+def test_ws_epoch_reset_explicit_limit_is_not_refreshed(monkeypatch):
+    t = FakeWsTransport()
+    session = _make_session(t, ws_epoch_reset_turns=10)
+    session._ws_turns_since_epoch_reset = 5
+    monkeypatch.delenv("LINGTAI_CODEX_WS_EPOCH_RESET_TURNS", raising=False)
+
+    session.send("keep explicit")
+
+    assert session._ws_last_diag["reason"] == "no_baseline"
+    assert session._ws_epoch_reset_turn_limit == 10
+
+
+def test_ws_epoch_reset_forces_full_after_configured_successes():
+    """Periodic epoch reset breaks the response-id chain after N WS successes.
+
+    The reset intentionally pays one ``ws_full`` request, clears the frozen output
+    map/baseline/transport, and then starts a fresh incremental chain.
+    """
+
+    t = FakeWsTransport()
+    session = _make_session(t, ws_epoch_reset_turns=2)
+
+    first = session.send("one")
+    second = session.send("two")
+    third = session.send("three")
+    fourth = session.send("four")
+
+    assert first.usage.extra["codex_request_mode"] == "ws_full"
+    assert first.usage.extra["codex_ws_delta_reason"] == "no_baseline"
+    assert second.usage.extra["codex_request_mode"] == "ws_incremental"
+
+    assert third.usage.extra["codex_request_mode"] == "ws_full"
+    assert third.usage.extra["codex_ws_delta_reason"] == "epoch_reset"
+    assert third.usage.extra["codex_ws_epoch_reset_reason"] == "turn_count"
+    assert third.usage.extra["codex_ws_epoch_reset_turns"] == "2"
+    assert "previous_response_id" not in t.sent_frames[2]
+
+    assert fourth.usage.extra["codex_request_mode"] == "ws_incremental"
+    assert t.sent_frames[3]["previous_response_id"] == "resp_ws_3"
+
+
+def test_ws_epoch_reset_clears_frozen_outputs_before_full_replay():
+    """Reset clears PR #474's frozen map so stale meta is not replayed forever."""
+
+    session = _make_session(FakeWsTransport(), ws_epoch_reset_turns=1)
+    session._ws_frozen_outputs["call_old"] = "old meta payload"
+    session._ws_turns_since_epoch_reset = 1
+
+    session.send("after reset")
+
+    assert "call_old" not in session._ws_frozen_outputs
+    assert session._ws_turns_since_epoch_reset == 1
+    assert session._ws_last_diag["reason"] == "epoch_reset"
+
+
 # Imported here (not at top) so a missing symbol fails the import test loudly.
 from lingtai.llm.openai.adapter import _CODEX_TURN_STATE_HEADER as _CodexTurnStateHeader  # noqa: E402

@@ -154,6 +154,21 @@ class ChatSession(ABC):
     # call as a no-op, preserving the legacy zero-hook behavior.
     pre_request_hook: "Callable[[ChatInterface], None] | None" = None
 
+    def adapter_comment(self):
+        """Optional adapter-authored, agent-facing runtime note for `_meta.agent_meta`.
+
+        Adapters can override this to surface provider-specific state that the
+        agent must reason about (for example remote state reuse semantics). The
+        value must be small and JSON-serializable; falsy values are omitted.
+        """
+
+        return None
+
+    def on_history_summarized(self, summarized_ids: list[str]) -> None:
+        """Hook called after `system(action='summarize')` mutates chat history."""
+
+        return None
+
     @property
     @abstractmethod
     def interface(self) -> ChatInterface:

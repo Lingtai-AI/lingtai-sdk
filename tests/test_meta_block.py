@@ -65,6 +65,39 @@ def test_build_meta_time_blind_regardless_of_timezone_awareness():
     assert meta["context"]["system_tokens"] == -1
 
 
+def test_build_meta_includes_adapter_comment_when_chat_provides_one():
+    agent = _fake_agent()
+    comment = {"adapter": "fake", "summary": "provider note"}
+    agent._session = SimpleNamespace(
+        chat=SimpleNamespace(adapter_comment=lambda: comment),
+        _token_decomp_dirty=True,
+        _system_prompt_tokens=0,
+        _tools_tokens=0,
+        _latest_input_tokens=0,
+        _update_token_decomposition=lambda: None,
+    )
+
+    meta = build_meta(agent)
+
+    assert meta["adapter_comment"] == comment
+
+
+def test_build_meta_omits_empty_adapter_comment():
+    agent = _fake_agent()
+    agent._session = SimpleNamespace(
+        chat=SimpleNamespace(adapter_comment=lambda: None),
+        _token_decomp_dirty=True,
+        _system_prompt_tokens=0,
+        _tools_tokens=0,
+        _latest_input_tokens=0,
+        _update_token_decomposition=lambda: None,
+    )
+
+    meta = build_meta(agent)
+
+    assert "adapter_comment" not in meta
+
+
 def test_build_meta_counts_current_tool_result_chars_excluding_meta():
     formal_payload = {"payload": "X" * 1200}
     tool_block = ToolResultBlock(
@@ -219,6 +252,7 @@ def test_build_meta_readme_mentions_tool_result_char_count_and_summarize():
     assert "current_tool_result_chars" in readme["agent_meta"]
     assert "top" in readme["agent_meta"]
     assert "proactive summarization candidates" in readme["agent_meta"]
+    assert "adapter_comment" in readme["agent_meta"]
 
 
 def test_build_guidance_with_meta_readme_keeps_section_shape_without_packaged_guidance():
@@ -1002,6 +1036,20 @@ def test_attach_active_runtime_stamps_latest_with_state_and_guidance():
     assert "active_turn_tool_calls" not in block.content
     assert "_runtime" not in block.content
 
+
+
+def test_attach_active_runtime_refreshes_adapter_comment_at_batch_boundary():
+    agent = _runtime_agent(total_calls=1)
+    comment = {"adapter": "fake", "summary": "late provider note"}
+    agent._session = SimpleNamespace(
+        chat=SimpleNamespace(adapter_comment=lambda: comment)
+    )
+    block = ToolResultBlock(id="t-adapter", name="x", content=_stamped_result({"current_time": "T"}, 12))
+
+    attach_active_runtime(agent, [block])
+
+    agent_meta = block.content["_meta"]["agent_meta"]
+    assert agent_meta["adapter_comment"] == comment
 
 def test_attach_active_runtime_moves_to_latest_and_clears_prior():
     agent = _runtime_agent(total_calls=1)

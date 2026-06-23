@@ -45,6 +45,17 @@ class _GatedSession:
             lambda: self._inner.send_stream(message, on_chunk=on_chunk)
         )
 
+    def adapter_comment(self):
+        comment_fn = getattr(self._inner, "adapter_comment", None)
+        if not callable(comment_fn):
+            return None
+        return comment_fn()
+
+    def on_history_summarized(self, summarized_ids):
+        hook = getattr(self._inner, "on_history_summarized", None)
+        if callable(hook):
+            hook(summarized_ids)
+
     def __getattr__(self, name):
         # Only fires when normal attribute lookup on the proxy fails.
         return getattr(self._inner, name)
