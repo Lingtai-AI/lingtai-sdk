@@ -136,6 +136,21 @@ class TestBashManager:
         assert result["status"] == "ok"
         assert str(tmp_path) in result["stdout"]
 
+    def test_working_dir_empty_string_defaults_to_agent_dir(self, tmp_path):
+        # An empty-string working_dir is treated as unset and runs in the
+        # agent working directory rather than failing the sandbox check.
+        mgr = BashManager(policy=BashPolicy.yolo(), working_dir=str(tmp_path))
+        result = mgr.handle({"command": "pwd", "working_dir": ""})
+        assert result["status"] == "ok"
+        assert str(tmp_path) in result["stdout"]
+
+    def test_working_dir_whitespace_only_defaults_to_agent_dir(self, tmp_path):
+        # Whitespace-only working_dir is also treated as unset.
+        mgr = BashManager(policy=BashPolicy.yolo(), working_dir=str(tmp_path))
+        result = mgr.handle({"command": "pwd", "working_dir": "   "})
+        assert result["status"] == "ok"
+        assert str(tmp_path) in result["stdout"]
+
     def test_working_dir_outside_sandbox_error_suggests_cd_workaround(self, tmp_path):
         sandbox = tmp_path / "agent"
         external = tmp_path / "external"

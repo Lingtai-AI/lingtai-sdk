@@ -23,7 +23,7 @@
   "bash.action": "执行动作：'run'（默认）执行命令，'poll' 查询异步任务状态，'cancel' 终止异步任务",
   "bash.command": "要执行的 shell 命令",
   "bash.timeout": "超时秒数（默认：30，仅同步执行时生效）",
-  "bash.working_dir": "命令的工作目录（可选）。必须位于 agent 工作目录沙箱内；沙箱外路径会被拒绝。若要操作外部仓库/路径，请将 working_dir 保持为 agent 目录，并在 command 中显式 cd，例如 cd /absolute/path && ...",
+  "bash.working_dir": "命令的工作目录（可选）。留空或传空字符串即使用 agent 工作目录。必须位于 agent 工作目录沙箱内；沙箱外路径会被拒绝。若要操作外部仓库/路径，请将 working_dir 保持为 agent 目录，并在 command 中显式 cd，例如 cd /absolute/path && ...",
   "bash.async": "后台运行命令并立即返回 job_id（默认：false，仅 action='run' 时生效）",
   "bash.job_id": "异步任务 ID，用于 poll/cancel（由异步 run 返回）",
   "knowledge.description": "你的跨凝蜕长存私有知识目录——所学、所断、所悟之记。每条目皆为 knowledge/<名>/ 下之一夹，内含 KNOWLEDGE.md（YAML frontmatter 须有 name 与 description），可附脚本、素材、笔记、原始日志等支撑文件。系统提示中之知识目录为 YAML 列表——每条目为一 `- name:` 块，附 `location:` 与 `description:` 字段；正文按需以 read 工具取之，与 skills 同。知识为汝私有：条目可引本地路径、邮件 ID、日志——此皆为 skills 所不可依赖之物。新条目以 write/edit 直接写入 knowledge/<名>/KNOWLEDGE.md；修订同法。调 info 可刷新目录并查看健康状态。用此工具前，必先读 `knowledge-manual` 技能，无例外。",

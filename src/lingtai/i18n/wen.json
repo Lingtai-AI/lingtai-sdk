@@ -23,7 +23,7 @@
   "bash.action": "所行之事：'run'（默认）执行指令，'poll' 查异步任务之状，'cancel' 斩异步任务",
   "bash.command": "欲执行之指令",
   "bash.timeout": "超时秒数（默认：30，唯同步执行时生效）",
-  "bash.working_dir": "指令之工作目录（可选）。须在 agent 工作目录沙箱之内；沙箱外路径会被拒。若需操作外部仓库/路径，请令 working_dir 保持为 agent 目录，并在 command 中显式 cd，如 cd /absolute/path && ...",
+  "bash.working_dir": "指令之工作目录（可选）。留空或传空字符串即用 agent 工作目录。须在 agent 工作目录沙箱之内；沙箱外路径会被拒。若需操作外部仓库/路径，请令 working_dir 保持为 agent 目录，并在 command 中显式 cd，如 cd /absolute/path && ...",
   "bash.async": "后台运行指令，即返 job_id（默认：false，唯 action='run' 时生效）",
   "bash.job_id": "异步任务之号，用于 poll/cancel（由异步 run 所返）",
   "avatar.description": "化出独立他我。承 init.json，以默认预设启。详见 avatar-manual 技。",
