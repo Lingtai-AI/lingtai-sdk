@@ -254,6 +254,15 @@ def _summarize(agent, args: dict) -> dict:
                     "tool_result_summarize_save_failed",
                     error=str(exc),
                 )
+        hook = getattr(chat, "on_history_summarized", None)
+        if callable(hook):
+            try:
+                hook(list(summarized_ids))
+            except Exception as exc:  # pragma: no cover - defensive hook isolation
+                agent._log(
+                    "history_summarize_hook_failed",
+                    error=type(exc).__name__,
+                )
 
     # A successful summarize is the sanctioned discharge path for the
     # matching large-result reminder: clear it automatically.  Generic

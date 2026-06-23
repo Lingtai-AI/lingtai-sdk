@@ -72,6 +72,47 @@ def test_wrap_with_gate_returns_proxy_when_gate_present():
     a._gate.shutdown()
 
 
+
+def test_gated_session_adapter_comment_delegates_to_inner():
+    class _StubAdapter(LLMAdapter):
+        def create_chat(self, *a, **kw): pass
+        def generate(self, *a, **kw): pass
+        def make_tool_result_message(self, *a, **kw): pass
+        def is_quota_error(self, exc): return False
+
+    a = _StubAdapter()
+    a._setup_gate(60)
+    inner = MagicMock()
+    inner.adapter_comment.return_value = {
+        "adapter": "dummy",
+        "summary": "inner note",
+    }
+    wrapped = a._wrap_with_gate(inner)
+
+    assert wrapped.adapter_comment() == {
+        "adapter": "dummy",
+        "summary": "inner note",
+    }
+    a._gate.shutdown()
+
+def test_gated_session_history_summarized_delegates_to_inner():
+    class _StubAdapter(LLMAdapter):
+        def create_chat(self, *a, **kw): pass
+        def generate(self, *a, **kw): pass
+        def make_tool_result_message(self, *a, **kw): pass
+        def is_quota_error(self, exc): return False
+
+    a = _StubAdapter()
+    a._setup_gate(60)
+    inner = MagicMock()
+    wrapped = a._wrap_with_gate(inner)
+
+    wrapped.on_history_summarized(["call_1"])
+
+    inner.on_history_summarized.assert_called_once_with(["call_1"])
+    a._gate.shutdown()
+
+
 def test_wrap_with_gate_returns_inner_when_no_gate():
     class _StubAdapter(LLMAdapter):
         def create_chat(self, *a, **kw): pass

@@ -155,7 +155,7 @@ def _codex_session_id(anchor: str) -> str:
 # ``session_id``/``thread_id`` headers routed the slot). This experiment
 # re-tests that conclusion at Jason's request; if the cache rate is unchanged,
 # flip the switch back.
-_CODEX_IMPERSONATE_OFFICIAL_CLI = True
+_CODEX_IMPERSONATE_OFFICIAL_CLI = False
 
 # Official Codex CLI app-name identity (version pinned to the installed
 # ``codex-cli`` build we inspected). Kept as data so the impersonated UA is a
@@ -196,7 +196,7 @@ def _codex_cli_user_agent() -> str:
 def _lingtai_user_agent() -> str:
     """Return the effective Codex ``User-Agent`` string.
 
-    When ``_CODEX_IMPERSONATE_OFFICIAL_CLI`` is set (the current default), this
+    When ``_CODEX_IMPERSONATE_OFFICIAL_CLI`` is set, this
     returns the official-Codex-CLI-shaped UA so the app name matches what the
     ChatGPT backend recognizes (see the identity-policy note above). When the
     switch is off it returns the honest ``LingTai/<version>`` UA, falling back
@@ -273,6 +273,8 @@ _CODEX_TURN_STATE_HEADER = "x-codex-turn-state"
 # to HTTP on any handshake/connection/auth error, unsupported runtime, or delta
 # mismatch).
 _CODEX_WS_ENABLED_ENV = "LINGTAI_CODEX_WS"
+_CODEX_WS_EPOCH_RESET_TURNS_ENV = "LINGTAI_CODEX_WS_EPOCH_RESET_TURNS"
+_CODEX_WS_EPOCH_RESET_TURNS_DEFAULT = 20
 
 # Non-input request fields that must match between two requests for an
 # incremental delta to be valid. Mirrors the official ``get_incremental_items``
@@ -283,6 +285,19 @@ _CODEX_WS_ENABLED_ENV = "LINGTAI_CODEX_WS"
 def _codex_ws_enabled() -> bool:
     """Return True when the experimental websocket transport is enabled."""
     return os.environ.get(_CODEX_WS_ENABLED_ENV, "").lower() in {"1", "true", "yes", "on"}
+
+
+def _codex_ws_epoch_reset_turns() -> int:
+    """Return the configurable WS response-chain reset interval."""
+
+    raw = os.getenv(_CODEX_WS_EPOCH_RESET_TURNS_ENV, "").strip()
+    if not raw:
+        return _CODEX_WS_EPOCH_RESET_TURNS_DEFAULT
+    try:
+        value = int(raw)
+    except ValueError:
+        return _CODEX_WS_EPOCH_RESET_TURNS_DEFAULT
+    return max(0, value)
 
 
 @dataclass
@@ -2107,6 +2122,7 @@ class CodexResponsesSession(OpenAIResponsesSession):
         installation_id: str | None = None,
         metadata_sandbox: str = "lingtai",
         ws_enabled: bool | None = None,
+        ws_epoch_reset_turns: int | None = None,
         ws_transport_factory: "Callable[[str, dict[str, str]], Any] | None" = None,
         base_url: str | None = None,
         api_key: str | None = None,
@@ -2148,6 +2164,13 @@ class CodexResponsesSession(OpenAIResponsesSession):
         # same websocket session. Keep the transport alive across sequential
         # sends in this ChatSession, and close/reset it on transport failures.
         self._ws_transport = None
+        self._ws_epoch_reset_turns_explicit = ws_epoch_reset_turns is not None
+        if ws_epoch_reset_turns is None:
+            self._ws_epoch_reset_turn_limit = _codex_ws_epoch_reset_turns()
+        else:
+            self._ws_epoch_reset_turn_limit = max(0, int(ws_epoch_reset_turns))
+        self._ws_turns_since_epoch_reset = 0
+        self._ws_epoch_reset_reason_pending: str | None = None
         # The user's own ChatGPT account id (decoded upstream from their OAuth
         # auth data). When present it is sent as the ``ChatGPT-Account-ID`` HTTP
         # header so the request is attributed to the right ChatGPT account. It is
@@ -2305,6 +2328,9 @@ class CodexResponsesSession(OpenAIResponsesSession):
                 "mismatch_cur_role",
                 "mismatch_cur_keys",
                 "mismatch_cur_hash",
+                "epoch_reset_reason",
+                "epoch_reset_turns",
+                "turns_since_epoch_reset",
             ):
                 if ws_diag.get(key) is not None:
                     extra[f"codex_ws_{key}"] = str(ws_diag[key])[:240]
@@ -2376,6 +2402,8 @@ class CodexResponsesSession(OpenAIResponsesSession):
         # ``self._ws_last_diag`` so ``send_stream`` can ride it into ``usage.extra``
         # / the token ledger. Only classes / counts / key-names / a short hash.
         diag: dict[str, Any]
+        epoch_reset_reason = self._ws_epoch_reset_reason_pending
+        self._ws_epoch_reset_reason_pending = None
         last = self._ws_session.last_response
         if last is None:
             diag = {"reason": "no_baseline"}
@@ -2402,6 +2430,14 @@ class CodexResponsesSession(OpenAIResponsesSession):
                 previous_response_id = last.response_id
                 frame_input = delta
                 request_mode = "ws_incremental"
+        if epoch_reset_reason:
+            diag = {
+                "reason": "epoch_reset",
+                "epoch_reset_reason": epoch_reset_reason,
+                "epoch_reset_turns": self._ws_epoch_reset_turn_limit,
+                "turns_since_epoch_reset": self._ws_turns_since_epoch_reset,
+                "cur_input_len": len(full_replay_input_items),
+            }
         self._ws_last_diag = dict(diag)
 
         # Build the transmitted frame (delta or full).
@@ -2555,6 +2591,79 @@ class CodexResponsesSession(OpenAIResponsesSession):
             except Exception:
                 pass
 
+
+    def _refresh_ws_epoch_reset_turn_limit(self) -> None:
+        if getattr(self, "_ws_epoch_reset_turns_explicit", False):
+            return
+        self._ws_epoch_reset_turn_limit = _codex_ws_epoch_reset_turns()
+
+    def _reset_ws_epoch(self, reason: str) -> None:
+        """Start a fresh websocket response-id epoch.
+
+        The Codex backend cannot delete already-accepted ``previous_response_id``
+        state. Periodically forcing a full request from the current local history,
+        while clearing the frozen tool-output map and old response id, prevents
+        stale latest-meta bytes from living forever in the remote chain.
+        """
+
+        self._close_ws_transport()
+        self._ws_session = _CodexWebsocketSession()
+        self._ws_pending_baseline_input = None
+        self._ws_frozen_outputs.clear()
+        self._ws_turns_since_epoch_reset = 0
+        self._ws_epoch_reset_reason_pending = reason
+
+    def _maybe_reset_ws_epoch(self) -> None:
+        self._refresh_ws_epoch_reset_turn_limit()
+        limit = self._ws_epoch_reset_turn_limit
+        if limit <= 0:
+            return
+        if self._ws_turns_since_epoch_reset < limit:
+            return
+        self._reset_ws_epoch("turn_count")
+
+    def on_history_summarized(self, summarized_ids: list[str]) -> None:
+        if not summarized_ids or not self._ws_enabled:
+            return
+        self._reset_ws_epoch("summarize")
+
+    def adapter_comment(self):
+        self._refresh_ws_epoch_reset_turn_limit()
+        limit = self._ws_epoch_reset_turn_limit
+        next_reset_in = None
+        if limit > 0:
+            next_reset_in = max(0, limit - self._ws_turns_since_epoch_reset)
+        return {
+            "adapter": "codex",
+            "feature": "responses_websocket_epoch_reset",
+            "ws_enabled": self._ws_enabled,
+            "epoch_reset_turns": limit,
+            "turns_since_epoch_reset": self._ws_turns_since_epoch_reset,
+            "next_reset_in": next_reset_in,
+            "summary": (
+                "Codex reuses remote Responses state through previous_response_id. "
+                "To keep that remote chain from carrying stale runtime metadata "
+                "forever, LingTai sometimes starts a fresh Codex epoch: it drops "
+                "only request-side state (previous_response_id, the local baseline, "
+                "pending baseline, frozen tool-output cache, and WS transport), "
+                "then sends a complete request rebuilt from the current local "
+                "chat_history. This removes stale meta blocks and stale frozen "
+                "tool outputs from the next remote state chain. It does not delete "
+                "or summarize LingTai local chat_history."
+            ),
+            "summarize_ws_full_note": (
+                "Default periodic cleanup waits for this interval, but if old tool "
+                "results, stale meta, or other noisy context are no longer needed, "
+                "proactively use system(action='summarize') instead of waiting. "
+                "When summarize succeeds, LingTai triggers that fresh-epoch rebuild "
+                "on the next Codex request immediately. The ledger may label this "
+                "request as ws_full, meaning: do not reference the old "
+                "previous_response_id chain; send the complete request reconstructed "
+                "from the now-summarized local history, so stale meta blocks already "
+                "captured in remote state are left behind."
+            ),
+        }
+
     def reset_provider_turn_state(self) -> None:
         self.reset_ws_turn()
 
@@ -2638,6 +2747,8 @@ class CodexResponsesSession(OpenAIResponsesSession):
             ):
                 prebuilt_items.extend(self._convert_input(message))
 
+            if self._ws_enabled:
+                self._maybe_reset_ws_epoch()
             full_replay_input_items = self._frozen_responses_input(self._interface)
             full_replay_input_items.extend(prebuilt_items)
 
@@ -2766,6 +2877,7 @@ class CodexResponsesSession(OpenAIResponsesSession):
                     previous_response_id = ws_prev_id
                     request_store = False
 
+            ws_stream_was_used = ws_stream is not None
             if ws_stream is not None:
                 stream = ws_stream
             else:
@@ -2950,6 +3062,8 @@ class CodexResponsesSession(OpenAIResponsesSession):
         # the HTTP fallback. See ``_ws_record_baseline_from_interface``.
         if self._ws_enabled:
             self._ws_record_baseline_from_interface()
+            if locals().get("ws_stream_was_used"):
+                self._ws_turns_since_epoch_reset += 1
 
         # Stateless: don't persist the response_id beyond this single turn.
         # Stored only as a transient debug aid; never threaded into the next

@@ -182,6 +182,21 @@ def _iter_history_tool_result_blocks(agent):
                 yield block
 
 
+def adapter_comment(agent):
+    """Return an optional adapter-authored, agent-facing runtime note."""
+
+    session = getattr(agent, "_session", None)
+    chat = getattr(session, "chat", None)
+    comment_fn = getattr(chat, "adapter_comment", None)
+    if not callable(comment_fn):
+        return None
+    try:
+        return comment_fn()
+    except Exception:
+        # `_meta.agent_meta` must never be made unavailable by an adapter note.
+        return None
+
+
 TOOL_RESULT_CHARS_TOP_N = 10
 TOOL_RESULT_CHARS_PREVIEW_LEN = 200
 TOOL_RESULT_CHARS_README = (
@@ -272,11 +287,14 @@ def build_meta_readme() -> dict:
         ),
         AGENT_META_KEY: (
             "Agent/current-state snapshot (time, context usage, stamina, "
-            "active_turn_tool_calls, current_tool_result_chars). Latest tool "
-            "result only; older copies are stripped as newer results arrive. "
-            "current_tool_result_chars is a dict with total_chars and the top "
-            "10 tool results (each with a first-200-char preview) that are "
-            "proactive summarization candidates."
+            "active_turn_tool_calls, current_tool_result_chars, optional "
+            "adapter_comment). Latest tool result only; older copies are "
+            "stripped as newer results arrive. current_tool_result_chars is "
+            "a dict with total_chars and the top 10 tool results (each with "
+            "a first-200-char preview) that are proactive summarization "
+            "candidates. adapter_comment is a small provider/adapter-authored "
+            "note about model-facing runtime state when the active adapter "
+            "has one."
         ),
         GUIDANCE_KEY: (
             "Kernel guidance sections, including the meta_readme section. "
@@ -636,6 +654,10 @@ def build_meta(agent) -> dict:
         meta["stamina_left_seconds"] = -1
 
     meta["current_tool_result_chars"] = current_tool_result_chars(agent)
+
+    comment = adapter_comment(agent)
+    if comment:
+        meta["adapter_comment"] = comment
 
     # Notifications are deliberately NOT included here. Active-state
     # notification payload is a moving single-slot block that lives on the
@@ -1145,6 +1167,9 @@ def attach_active_runtime(
     agent_meta["current_tool_result_chars"] = current_tool_result_chars(
         agent, extra_results=tool_results
     )
+    comment = adapter_comment(agent)
+    if comment:
+        agent_meta["adapter_comment"] = comment
 
     # Guidance is prompt-like ordered material.  Keep the `_meta` readme as a
     # section so consumers can render one coherent guidance block instead of a
