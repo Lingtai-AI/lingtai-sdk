@@ -2659,12 +2659,13 @@ class CodexResponsesSession(OpenAIResponsesSession):
                     "rewriting the next full replay built from local chat_history "
                     "— summarize replaces the visible tool-result payload with "
                     "your summary, and dismiss removes the resident notification "
-                    "meta. Each such change starts a fresh full prefix, so it "
-                    "breaks the prompt cache for that request; batch summaries and "
-                    "notification dismissals (group finished items, clear several "
-                    "at once) instead of doing them one at a time to limit cache "
-                    "churn. Other providers are much less sensitive to this "
-                    "boundary."
+                    "meta. Each such change alters the replay shape from the "
+                    "mutation point onward and can reduce cached-token reuse after "
+                    "that point; the stable prefix before it may still cache. Batch "
+                    "summaries and notification dismissals (group finished items, "
+                    "clear several at once) instead of doing them one at a time to "
+                    "limit cache churn. Other providers are much less sensitive to "
+                    "this boundary."
                 ),
             }
 
