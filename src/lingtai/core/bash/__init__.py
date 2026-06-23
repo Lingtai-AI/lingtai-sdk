@@ -241,7 +241,12 @@ class BashManager:
         if err:
             return err
 
-        cwd = args.get("working_dir", self._working_dir)
+        # Treat an empty/whitespace-only working_dir the same as omitting it:
+        # run in the agent working directory rather than failing the sandbox
+        # check (models commonly pass working_dir="" to mean "default").
+        cwd = args.get("working_dir") or self._working_dir
+        if isinstance(cwd, str) and not cwd.strip():
+            cwd = self._working_dir
         err = self._validate_working_dir(cwd)
         if err:
             return err
