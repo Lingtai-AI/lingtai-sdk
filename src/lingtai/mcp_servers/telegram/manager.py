@@ -263,12 +263,13 @@ SCHEMA = {
         },
         "chat_action": {
             "type": "string",
-            "enum": ["typing", "upload_photo", "upload_document", "upload_voice"],
+            "enum": ["typing", "upload_photo", "upload_document", "upload_voice", ""],
             "description": (
                 "For send action only. When set and no text/media is provided, "
                 "sends a chat action indicator (e.g. 'typing...') instead of a "
                 "message. Auto-expires after 5 seconds — re-send periodically "
-                "during long tasks to keep it visible."
+                "during long tasks to keep it visible. Omit or pass an empty "
+                "string for no chat action."
             ),
         },
     },
@@ -945,6 +946,18 @@ class TelegramManager:
             return None
         return value
 
+    @staticmethod
+    def _normalize_chat_action(value: Any) -> Any:
+        """Treat an empty chat_action as omitted/no typing indicator.
+
+        Optional enum-like tool arguments may be serialized as ``""`` by some
+        callers.  Telegram only needs chat_action when the caller explicitly
+        asks for one, so normalize an empty string before action dispatch.
+        """
+        if value == "":
+            return None
+        return value
+
     def _rich_text_options(self, args: dict) -> tuple[dict[str, Any], str | None]:
         """Extract Bot API rich text options for text messages from tool args.
 
@@ -997,7 +1010,7 @@ class TelegramManager:
         if media and isinstance(media, dict) and not (media.get("path") or "").strip():
             media = None
         reply_markup = args.get("reply_markup")
-        chat_action = args.get("chat_action")
+        chat_action = self._normalize_chat_action(args.get("chat_action"))
         placeholder = bool(args.get("placeholder", False))
         rich_text_options, rich_text_error = self._rich_text_options(args)
         caption_options, caption_error = self._caption_options(args)

@@ -106,6 +106,12 @@ def test_schema_exposes_rich_formatting_fields():
     assert "plain text" in props["parse_mode"]["description"]
 
 
+def test_schema_allows_empty_chat_action():
+    props = SCHEMA["properties"]
+    assert "" in props["chat_action"]["enum"]
+    assert "empty string" in props["chat_action"]["description"]
+
+
 # ---------------------------------------------------------------------------
 # Manager pass-through (the acceptance-critical parse_mode path lives here)
 # ---------------------------------------------------------------------------
@@ -186,6 +192,28 @@ def test_empty_parse_mode_is_treated_as_plain_text(tmp_path):
     sent_files = list((Path(tmp_path) / "telegram" / "mybot" / "sent").glob("*/message.json"))
     assert len(sent_files) == 1
     assert json.loads(sent_files[0].read_text())["parse_mode"] is None
+
+
+def test_empty_chat_action_with_text_is_treated_as_omitted(tmp_path):
+    """Optional chat_action serialized as "" should not block text sends."""
+    manager, account = _manager(tmp_path)
+
+    result = manager._send({
+        "account": "mybot",
+        "chat_id": 123,
+        "text": "plain",
+        "chat_action": "",
+    })
+
+    assert result == {"status": "sent", "message_id": "mybot:123:111"}
+    assert account.calls == [(
+        "send_message",
+        123,
+        "plain",
+        None,
+        None,
+        {},
+    )]
 
 
 def test_empty_parse_mode_reply_is_treated_as_plain_text(tmp_path):
