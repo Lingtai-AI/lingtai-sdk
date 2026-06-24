@@ -17,6 +17,12 @@ where the substance lives, and stop. Reference paths/PRs/message IDs — never
 inline secrets or full file contents. After writing it, append one line to the
 parent index at `knowledge/session-journal/KNOWLEDGE.md`.
 
+It also helps to open the body with an **immediately visible timestamp and a
+one- or two-line TL;DR** before the sections — so the next you can date the
+entry and grasp its gist at a glance without reading the whole record. This is a
+soft convention, not a gate: the molt validator checks only the frontmatter
+marker and structure, never the body. Skip or reshape it when it does not fit.
+
 The frontmatter below is the on-disk format; fill every section, writing `None`
 rather than omitting one.
 
@@ -43,6 +49,10 @@ date: <YYYY-MM-DD>
 molt_count: <current molt count, before calling psyche(context, molt)>
 type: session-journal
 ---
+
+**<YYYY-MM-DD HH:MM TZ>** — TL;DR: one or two lines on what this segment did and
+where it left off, so the next you can orient at a glance. *(Soft convention —
+not validated; skip if it does not fit.)*
 
 ## What this segment was about
 The original ask and the framing. Why this segment existed.

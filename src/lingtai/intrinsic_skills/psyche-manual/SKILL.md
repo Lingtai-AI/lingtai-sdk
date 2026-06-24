@@ -77,6 +77,7 @@ detail belongs in the child.
 
 **YAML frontmatter safety:** `name` and `description` are real YAML, not free-form text. Prefer the template's `description: >-` block scalar. If you write a one-line value containing a colon followed by a space (for example `description: Session record for codex molt 53: runtime relay`), YAML treats the second colon as a mapping separator and the molt gate rejects the file. Quote the value or use the block scalar, then retry the same `psyche(context, molt, session_journal_path=...)` call.
 
+- **Top-of-entry timestamp + TL;DR** *(soft convention)* — open the body with a visible timestamp and a one- or two-line gist before the sections, so the next you can date and grasp the entry at a glance; the molt gate validates only frontmatter, never this
 - **What the segment was about** — the original ask, the framing
 - **Accomplishments** — what you completed/moved forward, the outputs, who was told and where
 - **Decisions and their reasoning** — the *why*, especially where an alternative was rejected
