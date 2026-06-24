@@ -18,6 +18,7 @@ THINKING_LEVELS = ("low", "medium", "high", "xhigh")
 MOLT_NOTICE_THRESHOLD = 0.5   # >= this fraction of context used -> "consider" stage
 MOLT_PRESSURE_THRESHOLD = 0.7  # >= this -> "strong" stage
 MOLT_URGENCY_THRESHOLD = 0.9   # >= this -> "immediate" stage (90% hard gate)
+DEFAULT_SOUL_DELAY_SECONDS = 999999999.0
 
 
 @dataclass
@@ -39,7 +40,7 @@ class AgentConfig:
     thinking_budget: int | None = None
     thinking: str = "high"  # reasoning/thinking tier passed to the main persistent LLM session
     data_dir: str | None = None  # for cache files (e.g., model context windows)
-    soul_delay: float = 99999.0  # seconds idle before soul whispers; large value (> stamina) = effectively off
+    soul_delay: float = DEFAULT_SOUL_DELAY_SECONDS  # seconds idle before soul whispers; large value (> stamina) = effectively off
     language: str = "en"  # agent language ("en", "zh", "wen"); controls kernel-injected prose
     activeness: str | None = "balanced"  # responsiveness posture: quiet, balanced, or responsive
     stamina: float = 3600.0  # agent stamina in seconds; set at birth, not changeable by the agent

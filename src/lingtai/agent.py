@@ -1062,7 +1062,7 @@ class Agent(BaseAgent):
             resolve_file,
             _resolve_capabilities,
         )
-        from lingtai_kernel.config import AgentConfig
+        from lingtai_kernel.config import AgentConfig, DEFAULT_SOUL_DELAY_SECONDS
 
         env_file = data.get("env_file")
         import os
@@ -1189,7 +1189,7 @@ class Agent(BaseAgent):
         # AgentConfig fields.
         self._config = AgentConfig(
             stamina=m.get("stamina", 86400.0),
-            soul_delay=soul.get("delay", 99999.0),
+            soul_delay=soul.get("delay", DEFAULT_SOUL_DELAY_SECONDS),
             consultation_past_count=soul.get("consultation_past_count", 0),
             soul_voice=soul.get("voice", "inner"),
             soul_voice_prompt=soul.get("voice_prompt", ""),

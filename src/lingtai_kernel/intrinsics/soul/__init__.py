@@ -21,6 +21,7 @@ Three actions:
 from __future__ import annotations
 
 # Re-export constants from config.py
+from ...config import DEFAULT_SOUL_DELAY_SECONDS
 from .config import (
     SOUL_DELAY_MIN_SECONDS,
     CONSULTATION_PAST_COUNT_MIN,
@@ -153,7 +154,7 @@ def handle(agent, args: dict) -> dict:
                     agent._log("soul_flow_voluntary_waiting_idle")
                     # Wait up to soul_delay seconds; if the agent never goes
                     # IDLE (stuck in ACTIVE), give up rather than hang.
-                    timeout = getattr(agent, "_soul_delay", 99999.0)
+                    timeout = getattr(agent, "_soul_delay", DEFAULT_SOUL_DELAY_SECONDS)
                     if not idle_event.wait(timeout=timeout):
                         agent._log("soul_flow_voluntary_timeout",
                                    timeout=timeout)
