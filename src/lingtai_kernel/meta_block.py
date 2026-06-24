@@ -164,6 +164,7 @@ def formal_tool_result_preview(content, limit: int = 200) -> str:
     return _visible_content_text(formal_tool_result_content(content))[:limit]
 
 
+
 def _is_tool_result_block(block) -> bool:
     """Best-effort duck-typing for ToolResultBlock without a hard import cycle."""
     return block.__class__.__name__ == "ToolResultBlock" and hasattr(block, "content")
@@ -198,19 +199,23 @@ def adapter_comment(agent):
 
 
 TOOL_RESULT_CHARS_TOP_N = 10
-TOOL_RESULT_CHARS_PREVIEW_LEN = 200
+TOOL_RESULT_CHARS_MIN_TOP_CHARS = 1000
 TOOL_RESULT_CHARS_README = (
-    "listing top 10 tool results by char count with a first-200-char preview; "
-    "no need to summarize this helper (it appears only on the latest tool "
-    "result _meta and older copies are stripped); proactively summarize "
-    "prior tool results that are useless, already digested, irrelevant, "
-    "obsolete, or no longer needed in full, using the listed result "
-    "ids/previews"
+    "listing top 10 tool results over 1000 chars by char count "
+    "(id, tool_name, chars; no preview); no need to summarize this helper "
+    "(it appears only on the latest tool result _meta and older copies are "
+    "stripped); proactively summarize prior tool results that are useless, "
+    "already digested, irrelevant, obsolete, or no longer needed in full, "
+    "using the listed ids/tool names"
 )
 
 
 def _tool_result_id(block) -> str:
     return str(getattr(block, "id", None) or getattr(block, "tool_call_id", None) or "")
+
+
+def _tool_result_name(block) -> str:
+    return str(getattr(block, "name", None) or getattr(block, "tool_name", None) or "")
 
 
 def current_tool_result_chars(agent, extra_results=()) -> dict:
@@ -233,15 +238,14 @@ def current_tool_result_chars(agent, extra_results=()) -> dict:
         content = getattr(block, "content", "")
         chars = formal_tool_result_visible_len(content)
         total += chars
-        top.append(
-            {
-                "id": _tool_result_id(block),
-                "chars": chars,
-                "preview": formal_tool_result_preview(
-                    content, TOOL_RESULT_CHARS_PREVIEW_LEN
-                ),
-            }
-        )
+        if chars > TOOL_RESULT_CHARS_MIN_TOP_CHARS:
+            top.append(
+                {
+                    "id": _tool_result_id(block),
+                    "tool_name": _tool_result_name(block),
+                    "chars": chars,
+                }
+            )
 
     for block in _iter_history_tool_result_blocks(agent) or ():
         visit(block)
@@ -290,9 +294,10 @@ def build_meta_readme() -> dict:
             "active_turn_tool_calls, current_tool_result_chars, optional "
             "adapter_comment). Latest tool result only; older copies are "
             "stripped as newer results arrive. current_tool_result_chars is "
-            "a dict with total_chars and the top 10 tool results (each with "
-            "a first-200-char preview) that are proactive summarization "
-            "candidates. adapter_comment is a small provider/adapter-authored "
+            "a dict with total_chars and the top tool results over 1000 chars "
+            "(id, tool_name, chars; no preview) that are proactive "
+            "summarization candidates. adapter_comment is a small "
+            "provider/adapter-authored "
             "note about model-facing runtime state when the active adapter "
             "has one."
         ),
@@ -547,7 +552,7 @@ def build_meta(agent) -> dict:
                 "molt": dict,                # optional pressure stage/action; present at >=50%
             },
             "stamina_left_seconds": float,   # session time remaining; -1 if unstarted
-            "current_tool_result_chars": dict, # total + top 10 formal tool results w/ preview
+            "current_tool_result_chars": dict, # total + top formal tool results >1000 chars
         }
 
     Sentinel handling: when token decomposition has not yet run, the
