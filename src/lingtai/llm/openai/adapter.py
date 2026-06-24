@@ -621,6 +621,55 @@ def _base_url_namespace(base_url: str | None) -> str:
     return "h" + hashlib.sha256(base_url.encode("utf-8")).hexdigest()[:12]
 
 
+def _parse_codex_base_urls(value: object) -> tuple[str, ...]:
+    """Normalize a ``codex_base_urls`` config value into a clean tuple.
+
+    Accepts a list/tuple of strings, or a single comma/newline-separated string
+    (whichever the host config layer happens to deliver). Each entry is
+    stripped; blank/whitespace-only entries are dropped. Order is preserved and
+    duplicates are kept (the caller indexes by molt_count, not by uniqueness).
+    Returns ``()`` when nothing valid remains — the caller then falls back to
+    the single ``base_url`` behavior (PR #495). NEVER raises and NEVER touches
+    the network.
+    """
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        raw = value.replace("\n", ",").split(",")
+    elif isinstance(value, (list, tuple)):
+        raw: list = []
+        for item in value:
+            # Tolerate a nested comma/newline string inside a list entry.
+            if isinstance(item, str) and ("," in item or "\n" in item):
+                raw.extend(item.replace("\n", ",").split(","))
+            else:
+                raw.append(item)
+    else:
+        return ()
+    return tuple(
+        s.strip() for s in raw if isinstance(s, str) and s.strip()
+    )
+
+
+def _read_molt_count(agent_json_path: Path) -> int:
+    """Read ``molt_count`` from ``<working_dir>/.agent.json``; 0 on any failure.
+
+    The molt path does NOT rebuild the Codex adapter, so the running adapter
+    reads this file at request time to observe molt-boundary changes. A missing
+    or malformed file, or a non-int ``molt_count``, yields 0 — no exception is
+    raised and no network call is made.
+    """
+    try:
+        data = json.loads(agent_json_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return 0
+    raw = data.get("molt_count", 0) if isinstance(data, dict) else 0
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _validate_compact_threshold(value: int | None) -> int | None:
     """Normalize the OpenAI Responses auto-compaction threshold.
 
@@ -3276,6 +3325,8 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         codex_session_anchor: str | None = None,
         codex_thread_salt: str | None = None,
         codex_account_id: str | None = None,
+        codex_base_urls: object = None,
+        codex_molt_count: int | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -3319,6 +3370,105 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         self.codex_account_id: str | None = (
             str(codex_account_id) if codex_account_id else None
         )
+        # Optional Codex-only endpoint POOL (molt-boundary shuffle). When this
+        # carries 2+ valid entries, ``create_chat`` chooses one at request time
+        # by (stable per-agent offset + current molt_count) so the endpoint is
+        # stable within a molt segment and rotates only at a molt boundary. An
+        # empty pool -> the single ``base_url`` resolved at construction (PR #495
+        # behavior, untouched). This NEVER affects the cache identity
+        # (``session_id`` / ``thread_id`` / ``prompt_cache_key``), which is keyed
+        # purely on ``self._codex_id`` above.
+        self._codex_base_urls: tuple[str, ...] = _parse_codex_base_urls(codex_base_urls)
+        # ``base_url`` resolved at construction — the fall-back when the pool is
+        # empty, and the value ``create_chat`` compares against to detect a
+        # molt-driven endpoint change. (``self.base_url`` is mutated in place on
+        # a switch; this fixed copy is the legacy single-endpoint anchor.)
+        self._codex_fixed_base_url = self.base_url
+        # Explicit molt_count override (tests / hosts). When set, used instead of
+        # reading ``<working_dir>/.agent.json``.
+        self._codex_molt_count_override = codex_molt_count
+        # ``<working_dir>/.agent.json`` is the sibling of the per-agent anchor
+        # (the resolved ``init.json`` path). Derived once; read fresh per request
+        # so a live process observes molt_count changes without a rebuild.
+        self._codex_agent_json_path: Path | None = (
+            Path(self._codex_session_anchor).parent / ".agent.json"
+            if self._codex_session_anchor
+            else None
+        )
+        # Stable per-agent offset so different agents distribute across the pool.
+        # Prefer the agent-path anchor; fall back to the cache id, then a fixed
+        # constant for a bare/no-identity adapter (degenerate but deterministic).
+        offset_seed = self._codex_session_anchor or self._codex_id or "codex"
+        self._codex_pool_offset = int(
+            hashlib.sha256(offset_seed.encode("utf-8")).hexdigest(), 16
+        )
+
+    def _current_molt_count(self) -> int:
+        """Current molt_count: explicit override, else ``.agent.json``, else 0."""
+        if self._codex_molt_count_override is not None:
+            try:
+                return int(self._codex_molt_count_override)
+            except (TypeError, ValueError):
+                return 0
+        if self._codex_agent_json_path is not None:
+            return _read_molt_count(self._codex_agent_json_path)
+        return 0
+
+    def _select_codex_endpoint(self) -> str | None:
+        """Pick this request's Codex endpoint from the pool (or the fixed one).
+
+        - Empty pool   -> the single ``base_url`` resolved at construction
+                          (``None`` means the official endpoint, set by the
+                          factory; kept verbatim).
+        - 1 valid entry -> always that entry.
+        - 2+ entries   -> ``pool[(offset + molt_count) % len]`` — stable while
+                          molt_count is unchanged, rotates to an adjacent slot at
+                          each molt boundary (so adjacent molts actually move).
+        """
+        pool = self._codex_base_urls
+        if not pool:
+            return self._codex_fixed_base_url
+        if len(pool) == 1:
+            return pool[0]
+        idx = (self._codex_pool_offset + self._current_molt_count()) % len(pool)
+        return pool[idx]
+
+    def _repoint_client_if_needed(self, endpoint: str | None) -> None:
+        """Re-point the OpenAI client at ``endpoint`` if it changed.
+
+        Called at request time (``create_chat``) so a molt-driven endpoint
+        change takes effect on a LIVE adapter without a service rebuild. The old
+        client is replaced wholesale: any websocket / ``previous_response_id`` /
+        continuation state owned by sessions built against the previous endpoint
+        is on the old client object and is dropped, so it can never cross
+        endpoints. The cache identity is untouched (it is endpoint-independent).
+
+        The Codex factory's pre-call OAuth refresh hook mutates
+        ``self._client.api_key`` in place each turn; carry that LIVE token onto
+        the rebuilt client (and into ``_client_kwargs``, which the session reads
+        for the WS path) so a switch never reverts to the stale boot token.
+        """
+        if endpoint == self.base_url:
+            return
+        live_api_key = getattr(self._client, "api_key", None)
+        self.base_url = endpoint
+        new_kwargs = dict(self._client_kwargs)
+        if live_api_key is not None:
+            new_kwargs["api_key"] = live_api_key
+        if endpoint:
+            new_kwargs["base_url"] = endpoint
+        else:
+            new_kwargs.pop("base_url", None)
+        self._client_kwargs = new_kwargs
+        self._client = openai.OpenAI(**new_kwargs)
+
+    def create_chat(self, *args, **kwargs) -> ChatSession:
+        # Select the molt-stable endpoint and re-point the client BEFORE the
+        # session is built, so the new ``CodexResponsesSession`` (and its
+        # ``_ws_base_url`` / client) use the selected endpoint. With an empty
+        # pool this is a no-op and the PR #495 single-endpoint path is unchanged.
+        self._repoint_client_if_needed(self._select_codex_endpoint())
+        return super().create_chat(*args, **kwargs)
 
     def _resolve_codex_ids(self, model: str) -> tuple[str | None, str | None]:
         """Resolve the (session_id, thread_id) headers for ``model``.

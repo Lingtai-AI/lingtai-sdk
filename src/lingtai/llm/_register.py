@@ -98,6 +98,19 @@ def register_all_adapters() -> None:
             val = d.get(cfg_key)
             if val is not None:
                 codex_id_kw[cfg_key] = val
+        # Optional Codex-only endpoint POOL (molt-boundary shuffle). When
+        # ``codex_base_urls`` carries 2+ valid endpoints, the adapter chooses one
+        # at request time by (stable per-agent offset + current ``molt_count``
+        # from ``<working_dir>/.agent.json``); the choice is stable within a molt
+        # segment and rotates only at a molt boundary. Empty/blank -> single
+        # ``base_url`` behavior above (PR #495). ``codex_molt_count`` is an
+        # explicit override (tests/hosts) used instead of reading ``.agent.json``.
+        # Neither affects the ``session_id`` / ``thread_id`` / ``prompt_cache_key``
+        # identity the pool routes off.
+        for cfg_key in ("codex_base_urls", "codex_molt_count"):
+            val = d.get(cfg_key)
+            if val is not None:
+                codex_id_kw[cfg_key] = val
         # Per-agent Codex OAuth token file (true multiple Codex accounts). When a
         # manifest/preset sets ``codex_auth_path`` to a non-empty path, read that
         # token file instead of the shared default ``~/.lingtai-tui/codex-auth.json``.

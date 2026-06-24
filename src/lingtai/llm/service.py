@@ -15,7 +15,6 @@ import threading
 import uuid
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
 from lingtai_kernel.llm.base import (
     ChatSession,
@@ -76,6 +75,16 @@ def _generate_tool_call_id() -> str:
 # no longer derives a separate thread id (the thread tracks the session id), and
 # nothing reads the token ledger to pick the Codex identity.
 #
+# ``codex_base_urls`` is an OPTIONAL Codex-only endpoint pool (a list/tuple of
+# URLs, or a comma/newline-separated string). When it carries 2+ valid entries
+# the adapter chooses one per LingTai molt segment — stable within the segment,
+# rotating only at a molt boundary, keyed on the agent's stable offset plus the
+# current ``molt_count`` (from ``<working_dir>/.agent.json``; host/test
+# callers may pass ``codex_molt_count`` directly via provider defaults/adapter
+# kwargs). Empty/blank -> single ``base_url`` behavior.
+# This NEVER changes the ``prompt_cache_key`` / ``session_id`` / ``thread_id``
+# identity, which the pool routes off. Parsing/validation lives in the adapter.
+#
 # ``codex_auth_path`` selects which Codex OAuth token file the adapter reads
 # (the path to a ``codex-auth.json``-shaped file), enabling true multiple Codex
 # accounts: a preset/manifest can point one agent at its own token file instead
@@ -89,6 +98,11 @@ _PROVIDER_DEFAULTS_PASS_THROUGH_KEYS = (
     "codex_session_anchor",
     "codex_thread_salt",
     "codex_auth_path",
+    # Optional Codex endpoint pool (molt-boundary shuffle). A manifest ``llm``
+    # block may carry ``codex_base_urls`` (list/tuple or comma/newline string);
+    # the adapter chooses one endpoint at request time without changing
+    # prompt_cache_key/session/thread identity.
+    "codex_base_urls",
 )
 _PROVIDER_DEFAULTS_PRESERVE_NONE_KEYS = ("compact_threshold",)
 
