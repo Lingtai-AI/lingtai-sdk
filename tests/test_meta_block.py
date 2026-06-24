@@ -142,8 +142,8 @@ def test_build_meta_counts_current_tool_result_chars_excluding_meta():
     assert current["top_results"] == [
         {
             "id": "tc-history",
+            "tool_name": "bash",
             "chars": expected,
-            "preview": json.dumps(formal_payload, ensure_ascii=False)[:200],
         }
     ]
 
@@ -164,7 +164,7 @@ def _agent_with_history(blocks):
 def test_current_tool_result_chars_lists_top_10():
     # 15 prior results of strictly decreasing length; expect the 10 longest.
     blocks = [
-        ToolResultBlock(id=f"tc-{i}", name="bash", content={"payload": "X" * (100 - i)})
+        ToolResultBlock(id=f"tc-{i}", name="bash", content="X" * (1500 - i))
         for i in range(15)
     ]
     agent = _agent_with_history(blocks)
@@ -174,55 +174,44 @@ def test_current_tool_result_chars_lists_top_10():
     assert len(current["top_results"]) == 10
     ids = [entry["id"] for entry in current["top_results"]]
     assert ids == [f"tc-{i}" for i in range(10)]
+    assert all(entry["tool_name"] == "bash" for entry in current["top_results"])
+    assert all("preview" not in entry for entry in current["top_results"])
 
 
-def test_current_tool_result_chars_no_1000_char_threshold():
-    # Two short results, both well under 1000 chars, must still be listed.
+def test_current_tool_result_chars_filters_results_at_or_below_1000_chars():
     blocks = [
-        ToolResultBlock(id="tc-short-a", name="bash", content={"payload": "A" * 10}),
-        ToolResultBlock(id="tc-short-b", name="bash", content={"payload": "B" * 5}),
+        ToolResultBlock(id="tc-short", name="bash", content="A" * 1000),
+        ToolResultBlock(id="tc-long", name="read", content="B" * 1001),
     ]
     agent = _agent_with_history(blocks)
 
     current = current_tool_result_chars(agent)
 
-    ids = {entry["id"] for entry in current["top_results"]}
-    assert ids == {"tc-short-a", "tc-short-b"}
+    assert current["top_results"] == [
+        {"id": "tc-long", "tool_name": "read", "chars": 1001}
+    ]
 
 
-def test_current_tool_result_chars_includes_first_200_char_preview():
-    body = "Z" * 500
-    block = ToolResultBlock(id="tc-preview", name="bash", content={"payload": body})
+def test_current_tool_result_chars_entries_include_tool_name_and_no_preview():
+    block = ToolResultBlock(id="tc-preview", name="bash", content="Z" * 1200)
     agent = _agent_with_history([block])
 
     current = current_tool_result_chars(agent)
 
-    entry = current["top_results"][0]
-    preview = entry["preview"]
-    assert len(preview) == 200
-    # Preview is taken from the visible (JSON-serialized) formal payload.
-    assert preview == json.dumps({"payload": body}, ensure_ascii=False)[:200]
+    assert current["top_results"] == [
+        {"id": "tc-preview", "tool_name": "bash", "chars": 1200}
+    ]
 
 
-def test_current_tool_result_chars_preview_handles_short_body():
-    block = ToolResultBlock(id="tc-tiny", name="bash", content={"payload": "hi"})
-    agent = _agent_with_history([block])
-
-    current = current_tool_result_chars(agent)
-
-    entry = current["top_results"][0]
-    assert entry["preview"] == json.dumps({"payload": "hi"}, ensure_ascii=False)
-    assert len(entry["preview"]) < 200
-
-
-def test_current_tool_result_chars_readme_drops_top5_and_1000_wording():
+def test_current_tool_result_chars_readme_describes_threshold_and_no_preview():
     agent = _agent_with_history([])
 
     current = current_tool_result_chars(agent)
 
     readme = current["_readme"]
     assert "top 10" in readme
-    assert "1000" not in readme
+    assert "over 1000 chars" in readme
+    assert "no preview" in readme
     assert "top 5" not in readme
 
 
@@ -241,8 +230,8 @@ def test_current_tool_result_chars_readme_says_no_need_to_summarize_helper():
     assert "proactively summarize" in readme
     assert "useless" in readme
     assert "no longer needed in full" in readme
-    assert "ids/previews" in readme
-    assert "1000" not in readme
+    assert "ids/tool names" in readme
+    assert "ids/previews" not in readme
     assert "top 5" not in readme
 
 
@@ -980,7 +969,7 @@ def _stamped_result(meta, elapsed_ms):
 
 def test_attach_active_runtime_counts_current_batch_tool_result_chars():
     agent = _fake_agent()
-    result = {"payload": "batch"}
+    result = {"payload": "B" * 1200}
     stamp_meta(result, build_meta(agent), elapsed_ms=12)
     block = ToolResultBlock(id="tc-batch", name="bash", content=result)
 
@@ -988,14 +977,13 @@ def test_attach_active_runtime_counts_current_batch_tool_result_chars():
 
     agent_meta = block.content["_meta"]["agent_meta"]
     current = agent_meta["current_tool_result_chars"]
-    expected = len(json.dumps({"payload": "batch"}, ensure_ascii=False, default=str))
+    expected = len(json.dumps({"payload": "B" * 1200}, ensure_ascii=False, default=str))
     assert current["total_chars"] == expected
-    # No >1000 threshold any more: the current batch result is always listed.
     assert current["top_results"] == [
         {
             "id": "tc-batch",
+            "tool_name": "bash",
             "chars": expected,
-            "preview": json.dumps({"payload": "batch"}, ensure_ascii=False)[:200],
         }
     ]
 
