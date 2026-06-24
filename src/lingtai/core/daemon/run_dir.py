@@ -392,12 +392,13 @@ class DaemonRunDir:
                      endpoint: str | None = None) -> None:
         """Record per-call token usage to both ledgers.
 
-        Daemon's own logs/token_ledger.jsonl gets an untagged entry (the
-        location is already attribution enough). Parent's logs/token_ledger.jsonl
-        gets a tagged entry with source/em_id/run_id so future analytics can
-        decompose, while existing sum_token_ledger callers continue to count
-        daemon spend in the parent's lifetime totals (they only read the
-        numeric fields).
+        Both the daemon's own logs/token_ledger.jsonl and the parent's
+        logs/token_ledger.jsonl get a tagged entry with source="daemon",
+        em_id, and run_id, so every row is self-describing for uniform
+        analytics regardless of which ledger it lives in. The file location
+        still aids attribution, but it is no longer the only signal. Existing
+        sum_token_ledger callers continue to count daemon spend in the
+        parent's lifetime totals (they only read the numeric fields).
 
         ``model`` and ``endpoint`` (if provided) are written as first-class
         attribution fields on both ledgers — the daemon may use a different

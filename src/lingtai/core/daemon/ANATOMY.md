@@ -94,7 +94,7 @@ daemon/run_dir.py
   ├── set_current_tool()            — marks tool dispatch starting (daemon.json + events + heartbeat)
   ├── clear_current_tool()          — marks tool dispatch finished
   ├── record_cli_output()           — records CLI backend stdout/stderr as cli_output events
-  ├── append_tokens()               — dual-ledger token accounting (daemon's + parent's)
+  ├── append_tokens()               — dual-ledger token accounting (daemon's + parent's); both rows tagged `source="daemon"` + `em_id` + `run_id` so every row self-describes regardless of which ledger it lives in (`sum_token_ledger(scope="main_agent")` therefore excludes all rows of a daemon-local ledger; use `scope="all"` to total one)
   ├── record_cli_tokens()           — accumulates external CLI usage into `daemon.json.cli_tokens` (`input/output/cached/thinking/calls`) for UI display only; never writes either token ledger; appends a `cli_usage` event (with raw usage) to `events.jsonl`
   ├── mark_done/failed/cancelled/timeout — terminal state markers (result.txt + preview on done); each sets `daemon.json.state` to the authoritative terminal status read back by `_on_emanation_done`
   ├── claim_terminal_notification() — atomic once-only claim of the terminal-notification slot (persists `terminal_notified` to daemon.json); returns True on first call, False thereafter so a repeated done-callback never double-wakes the parent
