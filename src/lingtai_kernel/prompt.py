@@ -8,7 +8,8 @@ batches:
     Batch 1 — immovable after init (ideal cache-read prefix):
         principle (no header) → covenant → tools → substrate → procedures → comment
     Batch 2 — rarely mutated (most stable first):
-        rules → brief → skills → knowledge → identity → character → pad
+        rules → brief → skills → knowledge → identity → character → pad →
+        meta_guidance (always the final, resident kernel-runtime-guidance section)
 
 `substrate` sits **right after tools** so it functions as the long-form
 companion to the schemas above it: tool schemas carry mechanical
@@ -202,6 +203,9 @@ class SystemPromptManager:
         "identity",
         "character",
         "pad",
+        # Resident kernel runtime guidance — always last so it is the final
+        # system-prompt section (see meta_block.build_meta_guidance).
+        "meta_guidance",
     ]
 
     def __init__(self) -> None:
@@ -244,7 +248,10 @@ class SystemPromptManager:
     # "unordered" bucket rendered just before the tail batch.
     _BATCHES: tuple[tuple[str, ...], ...] = (
         ("principle", "covenant", "tools", "substrate", "procedures", "comment"),
-        ("rules", "brief", "skills", "knowledge", "identity", "character", "pad"),
+        (
+            "rules", "brief", "skills", "knowledge", "identity", "character",
+            "pad", "meta_guidance",
+        ),
     )
 
     def render(self) -> str:

@@ -8,10 +8,12 @@ from types import SimpleNamespace
 import pytest
 
 from lingtai_kernel.meta_block import (
+    GUIDANCE_KEY,
     GuidanceSchemaError,
     attach_active_notifications,
     attach_active_runtime,
     build_meta,
+    build_meta_guidance,
     build_meta_readme,
     build_molt_context,
     build_guidance_with_meta_readme,
@@ -19,7 +21,9 @@ from lingtai_kernel.meta_block import (
     clear_active_notification_holder,
     current_tool_result_chars,
     render_meta,
+    slim_adapter_comment_for_tail,
     stamp_meta,
+    static_adapter_comment,
     validate_runtime_guidance,
 )
 from lingtai_kernel.llm.interface import ToolResultBlock
@@ -67,7 +71,9 @@ def test_build_meta_time_blind_regardless_of_timezone_awareness():
 
 def test_build_meta_includes_adapter_comment_when_chat_provides_one():
     agent = _fake_agent()
-    comment = {"adapter": "fake", "summary": "provider note"}
+    # The static "summary" prose is now resident in the meta_guidance system
+    # prompt section, so the tail keeps only dynamic scalars + a back-ref.
+    comment = {"adapter": "fake", "summary": "provider note", "turns_since_epoch_reset": 2}
     agent._session = SimpleNamespace(
         chat=SimpleNamespace(adapter_comment=lambda: comment),
         _token_decomp_dirty=True,
@@ -79,7 +85,11 @@ def test_build_meta_includes_adapter_comment_when_chat_provides_one():
 
     meta = build_meta(agent)
 
-    assert meta["adapter_comment"] == comment
+    tail = meta["adapter_comment"]
+    assert tail["adapter"] == "fake"
+    assert tail["turns_since_epoch_reset"] == 2
+    assert "summary" not in tail
+    assert "meta_guidance" in tail["meta_guidance_ref"]
 
 
 def test_build_meta_omits_empty_adapter_comment():
@@ -252,6 +262,143 @@ def test_build_guidance_with_meta_readme_keeps_section_shape_without_packaged_gu
     assert guidance["render_mode"] == "latest_tool_result_only"
     assert "meta_readme" not in guidance
     assert [section["id"] for section in guidance["sections"]] == ["meta_readme"]
+
+
+# ---------------------------------------------------------------------------
+# meta_guidance — resident system-prompt section + slimmed tail _meta.
+# ---------------------------------------------------------------------------
+
+
+def _meta_guidance_agent(static_comment=None):
+    """Agent stand-in whose chat exposes static_adapter_comment()."""
+    chat = SimpleNamespace(static_adapter_comment=lambda: static_comment)
+    return SimpleNamespace(_session=SimpleNamespace(chat=chat))
+
+
+def test_static_adapter_comment_reads_chat_static_method():
+    comment = {"adapter": "codex", "summary": "static rules"}
+    agent = _meta_guidance_agent(comment)
+    assert static_adapter_comment(agent) == comment
+
+
+def test_static_adapter_comment_none_without_method():
+    agent = SimpleNamespace(_session=SimpleNamespace(chat=SimpleNamespace()))
+    assert static_adapter_comment(agent) is None
+
+
+def test_build_meta_guidance_renders_guidance_meta_readme_and_adapter():
+    static_comment = {
+        "adapter": "codex",
+        "summary": "Codex plans turns as full or incremental.",
+        "summarize_note": (
+            "Summarize breaks the incremental prefix and opens a fresh full epoch; "
+            "delay non-urgent summarize until >=10 API calls and batch results; "
+            "summarize immediately under high context pressure."
+        ),
+    }
+    agent = _meta_guidance_agent(static_comment)
+
+    section = build_meta_guidance(agent)
+
+    assert isinstance(section, str) and section.strip()
+    # Packaged guidance section body is present.
+    assert "progressive disclosure" in section
+    # meta_readme content (the _meta envelope explanation) is present.
+    assert "_meta envelope" in section or "_meta` envelope" in section
+    assert "tool_meta" in section
+    assert "agent_meta" in section
+    # Static adapter rules are present (the 4 required Codex points).
+    assert "full epoch" in section
+    assert ">=10 API calls" in section
+
+
+def test_build_meta_guidance_without_adapter_comment_still_renders():
+    agent = _meta_guidance_agent(None)
+    section = build_meta_guidance(agent)
+    assert isinstance(section, str) and section.strip()
+    assert "tool_meta" in section
+
+
+def test_slim_adapter_comment_for_tail_drops_ledger_and_static_prose():
+    comment = {
+        "adapter": "codex",
+        "turns_since_epoch_reset": 3,
+        "last_full_api_calls_ago": 2,
+        "summary": "static summary prose",
+        "cache_note": "long static cache prose",
+        "summarize_full_note": "long static cache prose",
+        "cache_ledger": {
+            "rows": [[0, "F", 0.5, 100.0, 50.0, "sum"]],
+            "summary": {"api_calls": 1, "cache_rate": 0.5},
+        },
+        "maintenance_hint": {
+            "non_urgent_summarize": "wait",
+            "wait_api_calls_remaining": 7,
+            "reason": "long prose reason",
+        },
+    }
+
+    slim = slim_adapter_comment_for_tail(comment)
+
+    # Dynamic scalars survive.
+    assert slim["turns_since_epoch_reset"] == 3
+    assert slim["last_full_api_calls_ago"] == 2
+    # Static prose + the heavy 20-call cache history rows are gone.
+    assert "summary" not in slim
+    assert "cache_note" not in slim
+    assert "summarize_full_note" not in slim
+    assert "cache_ledger" not in slim
+    # No row history; a compact summary may remain.
+    assert "rows" not in json.dumps(slim)
+    assert slim["cache_ledger_summary"] == {"api_calls": 1, "cache_rate": 0.5}
+    # maintenance decision survives, long prose reason dropped.
+    assert slim["maintenance_hint"]["non_urgent_summarize"] == "wait"
+    assert "reason" not in slim["maintenance_hint"]
+    # A hook points at the resident meta_guidance section.
+    assert "meta_guidance" in slim["meta_guidance_ref"]
+
+
+def test_attach_active_runtime_tail_guidance_is_ref_not_full_sections():
+    agent = _runtime_agent(total_calls=1)
+    content = _stamped_result({"current_time": "T"}, 12)
+    block = ToolResultBlock(id="t1", name="x", content=content)
+
+    attach_active_runtime(agent, [block], prior_holder=None)
+
+    guidance = block.content["_meta"][GUIDANCE_KEY]
+    # Tail guidance is a lightweight ref/hook, not the full ordered sections.
+    assert "sections" not in guidance
+    assert "meta_guidance" in guidance.get("ref", "") + json.dumps(guidance)
+
+
+def test_attach_active_runtime_tail_adapter_comment_has_no_ledger_rows():
+    comment = {
+        "adapter": "codex",
+        "turns_since_epoch_reset": 4,
+        "summary": "static summary",
+        "cache_note": "long static prose",
+        "cache_ledger": {
+            "rows": [[0, "F", 0.5, 100.0, 50.0, "sum"]],
+            "summary": {"api_calls": 1},
+        },
+    }
+    agent = _runtime_agent(total_calls=1)
+    agent._session = SimpleNamespace(
+        chat=SimpleNamespace(adapter_comment=lambda: comment)
+    )
+    block = ToolResultBlock(
+        id="t-adapter", name="x", content=_stamped_result({"current_time": "T"}, 12)
+    )
+
+    attach_active_runtime(agent, [block])
+
+    agent_meta = block.content["_meta"]["agent_meta"]
+    tail_comment = agent_meta["adapter_comment"]
+    assert tail_comment["turns_since_epoch_reset"] == 4
+    assert "cache_ledger" not in tail_comment
+    assert "rows" not in json.dumps(tail_comment)
+    assert "summary" not in tail_comment
+    assert "meta_guidance" in tail_comment["meta_guidance_ref"]
 
 
 def _fake_agent_with_lang(lang: str, *, time_awareness: bool = True):
@@ -1002,22 +1149,12 @@ def test_attach_active_runtime_stamps_latest_with_state_and_guidance():
     assert agent_meta["elapsed_ms"] == 12
     # active_turn_tool_calls is sourced from the guard and lives under agent_meta.
     assert agent_meta["active_turn_tool_calls"] == 3
-    # guidance comes from guidance.json (package resource) and validates.
+    # Tail guidance is now a lightweight ref/hook pointing at the resident
+    # meta_guidance system-prompt section — NOT the full ordered sections,
+    # which moved into the system prompt to stop riding on every tail _meta.
     guidance = meta["guidance"]
-    assert guidance["schema_version"] == 1
-    # The latest-only meta_readme self-describes _meta as a guidance section,
-    # not as a sibling key beside sections.
-    assert "meta_readme" not in guidance
-    sections = {section["id"]: section for section in guidance["sections"]}
-    readme_section = sections["meta_readme"]
-    readme_body = readme_section["body"]
-    assert "`tool_meta`" in readme_body
-    assert "`agent_meta`" in readme_body
-    assert "`guidance`" in readme_body
-    assert "`notification_guidance`" in readme_body
-    assert "`notifications`" in readme_body
-    assert "every tool result" in readme_body.lower()
-    assert "latest" in readme_body.lower()
+    assert "sections" not in guidance
+    assert "meta_guidance" in json.dumps(guidance)
     # The transient scaffolding is consumed.
     assert "_runtime_pending" not in block.content
     # No top-level active_turn_tool_calls repetition, and no legacy _runtime key.
@@ -1028,7 +1165,9 @@ def test_attach_active_runtime_stamps_latest_with_state_and_guidance():
 
 def test_attach_active_runtime_refreshes_adapter_comment_at_batch_boundary():
     agent = _runtime_agent(total_calls=1)
-    comment = {"adapter": "fake", "summary": "late provider note"}
+    # Dynamic scalar survives onto the tail; static "summary" prose moves to the
+    # resident meta_guidance system prompt section (replaced by a back-ref).
+    comment = {"adapter": "fake", "summary": "late provider note", "next_reset_in": 5}
     agent._session = SimpleNamespace(
         chat=SimpleNamespace(adapter_comment=lambda: comment)
     )
@@ -1037,7 +1176,11 @@ def test_attach_active_runtime_refreshes_adapter_comment_at_batch_boundary():
     attach_active_runtime(agent, [block])
 
     agent_meta = block.content["_meta"]["agent_meta"]
-    assert agent_meta["adapter_comment"] == comment
+    tail = agent_meta["adapter_comment"]
+    assert tail["adapter"] == "fake"
+    assert tail["next_reset_in"] == 5
+    assert "summary" not in tail
+    assert "meta_guidance" in tail["meta_guidance_ref"]
 
 def test_attach_active_runtime_moves_to_latest_and_clears_prior():
     agent = _runtime_agent(total_calls=1)

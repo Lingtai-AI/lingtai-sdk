@@ -37,6 +37,24 @@ def test_rules_renders_after_covenant_and_tools():
     assert cov_pos < tools_pos < rules_pos
 
 
+def test_meta_guidance_renders_as_final_section():
+    """`meta_guidance` is the resident kernel-runtime-guidance section and must
+    render last — after every Batch-2 section (e.g. `pad`) — so it sits at the
+    very tail of the system prompt. Static guidance moved here off the per-turn
+    tail `_meta`."""
+    mgr = SystemPromptManager()
+    mgr.write_section("pad", "Working notes.")
+    mgr.write_section("meta_guidance", "Resident runtime guidance.", protected=True)
+    prompt = mgr.render()
+    pad_pos = prompt.index("Working notes.")
+    mg_pos = prompt.index("Resident runtime guidance.")
+    assert pad_pos < mg_pos
+    assert "## meta_guidance" in prompt
+    # It lands in the final batch, never in the unordered pre-tail bucket.
+    batches = mgr.render_batches()
+    assert "Resident runtime guidance." in batches[-1]
+
+
 def test_rules_section_absent_when_empty():
     mgr = SystemPromptManager()
     mgr.write_section("covenant", "Be good.", protected=True)

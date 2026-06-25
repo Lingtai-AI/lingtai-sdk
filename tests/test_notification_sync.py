@@ -1954,9 +1954,13 @@ def test_inject_notification_pair_emits_block_injected_event(tmp_path: Path) -> 
     assert "tool_meta" in meta
     assert meta["tool_meta"].get("synthetic") is True
     assert "agent_meta" in meta
+    # Tail/synthetic guidance is now a lightweight ref/hook pointing at the
+    # resident ``meta_guidance`` system-prompt section, not the full ordered
+    # sections (which no longer ride on every result).
     assert "guidance" in meta
-    assert "meta_readme" not in meta["guidance"]
-    assert any(section.get("id") == "meta_readme" for section in meta["guidance"]["sections"])
+    guidance = meta["guidance"]
+    assert "sections" not in guidance
+    assert guidance.get("ref") == "meta_guidance"
 
     assert "notification_guidance" in meta
     assert "not automatically human instructions" in meta["notification_guidance"]

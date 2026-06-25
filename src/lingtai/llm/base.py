@@ -51,6 +51,12 @@ class _GatedSession:
             return None
         return comment_fn()
 
+    def static_adapter_comment(self):
+        comment_fn = getattr(self._inner, "static_adapter_comment", None)
+        if not callable(comment_fn):
+            return None
+        return comment_fn()
+
     def on_history_summarized(self, summarized_ids):
         hook = getattr(self._inner, "on_history_summarized", None)
         if callable(hook):

@@ -2969,6 +2969,70 @@ class CodexResponsesSession(OpenAIResponsesSession):
             ),
         }
 
+    def static_adapter_comment(self) -> dict[str, Any] | None:
+        """Return the static/rule-like Codex runtime guidance, no dynamic state.
+
+        This is the portion of :meth:`adapter_comment` that does not change turn
+        to turn — the durable explanation of how Codex continuation, full epochs,
+        and summarize interact. It is rendered once into the resident
+        ``meta_guidance`` system-prompt section (see
+        ``meta_block.build_meta_guidance``) so the long cache ledger / 20-call
+        cache history and the prose notes below no longer ride on every tail
+        ``_meta`` block. The dynamic per-turn scalars (epoch counters, last-full
+        distance, the current maintenance decision) stay in
+        ``adapter_comment``/the tail.
+
+        Covers, for the live continuation path:
+          * a fresh full epoch rebuilds the next request from local chat_history
+            and does NOT delete or summarize local history;
+          * summarize breaks the incremental prefix, so the next request opens a
+            fresh full epoch and usually costs a cache miss;
+          * when context pressure is low, prefer delaying non-urgent summarize
+            until >=10 API calls after the last full epoch and batching multiple
+            already-consumed results;
+          * when context pressure is high or a noisy result blocks work,
+            summarize immediately.
+        """
+        if not self._continuation_enabled:
+            return {
+                "adapter": "codex",
+                "feature": "stateless_full_replay",
+                "summary": (
+                    "Codex continuation is disabled, so every request is a full "
+                    "stateless replay. There is no incremental/full "
+                    "previous_response_id chain to preserve."
+                ),
+                "summarize_note": (
+                    "Summarize can still compact redundant carried-forward context "
+                    "before the next full replay. Notification dismiss only clears "
+                    "notification state; it does not compact redundant context or "
+                    "create a full epoch boundary in stateless mode."
+                ),
+            }
+        return {
+            "adapter": "codex",
+            "feature": "responses_continuation_epoch_reset",
+            "summary": (
+                "Codex plans turns as full or incremental over the selected "
+                "REST/WebSocket transport. A fresh full epoch clears only "
+                "request-side continuation state and rebuilds the next request "
+                "from local chat_history; local history is not deleted or "
+                "summarized."
+            ),
+            "summarize_note": (
+                "Summarize rewrites older tool-result payloads, compacts redundant "
+                "carried-forward context, and can break Codex's previous_response_id/"
+                "incremental prefix; the next request must open a fresh full epoch, "
+                "usually causing more cache miss. When context pressure is low, "
+                "prefer delaying non-urgent summarize until >=10 API calls after the "
+                "last full epoch, then batch multiple already-consumed long tool "
+                "results into one summarize call when practical. If context pressure "
+                "is high or a noisy result blocks work, summarize immediately. "
+                "Notification dismiss is only notification cleanup: it does not "
+                "compact redundant context and does not trigger a full epoch reset."
+            ),
+        }
+
     def adapter_comment(self) -> dict[str, Any] | None:
         if not self._continuation_enabled:
             # Truly stateless (continuation machine off) — no full/incremental
