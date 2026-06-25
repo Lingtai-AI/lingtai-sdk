@@ -155,15 +155,34 @@ class ChatSession(ABC):
     pre_request_hook: "Callable[[ChatInterface], None] | None" = None
 
     def adapter_comment(self):
-        """Optional adapter-authored, agent-facing runtime note for `_meta.agent_meta`.
+        """Optional legacy combined adapter note for ``_meta.agent_meta``.
 
-        Adapters can override this to surface provider-specific state that the
-        agent must reason about (for example remote state reuse semantics). The
-        value must be small and JSON-serializable; falsy values are omitted.
+        New adapters should prefer the explicit partitioned methods below:
+        ``static_adapter_comment`` for resident, rule-like system-prompt text
+        and ``dynamic_adapter_comment`` for per-turn tail state.  This legacy
+        method remains for compatibility with adapters/tests that still expose
+        one combined note.
         """
-
         return None
 
+    def static_adapter_comment(self):
+        """Optional adapter-authored static note for resident ``meta_guidance``.
+
+        Return only durable/rule-like system-prompt content here.  Dynamic
+        counters, ledgers, run state, and per-turn measurements belong in
+        ``dynamic_adapter_comment`` so the kernel does not have to guess which
+        adapter keys are static.
+        """
+        return None
+
+    def dynamic_adapter_comment(self):
+        """Optional adapter-authored dynamic note for tail ``_meta.agent_meta``.
+
+        Return only per-turn/runtime state here.  The kernel may still perform
+        generic size trimming (for example, dropping verbose ledger rows), but
+        it should not need adapter-specific static-key blocklists.
+        """
+        return None
     def on_history_summarized(self, summarized_ids: list[str]) -> None:
         """Hook called after `system(action='summarize')` mutates chat history."""
 

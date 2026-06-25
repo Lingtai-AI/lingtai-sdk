@@ -2969,49 +2969,38 @@ class CodexResponsesSession(OpenAIResponsesSession):
             ),
         }
 
-    def static_adapter_comment(self) -> dict[str, Any] | None:
-        """Return the static/rule-like Codex runtime guidance, no dynamic state.
+    def static_adapter_comment(self):
+        """Return the static, rule-like Codex adapter guidance.
 
-        This is the portion of :meth:`adapter_comment` that does not change turn
-        to turn — the durable explanation of how Codex continuation, full epochs,
-        and summarize interact. It is rendered once into the resident
-        ``meta_guidance`` system-prompt section (see
-        ``meta_block.build_meta_guidance``) so the long cache ledger / 20-call
-        cache history and the prose notes below no longer ride on every tail
-        ``_meta`` block. The dynamic per-turn scalars (epoch counters, last-full
-        distance, the current maintenance decision) stay in
-        ``adapter_comment``/the tail.
-
-        Covers, for the live continuation path:
-          * a fresh full epoch rebuilds the next request from local chat_history
-            and does NOT delete or summarize local history;
-          * summarize breaks the incremental prefix, so the next request opens a
-            fresh full epoch and usually costs a cache miss;
-          * when context pressure is low, prefer delaying non-urgent summarize
-            until >=10 API calls after the last full epoch and batching multiple
-            already-consumed results;
-          * when context pressure is high or a noisy result blocks work,
-            summarize immediately.
+        This content is safe to hoist into the resident ``meta_guidance``
+        section because it does not depend on the current cache ledger, epoch,
+        or per-turn counters.
         """
+        if not getattr(self, "_use_responses_api", True):
+            return None
         if not self._continuation_enabled:
             return {
                 "adapter": "codex",
                 "feature": "stateless_full_replay",
                 "summary": (
-                    "Codex continuation is disabled, so every request is a full "
-                    "stateless replay. There is no incremental/full "
-                    "previous_response_id chain to preserve."
+                    "Codex is in stateless full-replay mode: every request is "
+                    "rebuilt from local chat_history. Local history is not "
+                    "deleted by request-side resets."
                 ),
                 "summarize_note": (
-                    "Summarize can still compact redundant carried-forward context "
-                    "before the next full replay. Notification dismiss only clears "
-                    "notification state; it does not compact redundant context or "
-                    "create a full epoch boundary in stateless mode."
+                    "Summarize still rewrites visible history and can change the "
+                    "next full request. Notification dismiss is only notification "
+                    "cleanup and does not compact context."
                 ),
             }
+
         return {
             "adapter": "codex",
-            "feature": "responses_continuation_epoch_reset",
+            "feature": (
+                "responses_websocket_epoch_reset"
+                if self._ws_enabled
+                else "responses_rest_epoch_reset"
+            ),
             "summary": (
                 "Codex plans turns as full or incremental over the selected "
                 "REST/WebSocket transport. A fresh full epoch clears only "
@@ -3020,104 +3009,111 @@ class CodexResponsesSession(OpenAIResponsesSession):
                 "summarized."
             ),
             "summarize_note": (
-                "Summarize rewrites older tool-result payloads, compacts redundant "
-                "carried-forward context, and can break Codex's previous_response_id/"
-                "incremental prefix; the next request must open a fresh full epoch, "
-                "usually causing more cache miss. When context pressure is low, "
-                "prefer delaying non-urgent summarize until >=10 API calls after the "
-                "last full epoch, then batch multiple already-consumed long tool "
-                "results into one summarize call when practical. If context pressure "
-                "is high or a noisy result blocks work, summarize immediately. "
-                "Notification dismiss is only notification cleanup: it does not "
-                "compact redundant context and does not trigger a full epoch reset."
+                "Summarize rewrites older tool-result payloads and/or carried "
+                "context, breaks the previous_response_id/incremental prefix, "
+                "and forces the next request to open a fresh full epoch, usually "
+                "causing a cache miss. Under low pressure, wait until >=10 API "
+                "calls after the last full epoch before non-urgent summarize and "
+                "batch multiple completed noisy results together. Under high "
+                "context pressure or after a very noisy result, summarize "
+                "immediately. Notification dismiss is only notification cleanup: "
+                "it does not compact context, delete local history, or reset the "
+                "epoch."
             ),
         }
 
-    def adapter_comment(self) -> dict[str, Any] | None:
-        if not self._continuation_enabled:
-            # Truly stateless (continuation machine off) — no full/incremental
-            # previous_response_id chain to preserve. Not reachable today (both
-            # transports enable continuation); kept for a future stateless mode.
-            return {
-                "adapter": "codex",
-                "feature": "stateless_full_replay",
-                "transport": self._transport,
-                "ws_enabled": self._ws_enabled,
-                "continuation_enabled": False,
-                "summary": (
-                    "Codex continuation is disabled, so every request is a full "
-                    "stateless replay. There is no incremental/full "
-                    "previous_response_id chain to preserve."
-                ),
-                "summarize_full_note": (
-                    "Summarize can still compact redundant carried-forward context "
-                    "before the next full replay. Notification dismiss only clears "
-                    "notification state; it does not compact redundant context or "
-                    "create a full epoch boundary in stateless mode."
-                ),
-                # Compatibility alias for older prompt/diagnostic consumers.
-                "summarize_ws_full_note": (
-                    "Summarize can still compact redundant carried-forward context "
-                    "before the next full replay. Notification dismiss only clears "
-                    "notification state; it does not compact redundant context or "
-                    "create a full epoch boundary in stateless mode."
-                ),
-            }
-        self._refresh_ws_epoch_reset_turn_limit()
-        limit = self._ws_epoch_reset_turn_limit
-        next_reset_in = None
-        if limit > 0:
-            next_reset_in = max(0, limit - self._ws_turns_since_epoch_reset)
-        cache_note = (
-            "Summarize rewrites older tool-result payloads, compacts redundant "
-            "carried-forward context, and can break Codex's previous_response_id/"
-            "incremental prefix; the next request must open a fresh full epoch, "
-            "usually causing more cache miss. When context pressure is low, "
-            "prefer delaying non-urgent summarize until >=10 API calls after the "
-            "last full epoch, then batch multiple already-consumed long tool "
-            "results into one summarize call when practical. If context pressure "
-            "is high or a noisy result blocks work, summarize immediately. "
-            "Notification dismiss is only notification cleanup: it does not "
-            "compact redundant context and does not trigger a full epoch reset."
-        )
-        cache_ledger = self._ws_cache_ledger_comment()
-        last_full = cache_ledger["last_full"]
-        last_full_api_calls_ago = last_full["api_calls_ago"]
-        return {
+    def dynamic_adapter_comment(self):
+        """Return dynamic, per-turn Codex adapter state for tail ``_meta``."""
+        if not getattr(self, "_use_responses_api", True):
+            return None
+
+        comment = {
             "adapter": "codex",
             "feature": (
                 "responses_websocket_epoch_reset"
-                if self._transport == "websocket"
+                if self._ws_enabled
                 else "responses_rest_epoch_reset"
-            ),
-            "transport": self._transport,
+            ) if self._continuation_enabled else "stateless_full_replay",
+            "transport": "websocket" if self._ws_enabled else "rest",
             "ws_enabled": self._ws_enabled,
-            "continuation_enabled": True,
-            "epoch_reset_turns": limit,
-            "turns_since_epoch_reset": self._ws_turns_since_epoch_reset,
-            "next_reset_in": next_reset_in,
-            "last_full_api_calls_ago": last_full_api_calls_ago,
-            "last_full_reason": last_full["reason"],
-            # Compatibility aliases for older prompt/diagnostic consumers.
-            "last_ws_full_api_calls_ago": last_full_api_calls_ago,
-            "last_ws_full_reason": last_full["reason"],
-            "summary": (
-                "Codex plans turns as full or incremental over the selected "
-                "REST/WebSocket transport. A fresh full epoch clears only "
-                "request-side continuation state and rebuilds the next request "
-                "from local chat_history; local history is not deleted or summarized."
-            ),
-            "cache_ledger": cache_ledger,
-            "maintenance_hint": self._ws_maintenance_hint(
-                recorded_api_calls=cache_ledger["recorded_api_calls"],
-                last_ws_full_api_calls_ago=last_full_api_calls_ago,
-            ),
-            "cache_note": cache_note,
-            "summarize_full_note": cache_note,
-            # Compatibility alias for older prompt/diagnostic consumers.
-            "summarize_ws_full_note": cache_note,
+            "continuation_enabled": self._continuation_enabled,
         }
+        if not self._continuation_enabled:
+            return comment
 
+        ledger = self._ws_cache_ledger_comment()
+        comment.update(
+            {
+                "epoch_reset_turns": self._ws_epoch_reset_turn_limit,
+                "turns_since_epoch_reset": self._ws_turns_since_epoch_reset,
+                "next_reset_in": max(
+                    self._ws_epoch_reset_turn_limit - self._ws_turns_since_epoch_reset,
+                    0,
+                ),
+                "cache_ledger": ledger,
+            }
+        )
+        if isinstance(ledger, dict):
+            summary = ledger.get("summary")
+            if isinstance(summary, dict):
+                comment["cache_ledger_summary"] = summary
+            last_full = ledger.get("last_full")
+            if isinstance(last_full, dict):
+                comment["last_full_api_calls_ago"] = last_full.get("api_calls_ago")
+                comment["last_full_reason"] = last_full.get("reason")
+            else:
+                comment["last_full_api_calls_ago"] = None
+                comment["last_full_reason"] = "not_recorded"
+            last_ws_full = ledger.get("last_ws_full")
+            if isinstance(last_ws_full, dict):
+                comment["last_ws_full_api_calls_ago"] = last_ws_full.get("api_calls_ago")
+                comment["last_ws_full_reason"] = last_ws_full.get("reason")
+            else:
+                comment["last_ws_full_api_calls_ago"] = comment.get(
+                    "last_full_api_calls_ago"
+                )
+                comment["last_ws_full_reason"] = comment.get("last_full_reason")
+
+        recorded_api_calls = 0
+        if isinstance(ledger, dict):
+            try:
+                recorded_api_calls = int(ledger.get("recorded_api_calls") or 0)
+            except (TypeError, ValueError):
+                recorded_api_calls = 0
+        last_ws_full_ago = comment.get("last_ws_full_api_calls_ago")
+        comment["maintenance_hint"] = self._ws_maintenance_hint(
+            recorded_api_calls=recorded_api_calls,
+            last_ws_full_api_calls_ago=(
+                last_ws_full_ago if isinstance(last_ws_full_ago, int) else None
+            ),
+        )
+        return comment
+
+    def adapter_comment(self):
+        """Return the legacy combined Codex adapter note.
+
+        Kernel tail rendering now prefers ``dynamic_adapter_comment``.  This
+        compatibility method composes the explicit static/dynamic partitions so
+        older tests or callers still see the historical note aliases without
+        re-authoring the static prose in a second place.
+        """
+        static = self.static_adapter_comment()
+        dynamic = self.dynamic_adapter_comment()
+        if static is None:
+            return dynamic
+        if dynamic is None:
+            return static
+        if not isinstance(static, dict) or not isinstance(dynamic, dict):
+            return dynamic or static
+
+        comment = dict(static)
+        comment.update(dynamic)
+        summarize_note = static.get("summarize_note")
+        if isinstance(summarize_note, str):
+            comment["cache_note"] = summarize_note
+            comment["summarize_full_note"] = summarize_note
+            comment["summarize_ws_full_note"] = summarize_note
+        return comment
     def reset_provider_turn_state(self) -> None:
         self.reset_ws_turn()
 

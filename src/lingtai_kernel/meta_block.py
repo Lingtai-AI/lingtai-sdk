@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json as _json
 import time as _time
+from collections.abc import Mapping
 from importlib import resources as _resources
 
 from .config import (
@@ -221,60 +222,75 @@ def static_adapter_comment(agent):
         return None
 
 
-# Keys that are static/rule-like in an adapter_comment — their long-form content
-# is rendered into the resident ``meta_guidance`` system-prompt section, so they
-# are dropped from the per-turn tail ``_meta.agent_meta.adapter_comment``.  The
-# heavy ``cache_ledger`` (the 20-call cache history rows) is likewise dropped
-# from the tail; its current summary is preserved as a compact scalar set.
-_ADAPTER_COMMENT_STATIC_KEYS = frozenset({
-    "summary",
-    "cache_note",
-    "summarize_full_note",
-    "summarize_ws_full_note",
-    "summarize_note",
-    "cache_ledger",
-})
+def dynamic_adapter_comment(agent: AgentState) -> Mapping[str, Any] | None:
+    """Return adapter-owned dynamic tail state for ``_meta.agent_meta``.
 
-
-def slim_adapter_comment_for_tail(comment):
-    """Return a compact tail-safe view of an adapter_comment.
-
-    Strips the static/rule-like prose (now resident in ``meta_guidance``) and the
-    heavy ``cache_ledger`` 20-call history rows, keeping only the small dynamic
-    scalars that are meaningful per turn (epoch counters, last-full distance, the
-    current maintenance decision) plus a lightweight ``meta_guidance_ref`` hook
-    pointing at the resident system-prompt section.  A compact
-    ``cache_ledger_summary`` (current cache rate / counts, no rows) is preserved
-    when the full comment carried a ``cache_ledger``.
-
-    Non-dict input is returned unchanged.
+    Adapters that can separate static guidance from dynamic runtime state should
+    implement ``dynamic_adapter_comment``.  For legacy adapters, fall back to the
+    combined ``adapter_comment`` payload; the generic tail slimmer will only
+    trim oversized structures, not guess adapter-specific static keys.
     """
-    if not isinstance(comment, dict):
-        return comment
-    slim = {
-        key: value
-        for key, value in comment.items()
-        if key not in _ADAPTER_COMMENT_STATIC_KEYS
-    }
-    ledger = comment.get("cache_ledger")
-    if isinstance(ledger, dict):
+    session = getattr(agent, "_session", None)
+    chat = getattr(session, "chat", None)
+    comment_fn = getattr(chat, "dynamic_adapter_comment", None)
+    if callable(comment_fn):
+        try:
+            comment = comment_fn()
+        except Exception:
+            logger.debug("llm_dynamic_adapter_comment_failed", exc_info=True)
+            comment = None
+        if comment:
+            if not isinstance(comment, Mapping):
+                return {"note": str(comment)}
+            return dict(comment)
+    return adapter_comment(agent)
+
+
+def slim_adapter_comment_for_tail(
+    comment: Mapping[str, Any] | None,
+) -> Mapping[str, Any] | None:
+    """Trim dynamic adapter tail payload without guessing static keys.
+
+    Static-vs-dynamic partitioning is owned by the adapter via
+    ``static_adapter_comment`` / ``dynamic_adapter_comment``.  The kernel only
+    removes verbose dynamic structures that are too heavy for every-turn tail
+    metadata and adds a hook back to the resident ``meta_guidance`` section.
+    """
+    if not comment:
+        return None
+    if not isinstance(comment, Mapping):
+        return {"note": str(comment), "meta_guidance_ref": build_meta_guidance_ref()}
+
+    slim: dict[str, Any] = dict(comment)
+    ledger = slim.pop("cache_ledger", None)
+    if isinstance(ledger, Mapping):
         summary = ledger.get("summary")
-        if isinstance(summary, dict):
+        if isinstance(summary, Mapping) and "cache_ledger_summary" not in slim:
             slim["cache_ledger_summary"] = dict(summary)
+        last_full = ledger.get("last_full")
+        if isinstance(last_full, Mapping):
+            slim.setdefault("last_full_api_calls_ago", last_full.get("api_calls_ago"))
+            slim.setdefault("last_full_reason", last_full.get("reason"))
+        last_ws_full = ledger.get("last_ws_full")
+        if isinstance(last_ws_full, Mapping):
+            slim.setdefault(
+                "last_ws_full_api_calls_ago",
+                last_ws_full.get("api_calls_ago"),
+            )
+            slim.setdefault("last_ws_full_reason", last_ws_full.get("reason"))
+
     hint = slim.get("maintenance_hint")
-    if isinstance(hint, dict):
-        # Keep the decision and remaining-wait scalars; drop the long prose
-        # reason (the rule lives in meta_guidance).
-        slim["maintenance_hint"] = {
-            key: value
-            for key, value in hint.items()
-            if key != "reason"
-        }
-    slim["meta_guidance_ref"] = (
-        "Static adapter rules (full-epoch/summarize/cache behavior) are in the "
-        "system prompt section meta_guidance; only dynamic scalars stay here."
-    )
-    return slim
+    if isinstance(hint, Mapping):
+        compact_hint = dict(hint)
+        compact_hint.pop("reason", None)
+        if compact_hint:
+            slim["maintenance_hint"] = compact_hint
+        else:
+            slim.pop("maintenance_hint", None)
+
+    if slim:
+        slim.setdefault("meta_guidance_ref", build_meta_guidance_ref())
+    return slim or None
 
 
 TOOL_RESULT_CHARS_TOP_N = 10
@@ -843,7 +859,7 @@ def build_meta(agent) -> dict:
 
     meta["current_tool_result_chars"] = current_tool_result_chars(agent)
 
-    comment = adapter_comment(agent)
+    comment = dynamic_adapter_comment(agent)
     if comment:
         # Only the slim dynamic view rides on the tail; the static adapter rules
         # are resident in the ``meta_guidance`` system-prompt section.
@@ -1360,7 +1376,7 @@ def attach_active_runtime(
     # rule-like prose plus a long cache ledger.  The static content is resident
     # in the ``meta_guidance`` system-prompt section, so the tail keeps only the
     # slim dynamic view plus a ref back to that section.
-    comment = adapter_comment(agent)
+    comment = dynamic_adapter_comment(agent)
     if comment:
         agent_meta["adapter_comment"] = slim_adapter_comment_for_tail(comment)
 
