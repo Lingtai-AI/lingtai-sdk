@@ -1,11 +1,13 @@
 """Live synchronous Codex Responses-over-WebSocket transport (EXPERIMENTAL).
 
 This is the real wire driver for the experimental websocket path mirrored from
-the official Codex CLI (repo openai/codex, tag ``rust-v0.130.0``). It is GATED
-behind ``LINGTAI_CODEX_WS`` and only reached on a live run — the unit tests in
-``tests/test_codex_ws_session.py`` inject a fake transport and never import this
-module. It is deliberately kept out of the hot ``adapter`` import path and only
-loaded lazily by ``_default_codex_ws_transport_factory``.
+the official Codex CLI (repo openai/codex, tag ``rust-v0.130.0``). Normal runtime
+is hardcoded to REST and never selects this transport; it is reached ONLY when a
+session is built with an explicit ``transport="websocket"`` kwarg (tests /
+internal / a live smoke run) — there is no environment-variable selector. The
+unit tests in ``tests/test_codex_ws_session.py`` inject a fake transport and never
+import this module. It is deliberately kept out of the hot ``adapter`` import path
+and only loaded lazily by ``_default_codex_ws_transport_factory``.
 
 Design notes / source citations (all in the official source clone):
 
