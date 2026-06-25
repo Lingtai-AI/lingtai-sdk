@@ -32,7 +32,7 @@ from lingtai.llm.openai.codex_ws import SyncCodexWebsocketTransport
 from lingtai.llm.openai.adapter import (
     CodexResponsesSession,
     _CodexWsFallback,
-    _codex_ws_enabled,
+    _CODEX_TRANSPORT_DEFAULT,
 )
 
 
@@ -314,30 +314,18 @@ def test_ws_explicitly_disabled_uses_http():
     assert session._client.responses.kwargs[0]["store"] is False
 
 
-def test_codex_ws_enabled_defaults_on_when_env_unset(monkeypatch):
-    """Unset ``LINGTAI_CODEX_WS`` means the websocket transport is on by default."""
-    monkeypatch.delenv("LINGTAI_CODEX_WS", raising=False)
-    assert _codex_ws_enabled() is True
+# ---------------------------------------------------------------------------
+# Transport axis: REST is hardcoded for normal runtime. There is NO environment
+# variable that selects the transport — an inherited ``LINGTAI_CODEX_WS=1`` or
+# ``LINGTAI_CODEX_TRANSPORT=websocket`` must NOT flip the adapter to WebSocket.
+# WebSocket is reachable only via the explicit ``transport=``/``ws_enabled=``
+# constructor kwarg (tests / internal / future).
+# ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("value", ["0", "false", "no", "off", "FALSE", "Off", " no "])
-def test_codex_ws_enabled_explicit_off_disables(monkeypatch, value):
-    """An explicit falsy value forces the HTTP full-replay path."""
-    monkeypatch.setenv("LINGTAI_CODEX_WS", value)
-    assert _codex_ws_enabled() is False
-
-
-@pytest.mark.parametrize("value", ["1", "true", "yes", "on", "", "anything"])
-def test_codex_ws_enabled_other_values_stay_on(monkeypatch, value):
-    """Any non-falsy value (including empty/unrecognized) leaves the default on."""
-    monkeypatch.setenv("LINGTAI_CODEX_WS", value)
-    assert _codex_ws_enabled() is True
-
-
-def test_ws_enabled_by_default_when_env_unset_uses_transport(monkeypatch):
-    """With env unset and a transport factory available, the session uses WS."""
-    monkeypatch.delenv("LINGTAI_CODEX_WS", raising=False)
-    transport = FakeWsTransport()
+def _make_default_session(**kwargs):
+    """A Codex session with NO explicit transport kwarg (uses the runtime default)."""
+    transport = kwargs.pop("ws_transport", None) or FakeWsTransport()
     session = CodexResponsesSession(
         client=_HttpFallbackClient(),
         model="gpt-5.5",
@@ -348,15 +336,100 @@ def test_ws_enabled_by_default_when_env_unset_uses_transport(monkeypatch):
         session_id="sess-stable",
         thread_id="sess-stable",
         ws_transport_factory=lambda url, headers: transport,
-        # ws_enabled left as None -> resolved from env default (on)
+        **kwargs,
     )
+    return session, transport
 
+
+def test_runtime_default_transport_is_rest_constant():
+    """The hardcoded normal-runtime transport default is REST."""
+    assert _CODEX_TRANSPORT_DEFAULT == "rest"
+
+
+def test_default_session_is_rest_and_does_not_touch_ws_transport():
+    """With no explicit transport kwarg the session is REST and never uses the WS
+    transport factory."""
+    session, transport = _make_default_session()
+
+    assert session._transport == "rest"
+    assert session._ws_enabled is False
+    assert session._continuation_enabled is True
+    session.send("hello")
+
+    # REST path used: HTTP client saw one full request; WS transport untouched.
+    assert transport.sent_frames == []
+    assert len(session._client.responses.kwargs) == 1
+    first = session._client.responses.kwargs[0]
+    assert first["store"] is False
+    assert "previous_response_id" not in first
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"LINGTAI_CODEX_WS": "1"},
+        {"LINGTAI_CODEX_WS": "true"},
+        {"LINGTAI_CODEX_TRANSPORT": "websocket"},
+        {"LINGTAI_CODEX_TRANSPORT": "ws"},
+        {"LINGTAI_CODEX_WS": "1", "LINGTAI_CODEX_TRANSPORT": "websocket"},
+    ],
+)
+def test_env_vars_do_not_flip_runtime_to_websocket(monkeypatch, env):
+    """No transport env var switches the runtime: even ``LINGTAI_CODEX_WS=1`` and/or
+    ``LINGTAI_CODEX_TRANSPORT=websocket`` leave the default session on REST and never
+    touch the WS transport."""
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+    session, transport = _make_default_session()
+
+    assert session._transport == "rest"
+    assert session._ws_enabled is False
+    session.send("hello")
+
+    # Still REST: WS transport factory never used, HTTP client saw the request.
+    assert transport.sent_frames == []
+    assert len(session._client.responses.kwargs) == 1
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {},
+        {"LINGTAI_CODEX_WS": "1"},
+        {"LINGTAI_CODEX_TRANSPORT": "rest"},
+        {"LINGTAI_CODEX_TRANSPORT": "websocket"},
+    ],
+)
+def test_explicit_websocket_kwarg_selects_ws_regardless_of_env(monkeypatch, env):
+    """WebSocket is still reachable via the explicit ``transport="websocket"`` kwarg
+    (tests / internal), independent of any env var."""
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+    session, transport = _make_default_session(transport="websocket")
+
+    assert session._transport == "websocket"
     assert session._ws_enabled is True
     session.send("hello")
 
     # WS path used: the injected transport saw the frame, HTTP fallback untouched.
     assert transport.sent_frames
     assert len(session._client.responses.kwargs) == 0
+
+
+def test_explicit_rest_kwarg_selects_rest_regardless_of_env(monkeypatch):
+    """An explicit ``transport="rest"`` kwarg stays REST even with WS env set."""
+    monkeypatch.setenv("LINGTAI_CODEX_WS", "1")
+    monkeypatch.setenv("LINGTAI_CODEX_TRANSPORT", "websocket")
+
+    session, transport = _make_default_session(transport="rest")
+
+    assert session._transport == "rest"
+    assert session._ws_enabled is False
+    session.send("hello")
+    assert transport.sent_frames == []
+    assert len(session._client.responses.kwargs) == 1
 
 
 class _ErrorWsConnection:
@@ -551,6 +624,160 @@ def test_second_turn_is_incremental_with_realistic_output_items():
     assert "hello" not in flat and "hi there" not in flat
     assert "again" in flat
     assert int(second.usage.extra["codex_ws_delta_len"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# REST transport runs the SAME full->incremental planner (the corrected default).
+# These mirror the WebSocket realistic-output tests above but drive the request
+# through ``client.responses.create`` instead of the websocket wire.
+# ---------------------------------------------------------------------------
+
+
+class RealisticRestResponses:
+    """``client.responses.create`` stub that streams a realistic assistant turn.
+
+    Records every request kwargs and yields a text delta + an OUTPUT-schema
+    message item + ``response.completed`` with a distinct, incrementing response
+    id per call. REST incremental records that id for baseline decisions but does
+    not send it on the wire; the REST request remains self-contained.
+    """
+
+    def __init__(self, *, text="hi there", fail_incremental=False):
+        self.kwargs: list[dict] = []
+        self._text = text
+        self._counter = 0
+        self._fail_incremental = fail_incremental
+
+    def create(self, **kwargs):
+        self.kwargs.append(kwargs)
+        # Optionally model a backend that would reject any accidental REST
+        # previous_response_id. Correct REST incremental never sends it.
+        if self._fail_incremental and kwargs.get("previous_response_id"):
+            raise RuntimeError("Unsupported parameter: previous_response_id")
+        self._counter += 1
+        rid = f"resp_rest_{self._counter}"
+
+        def _gen():
+            yield Event("response.output_text.delta", delta=self._text)
+            yield Event("response.output_item.done", item=_MessageItem(self._text))
+            yield _completed(rid)
+
+        return _gen()
+
+
+class RealisticRestClient:
+    def __init__(self, **kw):
+        self.responses = RealisticRestResponses(**kw)
+
+
+def _make_rest_session(client, **kwargs):
+    """A Codex session pinned to the REST transport with the given fake client."""
+    kwargs.setdefault("transport", "rest")
+    return CodexResponsesSession(
+        client=client,
+        model="gpt-5.5",
+        instructions="system prompt",
+        tools=None,
+        tool_choice=None,
+        extra_kwargs={},
+        session_id="sess-stable",
+        thread_id="sess-stable",
+        # A WS factory is injected to prove the REST path never touches it.
+        ws_transport_factory=lambda url, headers: FakeWsTransport(),
+        **kwargs,
+    )
+
+
+def test_rest_first_full_then_second_incremental_replays_full_input():
+    """Default REST transport: first turn full; second turn is logically
+    incremental because the prefix is unchanged, but REST still sends full input.
+
+    WebSocket incremental is the transport mode that sends delta + previous id.
+    REST incremental is a cache/epoch semantic over self-contained requests.
+    """
+    client = RealisticRestClient()
+    session = _make_rest_session(client)
+
+    first = session.send("hello")
+    assert first.usage.extra["codex_transport"] == "rest"
+    assert first.usage.extra["codex_request_mode"] == "rest_full"
+    assert first.usage.extra["codex_transfer_mode"] == "full"
+    assert first.usage.extra["codex_ws_delta_reason"] == "no_baseline"
+    assert "previous_response_id" not in client.responses.kwargs[0]
+    assert client.responses.kwargs[0]["store"] is False
+
+    second = session.send("again")
+    assert second.usage.extra["codex_transport"] == "rest"
+    assert second.usage.extra["codex_request_mode"] == "rest_incremental"
+    assert second.usage.extra["codex_transfer_mode"] == "incremental"
+    assert second.usage.extra["codex_ws_delta_reason"] == "ok"
+    # Second REST request is self-contained/full input, but no previous_response_id.
+    second_kwargs = client.responses.kwargs[1]
+    assert second_kwargs["store"] is False
+    assert "previous_response_id" not in second_kwargs
+    flat = "".join(str(i) for i in second_kwargs["input"])
+    assert "hello" in flat and "hi there" in flat
+    assert "again" in flat
+    # The planner still saw a strict additive extension.
+    assert int(second.usage.extra["codex_ws_delta_len"]) == 1
+    # The WebSocket transport was never used on the REST path.
+    assert session._ws_transport is None
+
+
+def test_rest_prefix_mismatch_falls_back_to_full():
+    """A non-input field change (tools differ) on REST forces a full request with a
+    safe diagnostic — the same planner decision the WS path makes."""
+    client = RealisticRestClient()
+    session = _make_rest_session(client)
+
+    session.send("hello")  # rest_full (first)
+    # Mutate a non-input field so the strict-extension check fails next turn.
+    session._tools = [{"type": "function", "name": "x", "parameters": {}}]
+    result = session.send("again")
+
+    assert result.usage.extra["codex_request_mode"] == "rest_full"
+    assert result.usage.extra["codex_transfer_mode"] == "full"
+    assert result.usage.extra["codex_ws_delta_reason"] == "non_input_fields_changed"
+    assert "previous_response_id" not in client.responses.kwargs[1]
+
+
+def test_rest_incremental_never_sends_previous_response_id():
+    """REST incremental remains self-contained and therefore never triggers a
+    backend rejection for `previous_response_id`; WS is the only transport that
+    carries that field.
+    """
+    client = RealisticRestClient(fail_incremental=True)
+    session = _make_rest_session(client)
+
+    first = session.send("hello")
+    assert first.usage.extra["codex_request_mode"] == "rest_full"
+
+    second = session.send("again")
+    assert len(client.responses.kwargs) == 2
+    assert "previous_response_id" not in client.responses.kwargs[1]
+    assert client.responses.kwargs[1]["store"] is False
+    flat = "".join(str(i) for i in client.responses.kwargs[1]["input"])
+    assert "hello" in flat and "again" in flat  # full replay on the wire
+    assert second.usage.extra["codex_request_mode"] == "rest_incremental"
+    assert second.usage.extra["codex_transfer_mode"] == "incremental"
+    assert "codex_fallback_error_type" not in second.usage.extra
+
+
+def test_rest_summarize_forces_next_full_epoch_reset():
+    """``on_history_summarized`` resets the continuation epoch on REST too, so the
+    next turn is a full request even though it was a strict additive extension."""
+    client = RealisticRestClient()
+    session = _make_rest_session(client)
+
+    first = session.send("one")
+    second = session.send("two")
+    session.on_history_summarized(["call_old"])
+    third = session.send("three")
+
+    assert first.usage.extra["codex_request_mode"] == "rest_full"
+    assert second.usage.extra["codex_request_mode"] == "rest_incremental"
+    assert third.usage.extra["codex_request_mode"] == "rest_full"
+    assert third.usage.extra["codex_ws_delta_reason"] == "epoch_reset"
 
 
 def test_tool_result_continuation_stays_incremental():
@@ -766,13 +993,16 @@ def test_codex_adapter_comment_explains_epoch_reset_and_cache_ledger():
     assert comment["feature"] == "responses_websocket_epoch_reset"
     assert comment["epoch_reset_turns"] == 20
     assert comment["turns_since_epoch_reset"] == 0
+    assert comment["last_full_api_calls_ago"] is None
+    assert comment["last_full_reason"] == "not_recorded"
     assert comment["last_ws_full_api_calls_ago"] is None
     assert comment["last_ws_full_reason"] == "not_recorded"
 
     note = comment["cache_note"]
+    assert comment["summarize_full_note"] == note
     assert comment["summarize_ws_full_note"] == note
-    assert "ws_full" in note
-    assert "ws_incremental" in note
+    assert "full epoch" in note
+    assert "incremental prefix" in note
     assert ">=5 API calls" in note
     assert "cache miss" in note
     assert "Summarize" in note
@@ -787,20 +1017,23 @@ def test_codex_adapter_comment_explains_epoch_reset_and_cache_ledger():
     assert ledger["summary"] == {
         "api_calls": 0,
         "cache_rate": None,
+        "full_count": 0,
         "ws_full_count": 0,
         "miss_k": 0.0,
     }
-    assert ledger["last_ws_full"] == {
+    expected_last_full = {
         "api_calls_ago": None,
         "reason": "not_recorded",
     }
-    assert ledger["legend"]["I"] == "ws_incremental"
-    assert ledger["legend"]["F"] == "ws_full"
+    assert ledger["last_full"] == expected_last_full
+    assert ledger["last_ws_full"] == expected_last_full
+    assert ledger["legend"]["I"] == "incremental"
+    assert ledger["legend"]["F"] == "full"
     assert ledger["legend"]["sum"] == "epoch_reset:summarize"
 
     hint = comment["maintenance_hint"]
     assert hint["non_urgent_summarize"] == "unknown"
-    assert "no Codex websocket cache ledger" in hint["reason"]
+    assert "no Codex continuation cache ledger" in hint["reason"]
 
 
 def test_codex_adapter_comment_reports_compact_cache_ledger():
@@ -840,13 +1073,16 @@ def test_codex_adapter_comment_reports_compact_cache_ledger():
     assert ledger["summary"] == {
         "api_calls": 3,
         "cache_rate": 0.68,
+        "full_count": 2,
         "ws_full_count": 2,
         "miss_k": 80.0,
     }
-    assert ledger["last_ws_full"] == {
+    expected_last_full = {
         "api_calls_ago": 0,
         "reason": "pm",
     }
+    assert ledger["last_full"] == expected_last_full
+    assert ledger["last_ws_full"] == expected_last_full
 
 
 def test_codex_send_populates_cache_ledger_end_to_end():
@@ -861,6 +1097,8 @@ def test_codex_send_populates_cache_ledger_end_to_end():
     assert t.sent_frames[1]["previous_response_id"] == "resp_ws_1"
 
     comment = session.adapter_comment()
+    assert comment["last_full_api_calls_ago"] == 1
+    assert comment["last_full_reason"] == "nb"
     assert comment["last_ws_full_api_calls_ago"] == 1
     assert comment["last_ws_full_reason"] == "nb"
     assert comment["maintenance_hint"]["non_urgent_summarize"] == "wait"
@@ -870,35 +1108,49 @@ def test_codex_send_populates_cache_ledger_end_to_end():
     assert ledger["recorded_api_calls"] == 2
     assert [row[1] for row in ledger["rows"]] == ["F", "I"]
     assert [row[5] for row in ledger["rows"]] == ["nb", ""]
-    assert ledger["last_ws_full"] == {
+    expected_last_full = {
         "api_calls_ago": 1,
         "reason": "nb",
     }
+    assert ledger["last_full"] == expected_last_full
+    assert ledger["last_ws_full"] == expected_last_full
 
 
-def test_codex_adapter_comment_is_honest_when_ws_disabled():
+def test_codex_adapter_comment_is_rest_continuation_when_ws_disabled():
+    """``ws_enabled=False`` now means the REST transport, which STILL runs the
+    full/incremental continuation machine (not stateless-full-every-turn)."""
     session = _make_session(FakeWsTransport(), ws_enabled=False)
 
     comment = session.adapter_comment()
 
     assert comment["adapter"] == "codex"
+    assert comment["transport"] == "rest"
     assert comment["ws_enabled"] is False
-    assert comment["feature"] == "stateless_full_replay"
-    assert "turns_since_epoch_reset" not in comment
-    assert "next_reset_in" not in comment
-    assert "cache_ledger" not in comment
-    assert "maintenance_hint" not in comment
-    assert "cache_note" not in comment
+    assert comment["continuation_enabled"] is True
+    assert comment["feature"] == "responses_rest_epoch_reset"
+    # The continuation comment carries the epoch-reset / cache-ledger machinery.
+    assert "turns_since_epoch_reset" in comment
+    assert "cache_ledger" in comment
+    assert "maintenance_hint" in comment
+    assert "cache_note" in comment
 
+
+def test_codex_adapter_comment_stateless_only_when_continuation_off():
+    """The legacy stateless-full-replay comment surfaces only when the
+    continuation machine itself is disabled (a future stateless mode)."""
+    session = _make_session(FakeWsTransport(), ws_enabled=False)
+    session._continuation_enabled = False
+
+    comment = session.adapter_comment()
+
+    assert comment["feature"] == "stateless_full_replay"
+    assert comment["continuation_enabled"] is False
+    assert comment["transport"] == "rest"
+    assert "cache_ledger" not in comment
     note = comment["summarize_ws_full_note"]
     assert "stateless" in comment["summary"]
-    assert "no ws_incremental/ws_full" in comment["summary"]
-    assert "full stateless replay" in comment["summary"]
     assert "Summarize" in note
     assert "Notification dismiss" in note
-    assert "full replay" in note
-    assert "ws_full epoch boundary" in note
-    assert "does not compact redundant context" in note
 
 
 def test_history_summarized_forces_next_ws_full_epoch_reset():

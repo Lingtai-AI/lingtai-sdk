@@ -19,7 +19,7 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 | `OpenAIChatSession` | 492–1003 | Chat Completions session with context overflow auto-recovery; sends optional `prompt_cache_key` |
 | `OpenAIResponsesSession` | 1006–1204 | Responses API session with server-side `previous_response_id` chaining, optional `context_management` compaction, and optional `prompt_cache_key` |
 | `OpenAIAdapter` | 1207–1520 | `LLMAdapter` implementation; dispatches to Completions or Responses path; receives injected `compact_threshold`; derives the default `prompt_cache_key` via `_default_prompt_cache_key` / `_resolve_prompt_cache_key` |
-| `CodexResponsesSession` | `adapter.py:1641` | Stateless Responses session for ChatGPT-backed Codex: full-history replay, encrypted reasoning include, cache-affinity headers, honest client/account identity, and honest Codex metadata envelope. |
+| `CodexResponsesSession` | `adapter.py:1641` | Responses session for ChatGPT-backed Codex running the `full`/`incremental` additive continuation state machine over a selectable transport (REST default, WebSocket opt-in): `store=false` always, encrypted reasoning include, cache-affinity headers, honest client/account identity, and honest Codex metadata envelope. |
 | `CodexOpenAIAdapter` | `adapter.py:2017` | Codex provider specialization: forces Responses mode, derives stable per-agent cache/session ids plus a LingTai installation id from the configured anchor, and wires account/metadata hints into Codex sessions. |
 
 ### adapter.py helpers
@@ -73,12 +73,47 @@ Both paths return sessions wrapped via `_wrap_with_gate()` for rate limiting.
 3. Call `client.responses.create(**kwargs)`
 4. Store `response_id` for next turn
 
-### Codex stateless flow (`CodexResponsesSession.send_stream`, line 1266)
+### Codex continuation flow (`CodexResponsesSession.send_stream`)
 
-1. Record message into canonical `ChatInterface`
-2. `to_responses_input(interface)` — replay full conversation as input items
-3. Force `stream=True`, `store=False`; omit `previous_response_id`; send the current `prompt_cache_key`
-4. After success: record assistant response into interface for next replay
+Two orthogonal axes drive each Codex turn:
+
+- **Transfer mode** — `full` vs `incremental` (the strict additive
+  `previous_response_id` state machine, `_codex_plan_continuation`). Transport-independent.
+- **Transport** — `rest` (normal runtime, hardcoded) vs `websocket`. Selects how
+  the planned request is sent, never *whether* incremental continuation is used.
+
+**Transport selection:** REST is **hardcoded** for normal runtime
+(`_CODEX_TRANSPORT_DEFAULT = "rest"`). There is intentionally **no environment
+variable** that selects the transport — an inherited `LINGTAI_CODEX_WS` or
+`LINGTAI_CODEX_TRANSPORT` is ignored and cannot flip the runtime to WebSocket
+(live testing confirmed REST prompt-prefix caching is sufficient). The WebSocket
+transport code is retained for tests / internal / future use and is reachable
+**only** via an explicit `transport="websocket"` (or legacy `ws_enabled=True`)
+constructor kwarg.
+
+Flow:
+
+1. Record message into canonical `ChatInterface`.
+2. `_frozen_responses_input(interface)` — the full conversation as input items
+   (with per-`call_id` output freezing for stable replay).
+3. Run the shared `_codex_plan_continuation` planner: first turn / prefix mismatch
+   / epoch reset → **full**; strict additive continuation → **incremental**.
+4. Send via the selected transport:
+   - REST `client.responses.create(...)` (default): send the full converted input
+     in both modes. REST `incremental` means unchanged prefix/cache epoch, not
+     wire delta, and never sends `previous_response_id`.
+   - WebSocket (`codex_ws`): `full` sends the full input; `incremental` sends the
+     strict-additive delta plus `previous_response_id`.
+5. After success: record the assistant response into the interface and recompute
+   the converter-stable delta baseline (`_ws_record_baseline_from_interface`) so the
+   next turn can strict-prefix-match and stay incremental.
+**Usage metadata axes:** `UsageMetadata.extra` carries `codex_transport`
+(`rest`/`websocket`), `codex_transfer_mode` (`full`/`incremental`), and the
+transport-qualified `codex_request_mode` (`rest_full` / `rest_incremental` /
+`ws_full` / `ws_incremental` / `rest_full_fallback`), plus the safe delta-decision
+diagnostic (`codex_ws_delta_reason` and counts — never prompt/secret content). The
+WS-named `codex_ws_*` diagnostic keys are reused on REST (transport-neutral
+metadata); `codex_request_mode` never reads `ws_*` on a REST request.
 
 ### Prompt cache key (`prompt_cache_key`)
 
@@ -102,7 +137,9 @@ prompt_cache_key == session_id == thread_id == <stable per-agent id>
 
 **The id is a PURE deterministic hash of the agent path — no time, no epoch, no rotation.** It is `_codex_session_id(anchor) = sha256(anchor).hexdigest()[:8]`, where `anchor` is the per-agent durable identity (the resolved `init.json` path). The same agent path always yields the same id across restarts / refresh / molt / clear, so the agent keeps routing to the **same sticky-warm backend cache slot**. (Empirically the backend routes the prompt cache to a replica off a *stable* session id; changing the id re-rolls the routing and discards the warm slot — so we never change it. Earlier designs epoch-stamped the id on rebuild and rotated it on "stalled cache" dips; both were removed 2026-06 as counterproductive, along with the `codex-cache-key` request header.)
 
-The REST `/backend-api/codex/responses` endpoint does **not** accept `previous_response_id` (`Unsupported parameter`), so the cache-affinity lever — like the official Codex client — is stable HTTP headers (`session_id` / `thread_id`, underscore spelling to match Codex CLI), sent via the SDK's per-request `extra_headers` (never request-body fields), plus the request-body `prompt_cache_key`.
+Stable HTTP headers (`session_id` / `thread_id`, underscore spelling to match Codex CLI, sent via the SDK's per-request `extra_headers` — never request-body fields) plus the request-body `prompt_cache_key` are the cache-affinity lever and are independent of the transfer mode. They ride on **every** request regardless of full vs incremental.
+
+> **REST incremental caveat.** REST `incremental` is not a wire-delta mode. It still sends the full converted context, but labels the request as an unchanged-prefix/cache-epoch continuation so diagnostics and cache-ledger logic can distinguish it from an epoch rebuild. WebSocket remains the only Codex transport that sends delta input plus `previous_response_id`.
 
 - **Header carve-out (NON-NEGOTIABLE).** `session_id` / `thread_id` route the backend cache slot and MUST be per-agent. Headers are emitted **only when an explicit `session_id`/`thread_id` was supplied** (`has_header_identity`); a *lone* `prompt_cache_key` — the model-only fallback `lingtai-codex:{model}:v1`, shared by every agent on a model — stays a **body-only** cache key and promotes **no** headers. Promoting it would collapse all agents onto one session/thread, which is exactly the bug the per-agent design exists to avoid. So `_cache_affinity_headers()` emits headers iff the session was given header identity; a bare/test session with no ids sends neither. The adapter has no per-agent identity of its own, so the host wiring passes the agent path down by default (see below).
 - **Default wiring (the normal path — not opt-in, not opt-out).** For a Codex agent, `service.build_provider_defaults_from_manifest_llm(llm, ..., working_dir=...)` injects `codex_session_anchor = str((working_dir / "init.json").resolve())` (the agent path / durable identity anchor). The adapter hashes it into the id and uses it for all three values via `_resolve_codex_ids` (returns `(id, id)` — the thread tracks the session id exactly) and `_default_prompt_cache_key` (returns the same `id`). The default wiring does **not** read the token ledger, molt time, or any clock, so the same `working_dir` always yields the same id.
@@ -164,7 +201,7 @@ The Codex / Responses path has the same invariant: `to_responses_input` ends wit
 
 - **CC streaming** (`send_stream`, line 622) — `stream=True, stream_options={include_usage: True}`. Uses `StreamingAccumulator` for text + tool deltas. Reasoning deltas captured from `delta.reasoning` or `delta.reasoning_content` (OpenRouter compatibility, lines 726-733). Overflow recovery wraps the stream open + first chunk (lines 668-690).
 - **Responses streaming** (`send_stream`, line 891) — event types: `response.reasoning_summary_text.delta/done` (summary thoughts only), `response.output_text.delta`, `response.function_call_arguments.delta`, `response.output_item.added/done`, `response.completed`.
-- **Codex streaming** — forces `stream=True` even on `send()` (line 1372). Full interface replay per request; captured summary thoughts are persisted as ThinkingBlocks so `to_responses_input` replays reasoning items before function calls. Optional diagnostics (`LINGTAI_CODEX_RESPONSES_TRACE=1`) append safe per-event metadata to `logs/codex_responses_trace.jsonl` without changing accumulator/persistence behavior.
+- **Codex streaming** — forces `stream=True` even on `send()`. Runs the `full`/`incremental` planner per request over the selected transport (REST default / WebSocket opt-in): REST carries the whole converted interface in both modes; WebSocket carries the whole interface for `full` and delta + `previous_response_id` for `incremental`. Captured summary thoughts are persisted as ThinkingBlocks so `to_responses_input` replays reasoning items before function calls. Optional diagnostics (`LINGTAI_CODEX_RESPONSES_TRACE=1`) append safe per-event metadata to `logs/codex_responses_trace.jsonl` without changing accumulator/persistence behavior.
 
 ### Authentication paths
 

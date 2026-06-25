@@ -56,10 +56,11 @@ _AUTO_PROMPT_CACHE_KEY = object()
 # Codex REST cache-affinity headers (issue #378). The official Codex client
 # sends ``session_id`` / ``thread_id`` headers on its
 # ``/backend-api/codex/responses`` calls; a probe showed they materially
-# improve prompt-cache affinity for repeated full-history replays. The REST
-# endpoint does NOT accept ``previous_response_id`` (``Unsupported
-# parameter``), so stable headers — not delta chaining — are the near-term
-# cache-affinity lever.
+# improve prompt-cache affinity for full requests and fallback/replay turns.
+# REST transport always sends a self-contained converted input. Its
+# ``incremental`` mode is a cache/epoch semantic (unchanged prefix, same stable
+# cache-affinity headers), not a wire-delta semantic. ``previous_response_id`` is
+# WebSocket-only for Codex.
 #
 # The header keys MUST be the underscore names ``session_id`` / ``thread_id``
 # exactly as the Codex backend/CLI sends them. Do NOT "normalise" them into
@@ -250,12 +251,36 @@ _CODEX_WS_BETA_HEADER = "OpenAI-Beta"
 _CODEX_WS_BETA_VALUE = "responses_websockets=2026-02-06"
 _CODEX_TURN_STATE_HEADER = "x-codex-turn-state"
 
-# Env gate for the websocket transport. On by default: when unset the session
-# uses the websocket path (which still falls back to HTTP full-replay on any
-# handshake/connection/auth error, unsupported runtime, or delta mismatch).
-# Set ``LINGTAI_CODEX_WS=0`` (or ``false``/``no``/``off``) to force the existing,
-# proven HTTP full-replay path.
-_CODEX_WS_ENABLED_ENV = "LINGTAI_CODEX_WS"
+# ---------------------------------------------------------------------------
+# Codex continuation TRANSPORT axis (REST vs WebSocket).
+#
+# Two orthogonal axes drive a Codex turn:
+#   A. Continuation/transfer mode — ``full`` vs ``incremental`` (the strict
+#      additive ``previous_response_id`` state machine, see
+#      ``_codex_plan_continuation``). This is transport-independent.
+#   B. Transport — ``rest`` vs ``websocket``: how the planned request is sent.
+#
+# REST is the normal-runtime transport and is HARDCODED — there is intentionally
+# NO environment variable that selects the transport. Live testing confirmed REST
+# prompt-prefix caching is sufficient, so the runtime never needs the WebSocket
+# wire. In particular, an inherited ``LINGTAI_CODEX_WS=1`` (or any
+# ``LINGTAI_CODEX_TRANSPORT`` value) must NOT flip the adapter to WebSocket; those
+# env vars are no longer read.
+#
+# REST runs the SAME full->incremental planner, but only to choose the ``full`` vs
+# ``incremental`` label (the cache-epoch semantic): ``full`` marks a
+# context/cache-epoch rebuild (first turn / prefix mismatch / epoch reset) and
+# ``incremental`` marks an unchanged prefix on the same cache epoch. On REST BOTH
+# modes send the same self-contained full converted context and NEVER send
+# ``previous_response_id`` — the label only annotates cache affinity, it does not
+# change the wire payload.
+#
+# The WebSocket transport code is retained for tests / internal / future use only.
+# It is reachable ONLY via the explicit ``transport="websocket"`` (or legacy
+# ``ws_enabled=True``) constructor kwarg — never via the environment. When
+# selected, WebSocket ``incremental`` transmits a strict-additive delta plus
+# ``previous_response_id`` and WebSocket ``full`` sends the full input frame.
+_CODEX_TRANSPORT_DEFAULT = "rest"
 _CODEX_WS_EPOCH_RESET_TURNS_ENV = "LINGTAI_CODEX_WS_EPOCH_RESET_TURNS"
 _CODEX_WS_EPOCH_RESET_TURNS_DEFAULT = 20
 
@@ -263,19 +288,6 @@ _CODEX_WS_EPOCH_RESET_TURNS_DEFAULT = 20
 # incremental delta to be valid. Mirrors the official ``get_incremental_items``
 # which clones both requests, clears ``.input`` on each, and compares the rest
 # for strict equality (``client.rs:960-970``).
-
-
-def _codex_ws_enabled() -> bool:
-    """Return True when the websocket transport is enabled (default on).
-
-    Unset env means enabled. An explicit falsy value (``0``/``false``/``no``/
-    ``off``, case-insensitive) disables it and forces the HTTP full-replay path.
-    Any other value leaves the default (enabled) in place.
-    """
-    raw = os.environ.get(_CODEX_WS_ENABLED_ENV)
-    if raw is None:
-        return True
-    return raw.strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _codex_ws_epoch_reset_turns() -> int:
@@ -590,8 +602,10 @@ def _default_codex_ws_transport_factory(url: str, headers: dict[str, str]):
     Lazily imports the optional ``websockets`` package; if it is not installed
     (the kernel does not hard-depend on it), the websocket path is treated as an
     unsupported runtime and the caller falls back to HTTP. The real transport is
-    intentionally NOT exercised by the unit tests (which inject a fake) — a live
-    smoke test is gated behind ``LINGTAI_CODEX_WS`` + parent approval.
+    intentionally NOT exercised by the unit tests (which inject a fake), and the
+    WebSocket transport is not selected by normal runtime — it is reached only via
+    an explicit ``transport="websocket"`` constructor kwarg (tests / internal /
+    a live smoke test with parent approval).
     """
     try:  # pragma: no cover - import guard, exercised only with the dep present
         import websockets  # noqa: F401
@@ -2137,13 +2151,16 @@ class OpenAIAdapter(LLMAdapter):
 
 
 class CodexResponsesSession(OpenAIResponsesSession):
-    """Stateless Responses session for Codex's `/backend-api/codex/responses`.
+    """Responses session for Codex's `/backend-api/codex/responses`.
 
     Differences from the parent:
-      * `previous_response_id` is never sent — Codex's backend doesn't
-        persist turns server-side. The full input must be carried each
-        request by the caller (interface layer accumulates messages).
-      * `store=False` is forced — same reason.
+      * Each turn is planned as `full` or `incremental` independent of
+        transport. REST sends the full converted interface for both modes;
+        `incremental` only means the prefix/cache epoch is unchanged. WebSocket
+        incremental sends the strict-additive delta plus `previous_response_id`.
+      * Transport is selectable. REST is the default; WebSocket remains an
+        explicit opt-in compatibility/performance path.
+      * `store=False` is forced because Codex rejects `store=true`.
       * Streaming is forced (`stream=True` on send/send_stream alike) —
         non-streaming Codex requests return data the SDK can't unmarshal.
       * Optional stable ``session_id`` / ``thread_id`` request headers are
@@ -2162,6 +2179,7 @@ class CodexResponsesSession(OpenAIResponsesSession):
         account_id: str | None = None,
         installation_id: str | None = None,
         metadata_sandbox: str = "lingtai",
+        transport: str | None = None,
         ws_enabled: bool | None = None,
         ws_epoch_reset_turns: int | None = None,
         ws_transport_factory: "Callable[[str, dict[str, str]], Any] | None" = None,
@@ -2170,16 +2188,37 @@ class CodexResponsesSession(OpenAIResponsesSession):
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-        # EXPERIMENTAL Codex Responses-over-WebSocket transport (#471). Gated:
-        # ``ws_enabled`` defaults to the ``LINGTAI_CODEX_WS`` env switch (on
-        # unless explicitly disabled with ``0``/``false``/``no``/``off``).
-        # ``ws_transport_factory`` is an injection
-        # seam used by the mock tests; when ``None`` and the gate is on, the real
-        # factory is used (and itself falls back to HTTP if ``websockets`` is
-        # missing). ``_ws_session`` holds the per-turn last_request/last_response
-        # + captured ``x-codex-turn-state`` used to compute incremental deltas
+        # Transport axis (REST vs WebSocket). Both transports run the SAME
+        # full->incremental planner (``_codex_plan_continuation``); this only
+        # selects HOW the planned request is sent. Resolution priority:
+        #   * explicit ``transport=`` kwarg (``rest``/``websocket``) wins;
+        #   * else the legacy ``ws_enabled=`` kwarg (True -> websocket) for
+        #     back-compat with existing tests/wiring;
+        #   * else the hardcoded normal-runtime default: ``rest``.
+        # There is intentionally NO environment-variable transport selector: an
+        # inherited ``LINGTAI_CODEX_WS`` / ``LINGTAI_CODEX_TRANSPORT`` does NOT flip
+        # the runtime to WebSocket. WebSocket is reachable only via the explicit
+        # kwargs above (tests / internal / future).
+        # ``ws_transport_factory`` is an injection seam used by the mock tests;
+        # when ``None`` and the websocket transport is selected, the real factory
+        # is used (and itself falls back to HTTP if ``websockets`` is missing).
+        # ``_ws_session`` holds the per-turn last_request/last_response (+ captured
+        # ``x-codex-turn-state`` on the WS path) used to compute incremental deltas
         # exactly like the official ``ModelClientSession`` (``client.rs:214-240``).
-        self._ws_enabled = _codex_ws_enabled() if ws_enabled is None else bool(ws_enabled)
+        if transport is not None:
+            self._transport = "websocket" if str(transport).strip().lower() in {"websocket", "ws"} else "rest"
+        elif ws_enabled is not None:
+            self._transport = "websocket" if bool(ws_enabled) else "rest"
+        else:
+            self._transport = _CODEX_TRANSPORT_DEFAULT
+        # True when the WebSocket wire is selected. The REST transport leaves this
+        # False but STILL runs the full/incremental state machine below.
+        self._ws_enabled = self._transport == "websocket"
+        # The full->incremental continuation state machine runs for BOTH
+        # transports. Kept as a separate flag (always True today) so the gating
+        # reads as "continuation enabled" rather than "websocket enabled", and a
+        # future stateless-only mode could flip it without touching transport.
+        self._continuation_enabled = True
         self._ws_transport_factory = ws_transport_factory
         self._ws_base_url = base_url
         self._ws_api_key = api_key if isinstance(api_key, str) and api_key else None
@@ -2309,11 +2348,29 @@ class CodexResponsesSession(OpenAIResponsesSession):
         return self._prompt_cache_key, self._cache_affinity_headers()
 
     @staticmethod
+    def _transfer_mode_of(request_mode: str | None) -> str | None:
+        """Map a transport-qualified ``request_mode`` to a generic transfer mode.
+
+        Both ``ws_full`` and ``rest_full`` (and the ``*_fallback`` full re-sends)
+        map to ``full``; ``ws_incremental`` / ``rest_incremental`` map to
+        ``incremental``. This is the transport-neutral axis surfaced in the ledger
+        as ``codex_transfer_mode`` so a REST request never reads as ``ws_*``.
+        """
+        if not request_mode:
+            return None
+        if "incremental" in request_mode:
+            return "incremental"
+        if "full" in request_mode:
+            return "full"
+        return None
+
+    @staticmethod
     def _usage_extra(
         affinity_headers: dict[str, str],
         cache_key: str | None,
         *,
         request_mode: str | None = None,
+        transport: str | None = None,
         previous_response_id: str | None = None,
         store: bool | None = None,
         fallback_error_type: str | None = None,
@@ -2327,9 +2384,14 @@ class CodexResponsesSession(OpenAIResponsesSession):
         Only the short non-secret affinity ids ride here — no prompt body, no
         tokens, no OAuth secret.
 
-        ``ws_diag`` carries the websocket delta decision — ONLY safe metadata
+        Two orthogonal axes are recorded: ``codex_transport`` (``rest`` /
+        ``websocket``) and ``codex_transfer_mode`` (``full`` / ``incremental``),
+        alongside the transport-qualified ``codex_request_mode`` (e.g.
+        ``rest_incremental`` / ``ws_full``) kept for back-compat.
+
+        ``ws_diag`` carries the full/incremental decision — ONLY safe metadata
         (reason class, item counts, changed non-input KEY names, a mismatch
-        index). It explains why a turn went ``ws_full`` vs ``ws_incremental``
+        index). It explains why a turn went ``full`` vs ``incremental``
         (``no_baseline`` / ``missing_response_id`` / ``missing_output_items`` /
         ``prefix_mismatch`` / ``non_input_fields_changed`` / ``ok`` …). No prompt,
         tool-result, reasoning, token, header, or secret content is included.
@@ -2341,8 +2403,13 @@ class CodexResponsesSession(OpenAIResponsesSession):
             extra["codex_thread_id"] = affinity_headers["thread_id"]
         if cache_key:
             extra["codex_prompt_cache_key"] = cache_key
+        if transport:
+            extra["codex_transport"] = transport
         if request_mode:
             extra["codex_request_mode"] = request_mode
+            transfer_mode = CodexResponsesSession._transfer_mode_of(request_mode)
+            if transfer_mode:
+                extra["codex_transfer_mode"] = transfer_mode
         if previous_response_id:
             extra["codex_previous_response_id"] = previous_response_id
         if store is not None:
@@ -2414,37 +2481,34 @@ class CodexResponsesSession(OpenAIResponsesSession):
             frame["client_metadata"] = extra_body["client_metadata"]
         return frame
 
-    def _codex_ws_open(
+    def _codex_plan_continuation(
         self,
-        kwargs: dict[str, Any],
-        *,
+        full_request: dict[str, Any],
         full_replay_input_items: list[dict[str, Any]],
-    ) -> tuple[Any, str, str | None]:
-        """Open a websocket ``response.create`` stream, or raise ``_CodexWsFallback``.
+        *,
+        full_mode: str,
+        incremental_mode: str,
+    ) -> tuple[str, list[dict[str, Any]], str | None]:
+        """Decide ``full`` vs ``incremental`` for THIS turn (transport-neutral).
 
-        Returns ``(event_iterable, request_mode, previous_response_id_or_None)``.
+        This is the shared full->incremental planner used by BOTH the REST and the
+        WebSocket transports. It mirrors the official
+        ``prepare_websocket_request`` (``client.rs:998-1024``): when the new full
+        request is a strict additive extension of the previous request + its
+        server-added output items, only the suffix (delta) is sent together with
+        ``previous_response_id``; otherwise the full input is sent with no previous
+        id (first request / prefix mismatch / epoch reset).
 
-        Mirrors the official path: build the full request, then via
-        ``prepare_websocket_request`` (``client.rs:998-1024``) decide whether to
-        send only the delta input with ``previous_response_id`` (when the new
-        full request is a strict extension of the previous request + its output
-        items) or the full input with no previous id (first request / mismatch).
-        The connection captures ``x-codex-turn-state`` from the handshake and
-        replays it within the turn; ``response.processed`` is sent after the
-        completed response (``responses_websocket.rs:208-240``).
+        Returns ``(request_mode, transmit_input_items, previous_response_id)``.
+        ``request_mode`` is the transport-qualified label (e.g. ``rest_full`` /
+        ``ws_incremental``) built from ``full_mode`` / ``incremental_mode`` so
+        metadata never says ``ws_*`` on a REST request. The safe decision
+        diagnostic is stored on ``self._ws_last_diag`` for the token ledger (only
+        classes / counts / key-names / a short hash — never prompt/secret content).
         """
-        # The full request shape (full input) is what we record as
-        # ``last_request`` for the NEXT turn's delta baseline, regardless of what
-        # we actually transmit this turn.
-        full_request = self._ws_frame_request(kwargs, full_replay_input_items)
-
         previous_response_id: str | None = None
-        frame_input = full_replay_input_items
-        request_mode = "ws_full"
-        # Safe fallback diagnostics (no prompt/tool/secret content): explains why
-        # we are sending full input instead of a delta. Surfaced via
-        # ``self._ws_last_diag`` so ``send_stream`` can ride it into ``usage.extra``
-        # / the token ledger. Only classes / counts / key-names / a short hash.
+        transmit_input = list(full_replay_input_items)
+        request_mode = full_mode
         diag: dict[str, Any]
         epoch_reset_reason = self._ws_epoch_reset_reason_pending
         self._ws_epoch_reset_reason_pending = None
@@ -2472,8 +2536,8 @@ class CodexResponsesSession(OpenAIResponsesSession):
                     diag = {**diag, "reason": "missing_output_items"}
             if delta is not None:
                 previous_response_id = last.response_id
-                frame_input = delta
-                request_mode = "ws_incremental"
+                transmit_input = list(delta)
+                request_mode = incremental_mode
         if epoch_reset_reason:
             diag = {
                 "reason": "epoch_reset",
@@ -2483,6 +2547,38 @@ class CodexResponsesSession(OpenAIResponsesSession):
                 "cur_input_len": len(full_replay_input_items),
             }
         self._ws_last_diag = dict(diag)
+        return request_mode, transmit_input, previous_response_id
+
+    def _codex_ws_open(
+        self,
+        kwargs: dict[str, Any],
+        *,
+        full_replay_input_items: list[dict[str, Any]],
+    ) -> tuple[Any, str, str | None]:
+        """Open a websocket ``response.create`` stream, or raise ``_CodexWsFallback``.
+
+        Returns ``(event_iterable, request_mode, previous_response_id_or_None)``.
+
+        Mirrors the official path: build the full request, run the shared
+        full->incremental planner (``_codex_plan_continuation``) to decide whether
+        to send only the delta input with ``previous_response_id`` (when the new
+        full request is a strict extension of the previous request + its output
+        items) or the full input with no previous id (first request / mismatch).
+        The connection captures ``x-codex-turn-state`` from the handshake and
+        replays it within the turn; ``response.processed`` is sent after the
+        completed response (``responses_websocket.rs:208-240``).
+        """
+        # The full request shape (full input) is what we record as
+        # ``last_request`` for the NEXT turn's delta baseline, regardless of what
+        # we actually transmit this turn.
+        full_request = self._ws_frame_request(kwargs, full_replay_input_items)
+
+        request_mode, frame_input, previous_response_id = self._codex_plan_continuation(
+            full_request,
+            full_replay_input_items,
+            full_mode="ws_full",
+            incremental_mode="ws_incremental",
+        )
 
         # Build the transmitted frame (delta or full).
         frame = dict(full_request)
@@ -2667,7 +2763,10 @@ class CodexResponsesSession(OpenAIResponsesSession):
         self._reset_ws_epoch("turn_count")
 
     def on_history_summarized(self, summarized_ids: list[str]) -> None:
-        if not summarized_ids or not self._ws_enabled:
+        # Runs for BOTH transports: summarize rewrites older tool-result payloads
+        # and breaks the strict-prefix continuation, so the next request must be a
+        # full re-send regardless of REST vs WebSocket.
+        if not summarized_ids or not self._continuation_enabled:
             return
         self._reset_ws_epoch("summarize")
 
@@ -2690,10 +2789,14 @@ class CodexResponsesSession(OpenAIResponsesSession):
 
     @staticmethod
     def _ws_request_mode_code(request_mode: str | None) -> str:
-        if request_mode == "ws_full":
-            return "F"
-        if request_mode == "ws_incremental":
-            return "I"
+        # Transport-neutral one-letter code: any *_incremental -> "I", any *_full
+        # (incl. *_full_fallback) -> "F". Keeps the ledger column identical across
+        # REST and WebSocket so cache-rate rows stay comparable.
+        if request_mode:
+            if "incremental" in request_mode:
+                return "I"
+            if "full" in request_mode:
+                return "F"
         return str(request_mode or "unknown")[:12]
 
     @staticmethod
@@ -2728,7 +2831,9 @@ class CodexResponsesSession(OpenAIResponsesSession):
         usage: UsageMetadata,
         ws_diag: dict[str, Any] | None,
     ) -> None:
-        if request_mode not in {"ws_full", "ws_incremental"}:
+        # Record any continuation request (either transport). The *_fallback full
+        # re-sends are also continuation turns and belong in the cache ledger.
+        if not (request_mode and ("full" in request_mode or "incremental" in request_mode)):
             return
         input_tokens = max(0, int(getattr(usage, "input_tokens", 0) or 0))
         cached_tokens = max(0, int(getattr(usage, "cached_tokens", 0) or 0))
@@ -2777,7 +2882,7 @@ class CodexResponsesSession(OpenAIResponsesSession):
         else:
             last_ws_full_comment = {
                 "api_calls_ago": latest_seq - int(last_ws_full["seq"]),
-                "reason": last_ws_full["reason"] or "ws_full",
+                "reason": last_ws_full["reason"] or "full",
             }
         return {
             "window_api_calls": 20,
@@ -2787,13 +2892,17 @@ class CodexResponsesSession(OpenAIResponsesSession):
             "summary": {
                 "api_calls": len(entries),
                 "cache_rate": self._ws_cache_rate(total_input, total_cached),
+                "full_count": sum(1 for entry in entries if entry["mode"] == "F"),
+                # Compatibility alias for older prompt/diagnostic consumers.
                 "ws_full_count": sum(1 for entry in entries if entry["mode"] == "F"),
                 "miss_k": self._ws_tokens_k(total_miss),
             },
+            "last_full": last_ws_full_comment,
+            # Compatibility alias for older prompt/diagnostic consumers.
             "last_ws_full": last_ws_full_comment,
             "legend": {
-                "I": "ws_incremental",
-                "F": "ws_full",
+                "I": "incremental",
+                "F": "full",
                 "sum": "epoch_reset:summarize",
                 "turns": "epoch_reset:turn_count",
                 "pm": "prefix_mismatch",
@@ -2810,12 +2919,12 @@ class CodexResponsesSession(OpenAIResponsesSession):
         if recorded_api_calls <= 0:
             return {
                 "non_urgent_summarize": "unknown",
-                "reason": "no Codex websocket cache ledger entries yet",
+                "reason": "no Codex continuation cache ledger entries yet",
             }
         if last_ws_full_api_calls_ago is None:
             return {
                 "non_urgent_summarize": "ok",
-                "reason": "no ws_full in the last 20 Codex API calls",
+                "reason": "no full epoch in the last 20 Codex API calls",
             }
         wait_remaining = max(0, 5 - int(last_ws_full_api_calls_ago))
         if wait_remaining > 0:
@@ -2824,7 +2933,7 @@ class CodexResponsesSession(OpenAIResponsesSession):
                 "wait_until_last_ws_full_api_calls_ago": 5,
                 "wait_api_calls_remaining": wait_remaining,
                 "reason": (
-                    f"last ws_full was {last_ws_full_api_calls_ago} API calls ago; "
+                    f"last full epoch was {last_ws_full_api_calls_ago} API calls ago; "
                     f"wait {wait_remaining} more if not urgent"
                 ),
             }
@@ -2832,25 +2941,37 @@ class CodexResponsesSession(OpenAIResponsesSession):
             "non_urgent_summarize": "ok",
             "wait_until_last_ws_full_api_calls_ago": 5,
             "wait_api_calls_remaining": 0,
-            "reason": f"last ws_full was {last_ws_full_api_calls_ago} API calls ago",
+            "reason": f"last full epoch was {last_ws_full_api_calls_ago} API calls ago",
         }
 
     def adapter_comment(self) -> dict[str, Any] | None:
-        if not self._ws_enabled:
+        if not self._continuation_enabled:
+            # Truly stateless (continuation machine off) — no full/incremental
+            # previous_response_id chain to preserve. Not reachable today (both
+            # transports enable continuation); kept for a future stateless mode.
             return {
                 "adapter": "codex",
                 "feature": "stateless_full_replay",
-                "ws_enabled": False,
+                "transport": self._transport,
+                "ws_enabled": self._ws_enabled,
+                "continuation_enabled": False,
                 "summary": (
-                    "Codex WebSocket continuation is disabled, so every request is a "
-                    "full stateless replay. There is no ws_incremental/ws_full "
+                    "Codex continuation is disabled, so every request is a full "
+                    "stateless replay. There is no incremental/full "
                     "previous_response_id chain to preserve."
                 ),
+                "summarize_full_note": (
+                    "Summarize can still compact redundant carried-forward context "
+                    "before the next full replay. Notification dismiss only clears "
+                    "notification state; it does not compact redundant context or "
+                    "create a full epoch boundary in stateless mode."
+                ),
+                # Compatibility alias for older prompt/diagnostic consumers.
                 "summarize_ws_full_note": (
                     "Summarize can still compact redundant carried-forward context "
                     "before the next full replay. Notification dismiss only clears "
                     "notification state; it does not compact redundant context or "
-                    "create a ws_full epoch boundary in stateless mode."
+                    "create a full epoch boundary in stateless mode."
                 ),
             }
         self._refresh_ws_epoch_reset_turn_limit()
@@ -2860,37 +2981,48 @@ class CodexResponsesSession(OpenAIResponsesSession):
             next_reset_in = max(0, limit - self._ws_turns_since_epoch_reset)
         cache_note = (
             "Summarize rewrites older tool-result payloads, compacts redundant "
-            "carried-forward context, and breaks Codex's previous_response_id/"
-            "ws_incremental prefix; the next request must be ws_full, usually "
-            "causing more cache miss. Wait until >=5 API calls after the last "
-            "ws_full before non-urgent summarize. Notification dismiss is only "
-            "notification cleanup: it does not compact redundant context and does "
-            "not trigger a ws_full epoch reset."
+            "carried-forward context, and can break Codex's previous_response_id/"
+            "incremental prefix; the next request must open a fresh full epoch, "
+            "usually causing more cache miss. Wait until >=5 API calls after the "
+            "last full epoch before non-urgent summarize. Notification dismiss is "
+            "only notification cleanup: it does not compact redundant context and "
+            "does not trigger a full epoch reset."
         )
         cache_ledger = self._ws_cache_ledger_comment()
-        last_ws_full = cache_ledger["last_ws_full"]
-        last_ws_full_api_calls_ago = last_ws_full["api_calls_ago"]
+        last_full = cache_ledger["last_full"]
+        last_full_api_calls_ago = last_full["api_calls_ago"]
         return {
             "adapter": "codex",
-            "feature": "responses_websocket_epoch_reset",
-            "ws_enabled": True,
+            "feature": (
+                "responses_websocket_epoch_reset"
+                if self._transport == "websocket"
+                else "responses_rest_epoch_reset"
+            ),
+            "transport": self._transport,
+            "ws_enabled": self._ws_enabled,
+            "continuation_enabled": True,
             "epoch_reset_turns": limit,
             "turns_since_epoch_reset": self._ws_turns_since_epoch_reset,
             "next_reset_in": next_reset_in,
-            "last_ws_full_api_calls_ago": last_ws_full_api_calls_ago,
-            "last_ws_full_reason": last_ws_full["reason"],
+            "last_full_api_calls_ago": last_full_api_calls_ago,
+            "last_full_reason": last_full["reason"],
+            # Compatibility aliases for older prompt/diagnostic consumers.
+            "last_ws_full_api_calls_ago": last_full_api_calls_ago,
+            "last_ws_full_reason": last_full["reason"],
             "summary": (
-                "Codex reuses remote Responses state through previous_response_id. "
-                "A fresh ws_full epoch clears only request-side continuation state "
-                "and rebuilds the next request from local chat_history; local history "
-                "is not deleted or summarized."
+                "Codex plans turns as full or incremental over the selected "
+                "REST/WebSocket transport. A fresh full epoch clears only "
+                "request-side continuation state and rebuilds the next request "
+                "from local chat_history; local history is not deleted or summarized."
             ),
             "cache_ledger": cache_ledger,
             "maintenance_hint": self._ws_maintenance_hint(
                 recorded_api_calls=cache_ledger["recorded_api_calls"],
-                last_ws_full_api_calls_ago=last_ws_full_api_calls_ago,
+                last_ws_full_api_calls_ago=last_full_api_calls_ago,
             ),
             "cache_note": cache_note,
+            "summarize_full_note": cache_note,
+            # Compatibility alias for older prompt/diagnostic consumers.
             "summarize_ws_full_note": cache_note,
         }
 
@@ -2977,7 +3109,7 @@ class CodexResponsesSession(OpenAIResponsesSession):
             ):
                 prebuilt_items.extend(self._convert_input(message))
 
-            if self._ws_enabled:
+            if self._continuation_enabled:
                 self._maybe_reset_ws_epoch()
             full_replay_input_items = self._frozen_responses_input(self._interface)
             full_replay_input_items.extend(prebuilt_items)
@@ -2986,12 +3118,17 @@ class CodexResponsesSession(OpenAIResponsesSession):
             delta_input_items = self._interface_entries_to_responses_input(delta_entries)
             delta_input_items.extend(prebuilt_items)
 
-            stateful_store_enabled = False
-            previous_response_id = (
-                self._response_id if stateful_store_enabled and self._response_id and delta_input_items else None
-            )
-            input_items = delta_input_items if previous_response_id else full_replay_input_items
-            request_mode = "stateful_incremental" if previous_response_id else "stateless_full_store_forced_false"
+            # Build the request from the FULL input first. Both transports then
+            # run the SAME full->incremental planner against the assembled request
+            # (WS inside ``_codex_ws_open``; REST at the dispatch site below) so the
+            # planner's non-input equality check compares like-for-like request
+            # shapes. Starting from full keeps the first turn / mismatch / epoch
+            # reset path correct. On WS, ``incremental`` downgrades the frame to a
+            # strict delta + ``previous_response_id``; on REST the label is a
+            # cache-epoch annotation only and the full input is always sent.
+            previous_response_id: str | None = None
+            input_items = full_replay_input_items
+            request_mode = "ws_full" if self._ws_enabled else "rest_full"
 
             kwargs: dict[str, Any] = {
                 "model": self._model,
@@ -3000,10 +3137,12 @@ class CodexResponsesSession(OpenAIResponsesSession):
                 **self._extra_kwargs,
             }
             # The ChatGPT Codex endpoint explicitly rejects store=True with
-            # `{'detail': 'Store must be set to false'}`. Keep store=false for
-            # normal turns; future turn-state experiments must use Codex-specific
-            # state headers/body, not Responses API storage.
-            kwargs["store"] = bool(previous_response_id)
+            # `{'detail': 'Store must be set to false'}`. Keep store=false on EVERY
+            # request and every transport. REST never sends ``previous_response_id``
+            # (both REST modes replay the full self-contained context); on the
+            # WebSocket path the strict-additive ``incremental`` continuation is what
+            # carries ``previous_response_id``, also with ``store=false``.
+            kwargs["store"] = False
             # Ensure reasoning.encrypted_content is requested so the raw
             # reasoning item can be preserved for prompt-cache-stable replay.
             existing_include = kwargs.get("include") or []
@@ -3081,14 +3220,18 @@ class CodexResponsesSession(OpenAIResponsesSession):
             fallback_error_message: str | None = None
 
             request_store = bool(kwargs.get("store"))
+            # Tracks whether THIS turn ran the full/incremental continuation
+            # machine (either transport), so the post-turn baseline/ledger update
+            # fires for REST as well as WebSocket.
+            continuation_turn_recorded = False
 
-            # EXPERIMENTAL websocket path (#471). When enabled, try to send a
-            # Responses ``response.create`` frame over the websocket with an
-            # incremental delta + ``previous_response_id`` (or full input on the
-            # first request / on any mismatch). On ANY websocket problem
-            # (handshake 426, connect/auth error, missing runtime, delta
-            # mismatch) we raise ``_CodexWsFallback`` internally and drop to the
-            # existing HTTP full-replay path below. ``store`` stays ``false``.
+            # WebSocket transport (#471). When selected, try to send a Responses
+            # ``response.create`` frame over the websocket with an incremental
+            # delta + ``previous_response_id`` (or full input on the first request
+            # / on any mismatch). On ANY websocket problem (handshake 426,
+            # connect/auth error, missing runtime, delta mismatch) we raise
+            # ``_CodexWsFallback`` internally and drop to the HTTP path below.
+            # ``store`` stays ``false``.
             ws_stream = None
             if self._ws_enabled:
                 try:
@@ -3106,30 +3249,91 @@ class CodexResponsesSession(OpenAIResponsesSession):
                     request_mode = ws_mode
                     previous_response_id = ws_prev_id
                     request_store = False
+                    continuation_turn_recorded = True
 
             ws_stream_was_used = ws_stream is not None
             if ws_stream is not None:
                 stream = ws_stream
             else:
+                # REST transport. Run the SHARED full->incremental planner against
+                # the fully-assembled request (so the planner's non-input equality
+                # check compares the same request shape that gets parked as the
+                # next baseline). The planner only LABELS the turn ``rest_full`` vs
+                # ``rest_incremental`` (the cache-epoch semantic); it does NOT change
+                # the REST wire payload. Both REST modes send the full self-contained
+                # converted input and NEVER send ``previous_response_id`` — that
+                # strict delta + ``previous_response_id`` continuation is a WebSocket
+                # transport behavior only. ``store`` stays false on every request.
+                # The FULL request is parked as the next baseline BEFORE the call
+                # (exactly like the WebSocket path), and restored on failure so a bad
+                # turn never poisons the chain.
+                rest_continuation = (
+                    self._transport == "rest" and self._continuation_enabled
+                )
+                rest_prev_last_request = self._ws_session.last_request
+                rest_prev_last_response = self._ws_session.last_response
+                if rest_continuation:
+                    rest_full_request = self._ws_frame_request(
+                        kwargs, full_replay_input_items
+                    )
+                    request_mode, _planned_delta_input, _planned_previous_response_id = (
+                        self._codex_plan_continuation(
+                            rest_full_request,
+                            full_replay_input_items,
+                            full_mode="rest_full",
+                            incremental_mode="rest_incremental",
+                        )
+                    )
+                    # REST incremental is a cache/epoch semantic, not a wire-delta
+                    # semantic: the REST API still receives the full converted input
+                    # so it is self-contained, while WebSocket incremental is the
+                    # transport that carries delta + previous_response_id.
+                    kwargs["input"] = full_replay_input_items
+                    previous_response_id = None
+                    kwargs.pop("previous_response_id", None)
+                    # Park the FULL request (not the delta) as the next baseline.
+                    self._ws_session.last_request = rest_full_request
+                    self._ws_pending_baseline_input = list(full_replay_input_items)
+                    continuation_turn_recorded = True
                 try:
                     stream = self._client.responses.create(**kwargs)
                 except Exception as exc:
                     if not (previous_response_id or request_store):
+                        # No continuation was in flight (first full turn): a real
+                        # error, not a recoverable incremental rejection.
+                        if rest_continuation:
+                            self._ws_session.last_request = rest_prev_last_request
+                            self._ws_session.last_response = rest_prev_last_response
+                            self._ws_pending_baseline_input = None
                         raise
                     fallback_error_type = type(exc).__name__
                     fallback_error_message = str(exc)
                     logger.info(
-                        "Codex stateful Responses request failed; falling back to full replay store=false: %s: %s",
+                        "Codex incremental Responses request failed; falling back to full replay store=false: %s: %s",
                         fallback_error_type,
                         fallback_error_message[:240],
                     )
+                    # Safe fallback for any future REST stateful variant that
+                    # carries continuation state on the wire: re-send the FULL input
+                    # with no ``previous_response_id`` and ``store=false``. Current
+                    # REST incremental is already a full-input/cache-epoch request,
+                    # so ordinary REST errors are allowed to surface instead of being
+                    # hidden by an identical retry. The reason rides into the token
+                    # ledger via ``codex_fallback_error_type`` / ``codex_request_mode``.
                     fallback_kwargs = dict(kwargs)
                     fallback_kwargs["input"] = full_replay_input_items
                     fallback_kwargs["store"] = False
                     fallback_kwargs.pop("previous_response_id", None)
-                    request_mode = "stateless_full_fallback"
+                    request_mode = "rest_full_fallback" if self._transport == "rest" else "stateless_full_fallback"
                     previous_response_id = None
                     request_store = False
+                    if rest_continuation:
+                        # Re-park the baseline against the FULL request we actually
+                        # sent, so the next turn can still chain off this full turn.
+                        self._ws_session.last_request = self._ws_frame_request(
+                            fallback_kwargs, full_replay_input_items
+                        )
+                        self._ws_pending_baseline_input = list(full_replay_input_items)
                     stream = self._client.responses.create(**fallback_kwargs)
             for event in stream:
                 thoughts_before = acc.thoughts
@@ -3200,6 +3404,21 @@ class CodexResponsesSession(OpenAIResponsesSession):
                         acc.finish_tool()
                 elif event.type == "response.completed":
                     response_id = event.response.id
+                    # REST continuation: record the completed response so the NEXT
+                    # turn can delta off it (the WebSocket path does the equivalent
+                    # inside its own event generator). ``items_added`` is filled in
+                    # post-turn from the canonical interface by
+                    # ``_ws_record_baseline_from_interface``.
+                    if (
+                        ws_stream is None
+                        and self._transport == "rest"
+                        and self._continuation_enabled
+                        and response_id
+                    ):
+                        self._ws_session.last_response = _CodexLastResponse(
+                            response_id=response_id,
+                            items_added=[],
+                        )
                     if event.response.usage:
                         cached = getattr(event.response.usage, "input_tokens_details", None)
                         cached_tokens = (getattr(cached, "cached_tokens", 0) or 0) if cached else 0
@@ -3221,11 +3440,12 @@ class CodexResponsesSession(OpenAIResponsesSession):
                                 affinity_headers,
                                 effective_cache_key,
                                 request_mode=request_mode,
+                                transport=self._transport,
                                 previous_response_id=previous_response_id,
                                 store=request_store,
                                 fallback_error_type=fallback_error_type,
                                 fallback_error_message=fallback_error_message,
-                                ws_diag=(self._ws_last_diag if self._ws_enabled else None),
+                                ws_diag=(self._ws_last_diag if self._continuation_enabled else None),
                             ),
                         )
         except Exception:
@@ -3285,14 +3505,18 @@ class CodexResponsesSession(OpenAIResponsesSession):
             },
         )
 
-        # Fix the ``ws_full``-every-turn root cause: now that the assistant turn
-        # is in the canonical interface, recompute the websocket delta baseline in
-        # the SAME converter schema the next full request will use, so a strict
-        # prefix can actually match. Only runs on the websocket path; a no-op on
-        # the HTTP fallback. See ``_ws_record_baseline_from_interface``.
-        if self._ws_enabled:
+        # Now that the assistant turn is in the canonical interface, recompute the
+        # delta baseline in the SAME converter schema the next full request will
+        # use, so a strict prefix can actually match next turn. Runs for BOTH
+        # transports (it fixed the ``full``-every-turn root cause). On a turn that
+        # produced no chainable response it leaves ``items_added`` empty and the
+        # next turn falls back to full. See ``_ws_record_baseline_from_interface``.
+        if self._continuation_enabled:
             self._ws_record_baseline_from_interface()
-            if locals().get("ws_stream_was_used"):
+            # Count the turn + record the cache ledger whenever the continuation
+            # machine actually drove a request this turn — the WebSocket wire
+            # (``ws_stream_was_used``) OR the REST transport.
+            if locals().get("ws_stream_was_used") or locals().get("continuation_turn_recorded"):
                 self._ws_turns_since_epoch_reset += 1
                 self._record_ws_cache_ledger(
                     request_mode=request_mode,
