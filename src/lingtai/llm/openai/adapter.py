@@ -2168,6 +2168,72 @@ class OpenAIAdapter(LLMAdapter):
 # ---------------------------------------------------------------------------
 
 
+_CODEX_DELAYED_SUMMARIZE_MIN_API_CALLS = 20
+_CODEX_CONTEXT_BUDGET_NOTE = (
+    "Can wait until 150k token context to proactively summarize; "
+    "if summarize cannot bring context under 150k, consider molt."
+)
+
+
+def _codex_static_adapter_comment(
+    *,
+    use_responses_api: bool,
+    continuation_enabled: bool,
+    ws_enabled: bool,
+) -> dict[str, Any] | None:
+    """Return static, prompt-safe Codex adapter guidance.
+
+    Shared by the adapter-level hook (available before chat creation) and the
+    session-level compatibility hook (available after chat creation).
+    """
+    if not use_responses_api:
+        return None
+    if not continuation_enabled:
+        return {
+            "adapter": "codex",
+            "feature": "stateless_full_replay",
+            "summary": (
+                "Codex is in stateless full-replay mode: every request is "
+                "rebuilt from local chat_history. Local history is not "
+                "deleted by request-side resets."
+            ),
+            "summarize_note": (
+                "Summarize still rewrites visible history and can change the "
+                "next full request. Notification dismiss is only notification "
+                "cleanup and does not compact context."
+            ),
+            "context_budget_note": _CODEX_CONTEXT_BUDGET_NOTE,
+        }
+
+    return {
+        "adapter": "codex",
+        "feature": (
+            "responses_websocket_epoch_reset"
+            if ws_enabled
+            else "responses_rest_epoch_reset"
+        ),
+        "summary": (
+            "Codex plans turns as full or incremental over the selected "
+            "REST/WebSocket transport. A fresh full epoch clears only "
+            "request-side continuation state and rebuilds the next request "
+            "from local chat_history; local history is not deleted or "
+            "summarized."
+        ),
+        "summarize_note": (
+            "Summarize rewrites older tool-result payloads and/or carried "
+            "context, breaks the previous_response_id/incremental prefix, "
+            "and forces the next request to open a fresh full epoch, usually "
+            "causing a cache miss. Under low pressure, wait until >=20 API "
+            "calls after the last full epoch before non-urgent summarize and "
+            "batch multiple completed noisy results together. Under high "
+            "context pressure or after a very noisy result, summarize "
+            "immediately. Notification dismiss is only notification cleanup: "
+            "it does not compact context, delete local history, or reset the "
+            "epoch."
+        ),
+        "context_budget_note": _CODEX_CONTEXT_BUDGET_NOTE,
+    }
+
 class CodexResponsesSession(OpenAIResponsesSession):
     """Responses session for Codex's `/backend-api/codex/responses`.
 
@@ -2944,7 +3010,7 @@ class CodexResponsesSession(OpenAIResponsesSession):
                 "non_urgent_summarize": "ok",
                 "reason": "no full epoch in the last 20 Codex API calls",
             }
-        delayed_summarize_min_api_calls = 10
+        delayed_summarize_min_api_calls = _CODEX_DELAYED_SUMMARIZE_MIN_API_CALLS
         wait_remaining = max(
             0, delayed_summarize_min_api_calls - int(last_ws_full_api_calls_ago)
         )
@@ -2976,51 +3042,11 @@ class CodexResponsesSession(OpenAIResponsesSession):
         section because it does not depend on the current cache ledger, epoch,
         or per-turn counters.
         """
-        if not getattr(self, "_use_responses_api", True):
-            return None
-        if not self._continuation_enabled:
-            return {
-                "adapter": "codex",
-                "feature": "stateless_full_replay",
-                "summary": (
-                    "Codex is in stateless full-replay mode: every request is "
-                    "rebuilt from local chat_history. Local history is not "
-                    "deleted by request-side resets."
-                ),
-                "summarize_note": (
-                    "Summarize still rewrites visible history and can change the "
-                    "next full request. Notification dismiss is only notification "
-                    "cleanup and does not compact context."
-                ),
-            }
-
-        return {
-            "adapter": "codex",
-            "feature": (
-                "responses_websocket_epoch_reset"
-                if self._ws_enabled
-                else "responses_rest_epoch_reset"
-            ),
-            "summary": (
-                "Codex plans turns as full or incremental over the selected "
-                "REST/WebSocket transport. A fresh full epoch clears only "
-                "request-side continuation state and rebuilds the next request "
-                "from local chat_history; local history is not deleted or "
-                "summarized."
-            ),
-            "summarize_note": (
-                "Summarize rewrites older tool-result payloads and/or carried "
-                "context, breaks the previous_response_id/incremental prefix, "
-                "and forces the next request to open a fresh full epoch, usually "
-                "causing a cache miss. Under low pressure, wait until >=10 API "
-                "calls after the last full epoch before non-urgent summarize and "
-                "batch multiple completed noisy results together. Under high "
-                "context pressure or after a very noisy result, summarize "
-                "immediately. Notification dismiss is only notification cleanup: "
-                "it does not compact context, delete local history, or reset the "
-                "epoch."
-            ),
-        }
+        return _codex_static_adapter_comment(
+            use_responses_api=getattr(self, "_use_responses_api", True),
+            continuation_enabled=self._continuation_enabled,
+            ws_enabled=self._ws_enabled,
+        )
 
     def dynamic_adapter_comment(self):
         """Return dynamic, per-turn Codex adapter state for tail ``_meta``."""
@@ -3796,6 +3822,14 @@ class CodexOpenAIAdapter(OpenAIAdapter):
                 self._codex_session_anchor, self._current_molt_count()
             )
         return None
+
+    def static_adapter_comment(self):
+        """Return prompt-safe Codex guidance before a ChatSession exists."""
+        return _codex_static_adapter_comment(
+            use_responses_api=getattr(self, "_use_responses_api", True),
+            continuation_enabled=getattr(self, "_continuation_enabled", True),
+            ws_enabled=getattr(self, "_ws_enabled", False),
+        )
 
     def _resolve_codex_ids(self, model: str) -> tuple[str | None, str | None]:
         """Resolve the (session_id, thread_id) headers for ``model``.

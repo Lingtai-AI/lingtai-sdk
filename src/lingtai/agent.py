@@ -18,6 +18,7 @@ from typing import Any
 from pathlib import Path
 
 from lingtai_kernel.base_agent import BaseAgent
+from lingtai_kernel.base_agent.prompt import _refresh_meta_guidance_section
 from lingtai.llm.service import LLMService, build_provider_defaults_from_manifest_llm
 from lingtai_kernel.prompt import build_system_prompt
 
@@ -365,8 +366,9 @@ class Agent(BaseAgent):
             )
 
     def _build_system_prompt(self) -> str:
-        """Override kernel's prompt builder to inject tool descriptions."""
+        """Override kernel's prompt builder to inject app tool descriptions."""
         self._refresh_tool_inventory_section()
+        _refresh_meta_guidance_section(self)
         return build_system_prompt(
             prompt_manager=self._prompt_manager,
             language=self._config.language,
@@ -374,9 +376,10 @@ class Agent(BaseAgent):
         )
 
     def _build_system_prompt_batches(self) -> list[str]:
-        """Override kernel's batched builder to inject tool descriptions."""
+        """Override kernel's batched builder to inject app tool descriptions."""
         from lingtai_kernel.prompt import build_system_prompt_batches
         self._refresh_tool_inventory_section()
+        _refresh_meta_guidance_section(self)
         return build_system_prompt_batches(
             prompt_manager=self._prompt_manager,
             language=self._config.language,

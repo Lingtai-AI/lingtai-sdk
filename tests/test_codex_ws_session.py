@@ -30,6 +30,7 @@ from lingtai_kernel.llm.base import UsageMetadata
 from lingtai.llm.openai.codex_ws import SyncCodexWebsocketTransport
 
 from lingtai.llm.openai.adapter import (
+    CodexOpenAIAdapter,
     CodexResponsesSession,
     _CodexWsFallback,
     _CODEX_TRANSPORT_DEFAULT,
@@ -1003,13 +1004,19 @@ def test_codex_adapter_comment_explains_epoch_reset_and_cache_ledger():
     assert comment["summarize_ws_full_note"] == note
     assert "full epoch" in note
     assert "incremental prefix" in note
-    assert ">=10 API calls" in note
+    assert ">=20 API calls" in note
     assert "batch multiple" in note
     assert "context pressure" in note
     assert "cache miss" in note
     assert "Summarize" in note
     assert "Notification dismiss" in note
     assert "non-urgent summarize" in note
+
+    static = session.static_adapter_comment()
+    assert static["adapter"] == "codex"
+    assert static["feature"] == "responses_websocket_epoch_reset"
+    assert ">=20 API calls" in static["summarize_note"]
+    assert "Can wait until 150k token context" in static["context_budget_note"]
 
     ledger = comment["cache_ledger"]
     assert ledger["window_api_calls"] == 20
@@ -1038,6 +1045,18 @@ def test_codex_adapter_comment_explains_epoch_reset_and_cache_ledger():
     assert "no Codex continuation cache ledger" in hint["reason"]
 
 
+
+def test_codex_adapter_static_comment_available_before_chat_creation():
+    adapter = CodexOpenAIAdapter(api_key="test")
+
+    comment = adapter.static_adapter_comment()
+
+    assert comment["adapter"] == "codex"
+    assert comment["feature"] == "responses_rest_epoch_reset"
+    assert ">=20 API calls" in comment["summarize_note"]
+    assert "Can wait until 150k token context" in comment["context_budget_note"]
+    assert "if summarize cannot bring context under 150k, consider molt" in comment["context_budget_note"]
+
 def test_codex_adapter_comment_reports_compact_cache_ledger():
     session = _make_session(FakeWsTransport())
 
@@ -1062,8 +1081,8 @@ def test_codex_adapter_comment_reports_compact_cache_ledger():
     assert comment["last_ws_full_api_calls_ago"] == 0
     assert comment["last_ws_full_reason"] == "pm"
     assert comment["maintenance_hint"]["non_urgent_summarize"] == "wait"
-    assert comment["maintenance_hint"]["wait_api_calls_remaining"] == 10
-    assert "wait 10 more" in comment["maintenance_hint"]["reason"]
+    assert comment["maintenance_hint"]["wait_api_calls_remaining"] == 20
+    assert "wait 20 more" in comment["maintenance_hint"]["reason"]
     assert "context pressure is low" in comment["maintenance_hint"]["reason"]
 
     ledger = comment["cache_ledger"]
@@ -1105,7 +1124,7 @@ def test_codex_send_populates_cache_ledger_end_to_end():
     assert comment["last_ws_full_api_calls_ago"] == 1
     assert comment["last_ws_full_reason"] == "nb"
     assert comment["maintenance_hint"]["non_urgent_summarize"] == "wait"
-    assert comment["maintenance_hint"]["wait_api_calls_remaining"] == 9
+    assert comment["maintenance_hint"]["wait_api_calls_remaining"] == 19
 
     ledger = comment["cache_ledger"]
     assert ledger["recorded_api_calls"] == 2

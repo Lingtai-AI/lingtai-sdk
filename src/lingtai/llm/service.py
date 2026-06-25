@@ -324,6 +324,14 @@ class LLMService(LLMServiceABC):
     def model(self) -> str:
         return self._model
 
+    def static_adapter_comment(self) -> dict | None:
+        """Return static adapter guidance before a ChatSession exists, if any."""
+        adapter = self.get_adapter(self._provider, self._base_url)
+        comment_fn = getattr(adapter, "static_adapter_comment", None)
+        if not callable(comment_fn):
+            return None
+        return comment_fn()
+
     # --- Session management ---
 
     def create_session(

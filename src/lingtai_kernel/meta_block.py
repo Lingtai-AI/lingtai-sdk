@@ -209,8 +209,20 @@ def static_adapter_comment(agent):
     turn.  It is rendered once into the resident ``meta_guidance`` system-prompt
     section rather than re-stamped onto every tail ``_meta``.  Adapters expose it
     via a ``static_adapter_comment`` method; adapters without one simply
-    contribute nothing to ``meta_guidance``.
+    contribute nothing to ``meta_guidance``.  Prefer the service/adapter-level
+    hook because the first prompt build happens before a ChatSession exists; the
+    chat-level hook remains as a compatibility fallback.
     """
+    service = getattr(agent, "service", None)
+    comment_fn = getattr(service, "static_adapter_comment", None)
+    if callable(comment_fn):
+        try:
+            comment = comment_fn()
+        except Exception:
+            comment = None
+        if comment:
+            return comment
+
     session = getattr(agent, "_session", None)
     chat = getattr(session, "chat", None)
     comment_fn = getattr(chat, "static_adapter_comment", None)

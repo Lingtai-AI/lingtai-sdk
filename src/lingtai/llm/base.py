@@ -109,6 +109,16 @@ class LLMAdapter(ABC):
             return session
         return _GatedSession(session, self._gate)  # type: ignore[return-value]
 
+    def static_adapter_comment(self) -> dict[str, Any] | None:
+        """Return static, prompt-safe adapter guidance before chat creation.
+
+        Dynamic per-turn state belongs on the concrete ``ChatSession``.  This
+        adapter-level hook is for rule-like guidance that the prompt builder may
+        need while constructing the very first system prompt, before a session
+        object exists.
+        """
+        return None
+
     @abstractmethod
     def create_chat(
         self,
