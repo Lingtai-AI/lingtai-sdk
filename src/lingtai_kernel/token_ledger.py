@@ -47,6 +47,40 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
+def _mirror_token_entry_to_sqlite(path: Path, entry: dict, source_offset: int) -> None:
+    """Best-effort SQLite mirror for standard token ledgers.
+
+    ``logs/token_ledger.jsonl`` remains the source of truth.  The sibling
+    ``logs/log.sqlite`` row is a rebuildable sidecar and must never make an
+    otherwise successful JSONL append fail.
+    """
+    if path.name != "token_ledger.jsonl":
+        return
+    try:
+        from .services.logging import (
+            DEFAULT_SQLITE_NAME,
+            SQLiteEventIndex,
+            _classify_token_ledger_path,
+        )
+
+        resolved = path.resolve()
+        source_kind, scope, run_id = _classify_token_ledger_path(resolved)
+        index = SQLiteEventIndex(resolved.with_name(DEFAULT_SQLITE_NAME))
+        try:
+            index.log_token_entry(
+                entry,
+                source_file=str(resolved),
+                source_offset=source_offset,
+                source_kind=source_kind,
+                scope=scope,
+                run_id=run_id,
+            )
+        finally:
+            index.close()
+    except Exception:
+        return
+
+
 def is_daemon_entry(entry: dict) -> bool:
     """Return True if a ledger row was emitted by a daemon emanation.
 
@@ -112,8 +146,12 @@ def append_token_entry(
         entry["model"] = model
     if endpoint is not None:
         entry["endpoint"] = endpoint
-    with open(path, "a") as f:
-        f.write(json.dumps(entry) + "\n")
+    payload = (json.dumps(entry) + "\n").encode("utf-8")
+    with open(path, "ab") as f:
+        source_offset = f.tell()
+        f.write(payload)
+        f.flush()
+    _mirror_token_entry_to_sqlite(path, entry, source_offset)
 
 
 def count_main_api_calls(path: Path | str) -> int:

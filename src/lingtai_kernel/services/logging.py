@@ -21,9 +21,10 @@ from ..trace_redaction import redact_for_trajectory
 from ..workdir import WorkingDir
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 DEFAULT_SQLITE_NAME = "log.sqlite"
 DEFAULT_JSONL_NAME = "events.jsonl"
+DEFAULT_TOKEN_LEDGER_NAME = "token_ledger.jsonl"
 
 
 def _utc_now() -> str:
@@ -87,6 +88,16 @@ def _extract_content_text(value: Any) -> str | None:
                 parts.append(nested)
         return "\n".join(parts) if parts else None
     return str(value)
+
+
+def _coerce_int(raw: Any) -> int:
+    """Best-effort integer coercion for ledger counters."""
+    if raw is None or raw == "":
+        return 0
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 0
 
 
 class LoggingService(ABC):
@@ -291,6 +302,29 @@ class SQLiteEventIndex:
               inserted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
             );
 
+            CREATE TABLE IF NOT EXISTS token_entries (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              ts REAL NOT NULL DEFAULT 0,
+              ts_text TEXT,
+              input_tokens INTEGER NOT NULL DEFAULT 0,
+              output_tokens INTEGER NOT NULL DEFAULT 0,
+              thinking_tokens INTEGER NOT NULL DEFAULT 0,
+              cached_tokens INTEGER NOT NULL DEFAULT 0,
+              model TEXT,
+              endpoint TEXT,
+              source TEXT,
+              em_id TEXT,
+              run_id TEXT,
+              api_call_id TEXT,
+              entry_json TEXT NOT NULL,
+              source_file TEXT NOT NULL,
+              source_offset INTEGER NOT NULL,
+              source_line INTEGER,
+              source_kind TEXT,
+              scope TEXT,
+              inserted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+            );
+
             CREATE INDEX IF NOT EXISTS idx_events_type_ts ON events(type, ts DESC);
             CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts DESC);
             CREATE INDEX IF NOT EXISTS idx_events_source_kind_ts ON events(source_kind, ts DESC);
@@ -304,6 +338,14 @@ class SQLiteEventIndex:
             CREATE INDEX IF NOT EXISTS idx_chat_entries_run_id_turn ON chat_entries(run_id, turn);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_entries_source_offset
               ON chat_entries(source_file, source_offset);
+
+            CREATE INDEX IF NOT EXISTS idx_token_entries_ts ON token_entries(ts DESC);
+            CREATE INDEX IF NOT EXISTS idx_token_entries_source_ts ON token_entries(source, ts DESC);
+            CREATE INDEX IF NOT EXISTS idx_token_entries_api_call_id ON token_entries(api_call_id);
+            CREATE INDEX IF NOT EXISTS idx_token_entries_run_id_ts ON token_entries(run_id, ts DESC);
+            CREATE INDEX IF NOT EXISTS idx_token_entries_source_kind_ts ON token_entries(source_kind, ts DESC);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_token_entries_source_offset
+              ON token_entries(source_file, source_offset);
             """
         )
         conn.execute(
@@ -313,6 +355,10 @@ class SQLiteEventIndex:
         conn.execute(
             "INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
             (2, "trace_chat_and_daemon_index", _utc_now()),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
+            (3, "token_ledger_index", _utc_now()),
         )
         conn.commit()
 
@@ -405,6 +451,40 @@ class SQLiteEventIndex:
             run_id,
         )
 
+    @staticmethod
+    def token_entry_row(
+        entry: dict,
+        *,
+        source_file: str,
+        source_offset: int,
+        source_line: int | None,
+        source_kind: str,
+        scope: str,
+        run_id: str | None,
+    ) -> tuple[Any, ...]:
+        raw_ts = entry.get("ts")
+        ts, _ = _coerce_ts(raw_ts)
+        return (
+            ts,
+            str(raw_ts) if raw_ts is not None else None,
+            _coerce_int(entry.get("input")),
+            _coerce_int(entry.get("output")),
+            _coerce_int(entry.get("thinking")),
+            _coerce_int(entry.get("cached")),
+            str(entry.get("model")) if entry.get("model") is not None else None,
+            str(entry.get("endpoint")) if entry.get("endpoint") is not None else None,
+            str(entry.get("source")) if entry.get("source") is not None else None,
+            str(entry.get("em_id")) if entry.get("em_id") is not None else None,
+            str(entry.get("run_id")) if entry.get("run_id") is not None else run_id,
+            str(entry.get("api_call_id")) if entry.get("api_call_id") is not None else None,
+            json.dumps(entry, ensure_ascii=False, default=str),
+            source_file,
+            source_offset,
+            source_line,
+            source_kind,
+            scope,
+        )
+
     def log_event(
         self,
         event: dict,
@@ -448,6 +528,49 @@ class SQLiteEventIndex:
             if not self._keep_open:
                 self.close()
 
+    def log_token_entry(
+        self,
+        entry: dict,
+        *,
+        source_file: str,
+        source_offset: int,
+        source_line: int | None = None,
+        source_kind: str | None = "agent_token_ledger",
+        scope: str | None = "agent",
+        run_id: str | None = None,
+    ) -> None:
+        if self._disabled_reason:
+            return
+        try:
+            with self._lock:
+                conn = self._ensure_open()
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO token_entries(
+                        ts, ts_text, input_tokens, output_tokens, thinking_tokens, cached_tokens,
+                        model, endpoint, source, em_id, run_id, api_call_id, entry_json,
+                        source_file, source_offset, source_line, source_kind, scope
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    self.token_entry_row(
+                        entry,
+                        source_file=source_file,
+                        source_offset=source_offset,
+                        source_line=source_line,
+                        source_kind=source_kind or "token_ledger",
+                        scope=scope or "unknown",
+                        run_id=run_id,
+                    ),
+                )
+                conn.commit()
+        except Exception as exc:
+            # Token ledger SQLite rows are a derived sidecar. JSONL remains the
+            # source of truth, so SQLite failures must never break usage writes.
+            self.disable(str(exc))
+        finally:
+            if not self._keep_open:
+                self.close()
+
     def query(self, sql: str, params: Iterable[Any] = ()) -> list[dict[str, Any]]:
         statement = sql.lstrip().split(None, 1)[0].lower() if sql.strip() else ""
         if statement not in {"select", "with", "explain"}:
@@ -473,6 +596,7 @@ class SQLiteEventIndex:
             tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             event_count = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] if "events" in tables else 0
             chat_entry_count = conn.execute("SELECT COUNT(*) FROM chat_entries").fetchone()[0] if "chat_entries" in tables else 0
+            token_entry_count = conn.execute("SELECT COUNT(*) FROM token_entries").fetchone()[0] if "token_entries" in tables else 0
             cursor_count = conn.execute("SELECT COUNT(*) FROM import_cursors").fetchone()[0] if "import_cursors" in tables else 0
             schema_versions = [row[0] for row in conn.execute("SELECT version FROM schema_migrations ORDER BY version")] if "schema_migrations" in tables else []
         return {
@@ -481,6 +605,7 @@ class SQLiteEventIndex:
             "integrity_check": integrity,
             "event_count": event_count,
             "chat_entry_count": chat_entry_count,
+            "token_entry_count": token_entry_count,
             "cursor_count": cursor_count,
             "schema_versions": schema_versions,
             "schema_current": SCHEMA_VERSION in schema_versions,
@@ -544,12 +669,37 @@ def _iter_jsonl_records_with_offsets(path: Path) -> Iterable[tuple[dict, int, in
 _iter_jsonl_events_with_offsets = _iter_jsonl_records_with_offsets
 
 
+def _classify_token_ledger_path(
+    source: Path, *, agent_dir: Path | None = None
+) -> tuple[str, str, str | None]:
+    if agent_dir is not None:
+        try:
+            parts = source.resolve().relative_to(agent_dir.resolve()).parts
+        except ValueError:
+            parts = source.resolve().parts
+    else:
+        parts = source.resolve().parts
+    if parts == ("logs", DEFAULT_TOKEN_LEDGER_NAME):
+        return "agent_token_ledger", "agent", None
+    if len(parts) >= 4 and parts[0] == "daemons" and parts[-2:] == ("logs", DEFAULT_TOKEN_LEDGER_NAME):
+        return "daemon_token_ledger", "daemon", parts[1]
+    if len(parts) >= 4 and parts[-4] == "daemons" and parts[-2:] == ("logs", DEFAULT_TOKEN_LEDGER_NAME):
+        return "daemon_token_ledger", "daemon", parts[-3]
+    if parts[-2:] == ("logs", DEFAULT_TOKEN_LEDGER_NAME):
+        return "agent_token_ledger", "agent", None
+    if source.name == DEFAULT_TOKEN_LEDGER_NAME:
+        return "token_ledger", "unknown", None
+    return "token_ledger", "unknown", None
+
+
 def _classify_trace_source(agent_dir: Path, source: Path) -> tuple[str, str, str | None]:
     try:
         rel = source.resolve().relative_to(agent_dir.resolve())
         parts = rel.parts
     except ValueError:
         parts = source.parts
+    if source.name == DEFAULT_TOKEN_LEDGER_NAME:
+        return _classify_token_ledger_path(source, agent_dir=agent_dir)
     if parts == ("logs", DEFAULT_JSONL_NAME):
         return "agent_events", "agent", None
     if parts == ("history", "chat_history.jsonl"):
@@ -574,12 +724,14 @@ def _discover_trace_sources(agent_dir: Path, jsonl_path: Path | None = None) -> 
         return [jsonl_path]
     candidates = [
         agent_dir / "logs" / DEFAULT_JSONL_NAME,
+        agent_dir / "logs" / DEFAULT_TOKEN_LEDGER_NAME,
         agent_dir / "history" / "chat_history.jsonl",
         agent_dir / "history" / "chat_history_archive.jsonl",
     ]
     daemons_dir = agent_dir / "daemons"
     if daemons_dir.is_dir():
         candidates.extend(sorted(daemons_dir.glob("*/logs/events.jsonl")))
+        candidates.extend(sorted(daemons_dir.glob("*/logs/token_ledger.jsonl")))
         candidates.extend(sorted(daemons_dir.glob("*/history/chat_history.jsonl")))
     return [path.resolve() for path in candidates if path.is_file()]
 
@@ -654,6 +806,42 @@ def _import_chat_source(
     return count, last_offset, last_line
 
 
+def _import_token_source(
+    conn: sqlite3.Connection,
+    source: Path,
+    *,
+    source_kind: str,
+    scope: str,
+    run_id: str | None,
+) -> tuple[int, int, int]:
+    count = 0
+    last_offset = 0
+    last_line = 0
+    for entry, offset, next_offset, line_no in _iter_jsonl_records_with_offsets(source):
+        cur = conn.execute(
+            """
+            INSERT OR IGNORE INTO token_entries(
+                ts, ts_text, input_tokens, output_tokens, thinking_tokens, cached_tokens,
+                model, endpoint, source, em_id, run_id, api_call_id, entry_json,
+                source_file, source_offset, source_line, source_kind, scope
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            SQLiteEventIndex.token_entry_row(
+                entry,
+                source_file=str(source),
+                source_offset=offset,
+                source_line=line_no,
+                source_kind=source_kind,
+                scope=scope,
+                run_id=run_id,
+            ),
+        )
+        count += max(cur.rowcount, 0)
+        last_offset = next_offset
+        last_line = line_no
+    return count, last_offset, last_line
+
+
 def rebuild_sqlite_event_index(
     agent_dir: Path | str,
     *,
@@ -687,6 +875,7 @@ def rebuild_sqlite_event_index(
     tmp_db = tmp_dir / target.name
     event_count = 0
     chat_entry_count = 0
+    token_entry_count = 0
     cursor_count = 0
     primary_source = explicit_source or (logs_dir / DEFAULT_JSONL_NAME).resolve()
     primary_offset = 0
@@ -709,6 +898,15 @@ def rebuild_sqlite_event_index(
                         run_id=run_id,
                     )
                     event_count += count
+                elif source_kind.endswith("token_ledger") or source_kind == "token_ledger":
+                    count, offset, line = _import_token_source(
+                        conn,
+                        source,
+                        source_kind=source_kind,
+                        scope=scope,
+                        run_id=run_id,
+                    )
+                    token_entry_count += count
                 else:
                     count, offset, line = _import_chat_source(
                         conn,
@@ -748,6 +946,7 @@ def rebuild_sqlite_event_index(
             "target": str(target),
             "event_count": event_count,
             "chat_entry_count": chat_entry_count,
+            "token_entry_count": token_entry_count,
             "source_count": len(sources),
             "cursor_count": cursor_count,
             "line_no": primary_line or last_line,

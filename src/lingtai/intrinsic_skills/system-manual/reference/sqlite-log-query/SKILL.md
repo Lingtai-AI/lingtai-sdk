@@ -4,25 +4,26 @@ description: >
   Nested system-manual reference for inspecting LingTai runtime traces through
   the additive SQLite/log.sqlite sidecar. Read via the `system-manual` router
   when you need `lingtai-agent log doctor|query|rebuild`, JSONL source-of-truth
-  rules, read-only SQL safety, offline rebuild/WAL caveats, events and
-  chat_entries schema, daemon/chat-history indexing, query recipes, runtime
-  problem investigation workflow, trajectory mining workflow, SQL-based event
+  rules, read-only SQL safety, offline rebuild/WAL caveats, events,
+  chat_entries, and token_entries schema, daemon/chat-history/token-ledger
+  indexing, query recipes, runtime problem investigation workflow, trajectory
+  mining workflow, SQL-based event
   metrics, cheap-model/daemon strategy, finding schema, prompt templates,
   digest output, or log redaction pitfalls. This is a nested skill-reference
   under `system-manual`, not a standalone catalog skill; its folder may carry
   companion scripts and assets as SQLite trace tooling grows.
-version: 1.1.0
+version: 1.2.0
 tags: [lingtai, system-manual, sqlite, log.sqlite, runtime-logs, trace, jsonl, daemon, trajectory, mining, event-log, improvement, pitfalls, observability, cheap-model]
 ---
 
 # SQLite Log Query
 
-LingTai keeps durable runtime traces in JSONL files. The SQLite file at
+LingTai keeps durable runtime traces and token ledgers in JSONL files. The SQLite file at
 `logs/log.sqlite` is an **additive, rebuildable query index** over those JSONL
 sources of truth. Use it to answer questions that are painful with `grep`: which
 event types are hottest, what happened inside daemon runs, what chat-history
-turn surrounded a failure, or whether notification/daemon/context events are
-storming.
+turn surrounded a failure, whether notification/daemon/context events are
+storming, or how token usage is distributed across main/soul/daemon sources.
 
 This reference also covers **trajectory mining** — the systematic process of
 turning LingTai runtime event streams into actionable lessons for improving
@@ -40,10 +41,11 @@ SQL queries as the primary data access layer.
   inspection path.
 - **Rebuild is offline.** `log rebuild` requires the agent working-directory lock;
   if the agent is running, stop/sleep/lull/suspend it first as appropriate.
-- **Runtime SQLite is best effort.** New top-level `logs/events.jsonl` rows are
-  indexed live after the JSONL write succeeds. Chat history and daemon JSONL are
-  indexed by explicit offline rebuild so normal turns and daemon runs do not pay
-  recursive scan or live-rewrite costs.
+- **Runtime SQLite is best effort.** New top-level `logs/events.jsonl` and
+  standard `logs/token_ledger.jsonl` rows are indexed live after the JSONL write
+  succeeds. Chat history, archive, and daemon JSONL sources are indexed into a
+  target agent sidecar by explicit offline rebuild so normal turns and daemon
+  runs do not pay recursive scan or live-rewrite costs.
 - **Live queries are snapshots.** Runtime writes use SQLite WAL mode. The query
   path is intentionally non-mutating, so for a complete historical snapshot stop
   the agent and run `log rebuild` before querying.
@@ -74,9 +76,11 @@ lingtai-agent log rebuild "$AGENT_DIR"
 `log rebuild` scans the known JSONL trace surfaces under the target agent:
 
 - `logs/events.jsonl` → `events` (`source_kind='agent_events'`)
+- `logs/token_ledger.jsonl` → `token_entries` (`source_kind='agent_token_ledger'`)
 - `history/chat_history.jsonl` → `chat_entries` (`source_kind='agent_chat'`)
 - `history/chat_history_archive.jsonl` → `chat_entries` (`source_kind='agent_chat_archive'`)
 - `daemons/*/logs/events.jsonl` → `events` (`source_kind='daemon_events'`, `run_id=<daemon folder>`)
+- `daemons/*/logs/token_ledger.jsonl` → `token_entries` (`source_kind='daemon_token_ledger'`, `run_id=<daemon folder>`)
 - `daemons/*/history/chat_history.jsonl` → `chat_entries` (`source_kind='daemon_chat'`, `run_id=<daemon folder>`)
 
 Run a read-only query:
@@ -134,6 +138,29 @@ lingtai-agent log query "$AGENT_DIR" \
 | `scope` | `agent`, `daemon`, or `unknown` |
 | `run_id` | daemon run folder name for daemon rows |
 | `inserted_at` | sidecar insertion time |
+
+`token_entries` indexes agent and daemon token-ledger JSONL rows:
+
+| Column | Meaning |
+|---|---|
+| `id` | SQLite row id, not stable across rebuilds |
+| `ts` | parsed numeric timestamp when possible |
+| `ts_text` | original `ts` value from JSONL |
+| `input_tokens`, `output_tokens`, `thinking_tokens`, `cached_tokens` | token counters from the JSONL ledger row |
+| `model`, `endpoint` | model/provider endpoint metadata when present |
+| `source` | ledger source tag such as `main`, `soul`, `daemon`, `tc_wake`, or legacy/null |
+| `em_id`, `run_id`, `api_call_id` | daemon/run/API attribution when present |
+| `entry_json` | full source token-ledger row as JSON text |
+| `source_file`, `source_offset`, `source_line` | source JSONL identity |
+| `source_kind` | `agent_token_ledger`, `daemon_token_ledger`, or fallback kind |
+| `scope` | `agent`, `daemon`, or `unknown` |
+| `inserted_at` | sidecar insertion time |
+
+Parent ledgers intentionally include daemon spend rows. If you query both
+`agent_token_ledger` and `daemon_token_ledger` rows together, avoid double-counting
+daemon calls that were mirrored into the parent ledger and the daemon-local ledger.
+Filter by `source_kind`, `source`, `em_id`, or `run_id` according to the report you
+need.
 
 Maintenance tables:
 
@@ -215,6 +242,35 @@ FROM chat_entries
 WHERE lower(content_text) LIKE '%sqlite%'
 ORDER BY id DESC
 LIMIT 100;
+```
+
+Token usage by ledger source kind:
+
+```sql
+SELECT source_kind, source,
+       COUNT(*) AS calls,
+       SUM(input_tokens) AS input_tokens,
+       SUM(output_tokens) AS output_tokens,
+       SUM(thinking_tokens) AS thinking_tokens,
+       SUM(cached_tokens) AS cached_tokens
+FROM token_entries
+GROUP BY source_kind, source
+ORDER BY input_tokens DESC;
+```
+
+Main-agent token usage without daemon rows from the parent ledger:
+
+```sql
+SELECT COUNT(*) AS calls,
+       SUM(input_tokens) AS input_tokens,
+       SUM(output_tokens) AS output_tokens,
+       SUM(thinking_tokens) AS thinking_tokens,
+       SUM(cached_tokens) AS cached_tokens
+FROM token_entries
+WHERE source_kind = 'agent_token_ledger'
+  AND COALESCE(source, '') != 'daemon'
+  AND em_id IS NULL
+  AND run_id IS NULL;
 ```
 
 Inspect one event's full JSON payload:

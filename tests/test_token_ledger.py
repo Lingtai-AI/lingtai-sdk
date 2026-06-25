@@ -7,6 +7,10 @@ from pathlib import Path
 
 import pytest
 
+from lingtai_kernel.services.logging import (
+    doctor_sqlite_event_index,
+    query_sqlite_event_index,
+)
 from lingtai_kernel.token_ledger import (
     append_token_entry,
     is_daemon_entry,
@@ -70,6 +74,62 @@ def test_append_creates_parent_dirs(tmp_path):
     entry = json.loads(lines[0])
     assert entry["input"] == 100
     assert "ts" in entry
+
+
+def test_append_standard_token_ledger_mirrors_to_sqlite(tmp_path):
+    """Standard logs/token_ledger.jsonl writes get a best-effort SQLite sidecar."""
+    path = tmp_path / "logs" / "token_ledger.jsonl"
+    append_token_entry(
+        path,
+        input=100,
+        output=20,
+        thinking=5,
+        cached=40,
+        model="gpt-test",
+        endpoint="https://api.example",
+        extra={"source": "main", "api_call_id": "api_1"},
+    )
+
+    rows = query_sqlite_event_index(
+        tmp_path,
+        """
+        SELECT input_tokens, output_tokens, thinking_tokens, cached_tokens,
+               model, endpoint, source, api_call_id, source_kind, scope, run_id
+        FROM token_entries
+        """,
+    )
+    assert rows == [
+        {
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "thinking_tokens": 5,
+            "cached_tokens": 40,
+            "model": "gpt-test",
+            "endpoint": "https://api.example",
+            "source": "main",
+            "api_call_id": "api_1",
+            "source_kind": "agent_token_ledger",
+            "scope": "agent",
+            "run_id": None,
+        }
+    ]
+    doctor = doctor_sqlite_event_index(tmp_path)
+    assert doctor["token_entry_count"] == 1
+
+
+def test_append_token_sqlite_mirror_fail_open(tmp_path, monkeypatch):
+    """SQLite mirror errors must not break the authoritative JSONL append."""
+    from lingtai_kernel.services import logging as logging_service
+
+    def boom(self, *args, **kwargs):
+        raise RuntimeError("sqlite unavailable")
+
+    monkeypatch.setattr(logging_service.SQLiteEventIndex, "log_token_entry", boom)
+    path = tmp_path / "logs" / "token_ledger.jsonl"
+    append_token_entry(path, input=7, output=3, thinking=1, cached=2)
+
+    assert path.is_file()
+    assert sum_token_ledger(path)["input_tokens"] == 7
 
 
 def test_append_entry_has_timestamp(tmp_path):

@@ -318,8 +318,10 @@ class TestSQLiteEventIndex:
         assert doctor["status"] == "ok"
         assert doctor["event_count"] == 2
         assert doctor["chat_entry_count"] == 0
+        assert doctor["token_entry_count"] == 0
         assert doctor["schema_current"] is True
         assert 2 in doctor["schema_versions"]
+        assert 3 in doctor["schema_versions"]
 
         rows = query_sqlite_event_index(tmp_path, "SELECT type, agent_address, agent_name_snapshot, json_extract(fields_json, '$.x') AS x FROM events ORDER BY ts")
         assert rows == [
@@ -535,9 +537,90 @@ class TestSQLiteEventIndex:
         doctor = doctor_sqlite_event_index(tmp_path)
         assert doctor["schema_current"] is True
         assert 2 in doctor["schema_versions"]
+        assert 3 in doctor["schema_versions"]
         rows = query_sqlite_event_index(tmp_path, "SELECT type, source_kind FROM events")
         assert rows == [{"type": "old", "source_kind": None}]
         assert query_sqlite_event_index(tmp_path, "SELECT COUNT(*) AS n FROM chat_entries") == [{"n": 0}]
+        assert query_sqlite_event_index(tmp_path, "SELECT COUNT(*) AS n FROM token_entries") == [{"n": 0}]
+
+    def test_rebuild_indexes_token_ledger_sources(self, tmp_path):
+        logs = tmp_path / "logs"
+        daemon_logs = tmp_path / "daemons" / "em-1-20260531-030000-abcdef" / "logs"
+        logs.mkdir(parents=True)
+        daemon_logs.mkdir(parents=True)
+        (logs / "token_ledger.jsonl").write_text(
+            json.dumps({
+                "ts": "2026-05-31T03:00:00Z",
+                "input": 100,
+                "output": 20,
+                "thinking": 5,
+                "cached": 40,
+                "source": "main",
+                "api_call_id": "api_agent",
+                "model": "gpt-agent",
+                "endpoint": "https://agent.example",
+            }) + "\n",
+            encoding="utf-8",
+        )
+        (daemon_logs / "token_ledger.jsonl").write_text(
+            json.dumps({
+                "ts": "2026-05-31T03:01:00Z",
+                "input": 11,
+                "output": 4,
+                "thinking": 0,
+                "cached": 3,
+                "source": "daemon",
+                "em_id": "em-1",
+                "run_id": "em-1-20260531-030000-abcdef",
+                "api_call_id": "api_daemon",
+            }) + "\n",
+            encoding="utf-8",
+        )
+
+        result = rebuild_sqlite_event_index(tmp_path)
+        assert result["event_count"] == 0
+        assert result["chat_entry_count"] == 0
+        assert result["token_entry_count"] == 2
+        assert result["source_count"] == 2
+
+        rows = query_sqlite_event_index(
+            tmp_path,
+            """
+            SELECT input_tokens, output_tokens, thinking_tokens, cached_tokens,
+                   source, api_call_id, model, endpoint, source_kind, scope, run_id
+            FROM token_entries ORDER BY ts
+            """,
+        )
+        assert rows == [
+            {
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "thinking_tokens": 5,
+                "cached_tokens": 40,
+                "source": "main",
+                "api_call_id": "api_agent",
+                "model": "gpt-agent",
+                "endpoint": "https://agent.example",
+                "source_kind": "agent_token_ledger",
+                "scope": "agent",
+                "run_id": None,
+            },
+            {
+                "input_tokens": 11,
+                "output_tokens": 4,
+                "thinking_tokens": 0,
+                "cached_tokens": 3,
+                "source": "daemon",
+                "api_call_id": "api_daemon",
+                "model": None,
+                "endpoint": None,
+                "source_kind": "daemon_token_ledger",
+                "scope": "daemon",
+                "run_id": "em-1-20260531-030000-abcdef",
+            },
+        ]
+        doctor = doctor_sqlite_event_index(tmp_path)
+        assert doctor["token_entry_count"] == 2
 
     def test_rebuild_preserves_runtime_rows_without_duplicates(self, tmp_path):
         log_file = tmp_path / "logs" / "events.jsonl"
