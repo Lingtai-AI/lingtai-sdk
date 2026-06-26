@@ -25,6 +25,7 @@ from ..meta_block import (
 )
 from ..sent_message_tracker import SEND_TOOLS, SEND_ACTIONS, CHECK_ACTIONS
 from ..time_veil import now_iso
+from .worker_recovery import is_worker_interface_poisoned
 
 logger = get_logger()
 
@@ -523,7 +524,7 @@ def _run_loop(agent) -> None:
                 # appendable from a fresh wake. Common cause: cancel
                 # mid-batch leaves the just-arrived assistant response
                 # with tool_calls on the wire but no results yet.
-                if getattr(agent, "_llm_worker_interface_poisoned", False):
+                if is_worker_interface_poisoned(agent):
                     # Poisoned interface — the worker may still be mutating
                     # it. Do not heal/save; refresh will rebuild from disk.
                     agent._log(
@@ -591,7 +592,7 @@ def _run_loop(agent) -> None:
                     # Fail closed: if a prior turn already poisoned the
                     # interface, do not run another turn against it. Request
                     # refresh and sleep instead.
-                    if getattr(agent, "_llm_worker_interface_poisoned", False):
+                    if is_worker_interface_poisoned(agent):
                         from .worker_recovery import request_worker_hang_refresh
 
                         artifact = getattr(agent, "_llm_worker_poison_artifact", None)
@@ -924,7 +925,7 @@ def _batch_includes_context_molt(tool_calls) -> bool:
 
 def _handle_request(agent, msg: Message) -> None:
     """Send request to LLM, process response with tool calls."""
-    if getattr(agent, "_llm_worker_interface_poisoned", False):
+    if is_worker_interface_poisoned(agent):
         from .worker_recovery import request_worker_hang_refresh
 
         artifact = getattr(agent, "_llm_worker_poison_artifact", None)
@@ -1025,7 +1026,7 @@ def _handle_tc_wake(agent, msg: Message) -> None:
     of no-op-and-return — the previous "tc_inbox_empty" silent
     no-op was the bug that left spliced notification pairs unread.
     """
-    if getattr(agent, "_llm_worker_interface_poisoned", False):
+    if is_worker_interface_poisoned(agent):
         from .worker_recovery import request_worker_hang_refresh
 
         artifact = getattr(agent, "_llm_worker_poison_artifact", None)
