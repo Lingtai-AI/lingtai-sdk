@@ -23,7 +23,7 @@ can migrate without changing public file formats:
   and other ASCII-escaped JSONL logs; pass ``ensure_ascii=False`` for
   UTF-8-preserving logs.
 
-See ``ANATOMY``/issue #510 for the staged migration plan.
+See ``docs/plans/2026-06-25-fsutil-migration.md`` for the issue #510 plan.
 """
 
 from __future__ import annotations
