@@ -1082,18 +1082,28 @@ def test_codex_adapter_comment_explains_epoch_reset_and_cache_ledger():
     assert comment["summarize_ws_full_note"] == note
     assert "full epoch" in note
     assert "incremental prefix" in note
-    assert ">=20 API calls" in note
-    assert "batch multiple" in note
+    # Ratio-oriented guidance replaces the old ">=20 API calls" interval rule.
+    assert ">=20 API calls" not in note
+    assert "1:10" in note
+    assert "ratio" in note
+    assert "reduce_summarize_frequency" in note
     assert "context pressure" in note
     assert "cache miss" in note
     assert "Summarize" in note
     assert "Notification dismiss" in note
     assert "non-urgent summarize" in note
+    # summarize is framed as an investment that buys future savings, and molt
+    # is the escalation when context pressure stays high afterwards.
+    assert "investment" in note
+    assert "buy future context" in note
+    assert "consider molt" in note
 
     static = session.static_adapter_comment()
     assert static["adapter"] == "codex"
     assert static["feature"] == "responses_websocket_epoch_reset"
-    assert ">=20 API calls" in static["summarize_note"]
+    assert ">=20 API calls" not in static["summarize_note"]
+    assert "1:10" in static["summarize_note"]
+    assert "reduce_summarize_frequency" in static["summarize_note"]
     assert "roughly 150k token context" in static["context_budget_note"]
     assert "above roughly 100k" in static["context_budget_note"]
     assert "investment, not a fixed countdown" in static["summarize_economy_note"]
@@ -1115,6 +1125,8 @@ def test_codex_adapter_comment_explains_epoch_reset_and_cache_ledger():
         "api_calls": 0,
         "cache_rate": None,
         "full_count": 0,
+        "incremental_count": 0,
+        "full_to_incremental_ratio": "0:0",
         "ws_full_count": 0,
         "miss_k": 0.0,
     }
@@ -1128,9 +1140,18 @@ def test_codex_adapter_comment_explains_epoch_reset_and_cache_ledger():
     assert ledger["legend"]["F"] == "full"
     assert ledger["legend"]["sum"] == "epoch_reset:summarize"
 
+    # The maintenance hint is ratio-oriented (full:incremental), not an
+    # interval/countdown. With no entries it is "unknown" and carries no
+    # wait_api_calls_remaining countdown.
     hint = comment["maintenance_hint"]
-    assert hint["non_urgent_summarize"] == "unknown"
+    assert hint["summarize_economy"] == "unknown"
+    assert hint["full_count"] == 0
+    assert hint["incremental_count"] == 0
+    assert hint["full_to_incremental_ratio"] == "0:0"
+    assert hint["target_full_to_incremental_ratio"] == "1:10"
     assert "no Codex continuation cache ledger" in hint["reason"]
+    assert "non_urgent_summarize" not in hint
+    assert "wait_api_calls_remaining" not in hint
 
 
 
@@ -1141,7 +1162,9 @@ def test_codex_adapter_static_comment_available_before_chat_creation():
 
     assert comment["adapter"] == "codex"
     assert comment["feature"] == "responses_rest_epoch_reset"
-    assert ">=20 API calls" in comment["summarize_note"]
+    assert ">=20 API calls" not in comment["summarize_note"]
+    assert "1:10" in comment["summarize_note"]
+    assert "reduce_summarize_frequency" in comment["summarize_note"]
     assert "roughly 150k token context" in comment["context_budget_note"]
     assert "above roughly 100k" in comment["context_budget_note"]
     assert "investment, not a fixed countdown" in comment["summarize_economy_note"]
@@ -1203,10 +1226,20 @@ def test_codex_adapter_comment_reports_compact_cache_ledger():
 
     assert comment["last_ws_full_api_calls_ago"] == 0
     assert comment["last_ws_full_reason"] == "pm"
-    assert comment["maintenance_hint"]["non_urgent_summarize"] == "wait"
-    assert comment["maintenance_hint"]["wait_api_calls_remaining"] == 20
-    assert "wait 20 more" in comment["maintenance_hint"]["reason"]
-    assert "context pressure is low" in comment["maintenance_hint"]["reason"]
+    # 2 fulls vs 1 incremental is far worse than the 1:10 target, so the hint
+    # flags reduce_summarize_frequency and reports the current ratio.
+    hint = comment["maintenance_hint"]
+    assert hint["summarize_economy"] == "reduce_summarize_frequency"
+    assert hint["full_count"] == 2
+    assert hint["incremental_count"] == 1
+    assert hint["full_to_incremental_ratio"] == "1:0.5"
+    assert hint["target_full_to_incremental_ratio"] == "1:10"
+    assert "reduce summarize frequency" in hint["reason"]
+    # The poor-ratio reason frames the tradeoff: summarize is an investment
+    # that must earn back more than the cache miss it spends.
+    assert "investment" in hint["reason"]
+    assert "expected savings justify" in hint["reason"]
+    assert "wait_api_calls_remaining" not in hint
 
     ledger = comment["cache_ledger"]
     assert ledger["recorded_api_calls"] == 3
@@ -1219,6 +1252,8 @@ def test_codex_adapter_comment_reports_compact_cache_ledger():
         "api_calls": 3,
         "cache_rate": 0.68,
         "full_count": 2,
+        "incremental_count": 1,
+        "full_to_incremental_ratio": "1:0.5",
         "ws_full_count": 2,
         "miss_k": 80.0,
     }
@@ -1228,6 +1263,40 @@ def test_codex_adapter_comment_reports_compact_cache_ledger():
     }
     assert ledger["last_full"] == expected_last_full
     assert ledger["last_ws_full"] == expected_last_full
+
+
+def test_codex_maintenance_hint_ok_when_full_to_incremental_ratio_within_target():
+    """A healthy continuation keeps fulls rare: 1 full per 12 incremental turns
+    (1:12) is at/under the 1:10 target, so the ratio-oriented hint reports an
+    economical summarize cadence with no reduce_summarize_frequency flag."""
+    session = _make_session(FakeWsTransport())
+
+    session._record_ws_cache_ledger(
+        request_mode="ws_full",
+        usage=UsageMetadata(input_tokens=100_000, output_tokens=0, thinking_tokens=0, cached_tokens=50_000),
+        ws_diag={"reason": "no_baseline"},
+    )
+    for _ in range(12):
+        session._record_ws_cache_ledger(
+            request_mode="ws_incremental",
+            usage=UsageMetadata(input_tokens=100_000, output_tokens=0, thinking_tokens=0, cached_tokens=95_000),
+            ws_diag={"reason": "ok"},
+        )
+
+    comment = session.adapter_comment()
+
+    summary = comment["cache_ledger"]["summary"]
+    assert summary["full_count"] == 1
+    assert summary["incremental_count"] == 12
+    assert summary["full_to_incremental_ratio"] == "1:12"
+
+    hint = comment["maintenance_hint"]
+    assert hint["summarize_economy"] == "ok"
+    assert hint["full_to_incremental_ratio"] == "1:12"
+    assert hint["target_full_to_incremental_ratio"] == "1:10"
+    assert "healthy" in hint["reason"]
+    assert "wait_api_calls_remaining" not in hint
+    assert "non_urgent_summarize" not in hint
 
 
 def test_codex_send_populates_cache_ledger_end_to_end():
@@ -1246,8 +1315,12 @@ def test_codex_send_populates_cache_ledger_end_to_end():
     assert comment["last_full_reason"] == "nb"
     assert comment["last_ws_full_api_calls_ago"] == 1
     assert comment["last_ws_full_reason"] == "nb"
-    assert comment["maintenance_hint"]["non_urgent_summarize"] == "wait"
-    assert comment["maintenance_hint"]["wait_api_calls_remaining"] == 19
+    # 1 full + 1 incremental = 1:1, worse than the 1:10 target.
+    assert (
+        comment["maintenance_hint"]["summarize_economy"]
+        == "reduce_summarize_frequency"
+    )
+    assert comment["maintenance_hint"]["full_to_incremental_ratio"] == "1:1"
 
     ledger = comment["cache_ledger"]
     assert ledger["recorded_api_calls"] == 2

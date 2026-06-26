@@ -11,7 +11,11 @@ STATIC_CODEX_COMMENT = {
     "adapter": "codex",
     "feature": "responses_rest_epoch_reset",
     "summary": "Codex plans turns as full or incremental.",
-    "summarize_note": "wait until >=20 API calls before non-urgent summarize.",
+    "summarize_note": (
+        "Summarize is an investment, not routine cleanup: keep the "
+        "full:incremental ratio at or below 1:10 and defer non-urgent "
+        "summarize until the expected savings justify the cache miss."
+    ),
     "context_budget_note": (
         "Can wait until roughly 150k token context before proactive "
         "summarize, but if summarizing still leaves the main context "
@@ -40,8 +44,8 @@ def test_agent_prompt_builder_refreshes_meta_guidance_adapter_rules(tmp_path):
     assert "## meta_guidance" in prompt
     assert "### codex runtime rules" in prompt
     assert "responses_rest_epoch_reset" in prompt
-    assert ">=20 API calls" in prompt
-    assert ">=20 API calls" in prompt
+    assert "investment, not routine cleanup" in prompt
+    assert "1:10" in prompt
     assert "roughly 150k token context" in prompt
     assert "above roughly 100k tokens, consider molt" in prompt
 
