@@ -329,8 +329,9 @@ def test_build_meta_guidance_renders_guidance_meta_readme_and_adapter():
         "summary": "Codex plans turns as full or incremental.",
         "summarize_note": (
             "Summarize breaks the incremental prefix and opens a fresh full epoch; "
-            "delay non-urgent summarize until >=10 API calls and batch results; "
-            "summarize immediately under high context pressure."
+            "it is an investment, so keep the full:incremental ratio at or below "
+            "1:10 and defer non-urgent summarize until the savings justify the "
+            "cache miss; summarize immediately under high context pressure."
         ),
     }
     agent = _meta_guidance_agent(static_comment)
@@ -346,7 +347,7 @@ def test_build_meta_guidance_renders_guidance_meta_readme_and_adapter():
     assert "agent_meta" in section
     # Static adapter rules are present (the 4 required Codex points).
     assert "full epoch" in section
-    assert ">=10 API calls" in section
+    assert "1:10" in section
 
 
 def test_build_meta_guidance_without_adapter_comment_still_renders():
@@ -369,8 +370,8 @@ def test_slim_adapter_comment_for_tail_trims_ledger_without_static_key_guessing(
             "summary": {"api_calls": 1, "cache_rate": 0.5},
         },
         "maintenance_hint": {
-            "non_urgent_summarize": "wait",
-            "wait_api_calls_remaining": 7,
+            "summarize_economy": "reduce_summarize_frequency",
+            "full_to_incremental_ratio": "1:1",
             "reason": "long prose reason",
         },
     }
@@ -389,7 +390,7 @@ def test_slim_adapter_comment_for_tail_trims_ledger_without_static_key_guessing(
     assert "rows" not in json.dumps(slim)
     assert slim["cache_ledger_summary"] == {"api_calls": 1, "cache_rate": 0.5}
     # maintenance decision survives, long prose reason dropped.
-    assert slim["maintenance_hint"]["non_urgent_summarize"] == "wait"
+    assert slim["maintenance_hint"]["summarize_economy"] == "reduce_summarize_frequency"
     assert "reason" not in slim["maintenance_hint"]
     # A hook points at the resident meta_guidance section.
     assert "meta_guidance_ref" not in slim

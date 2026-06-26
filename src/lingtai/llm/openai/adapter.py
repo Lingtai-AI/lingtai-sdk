@@ -2202,7 +2202,6 @@ class OpenAIAdapter(LLMAdapter):
 # ---------------------------------------------------------------------------
 
 
-_CODEX_DELAYED_SUMMARIZE_MIN_API_CALLS = 20
 _CODEX_CONTEXT_BUDGET_NOTE = (
     "Can wait until roughly 150k token context before proactive summarize, "
     "but if summarizing still leaves the main context above roughly 100k "
@@ -2293,13 +2292,22 @@ def _codex_static_adapter_comment(
             "Summarize rewrites older tool-result payloads and/or carried "
             "context, breaks the previous_response_id/incremental prefix, "
             "and forces the next request to open a fresh full epoch, usually "
-            "causing a cache miss. Under low pressure, wait until >=20 API "
-            "calls after the last full epoch before non-urgent summarize and "
-            "batch multiple completed noisy results together. Under high "
-            "context pressure or after a very noisy result, summarize "
-            "immediately. Notification dismiss is only notification cleanup: "
-            "it does not compact context, delete local history, or reset the "
-            "epoch."
+            "causing a cache miss. Treat summarize as an investment, not "
+            "routine cleanup: it spends a full/cache-miss cost now to buy "
+            "future context and token savings, so it only pays off when those "
+            "expected savings exceed the miss. Keep full epochs rare relative "
+            "to incremental turns: the target full:incremental ratio is at or "
+            "below 1:10 (roughly at most one full per ten incremental turns). "
+            "Under low pressure, defer and batch non-urgent summarize until "
+            "the expected savings justify reopening a full epoch, so the ratio "
+            "stays healthy; the dynamic maintenance_hint reports the current "
+            "full:incremental ratio and flags reduce_summarize_frequency when "
+            "fulls are too frequent. Under high context pressure or after a "
+            "very noisy result, the investment is worth it immediately — "
+            "summarize regardless of ratio; if context pressure stays high "
+            "after summarize, consider molt. Notification dismiss is only "
+            "notification cleanup: it does not compact context, delete local "
+            "history, or reset the epoch."
         ),
         "context_budget_note": _CODEX_CONTEXT_BUDGET_NOTE,
         "summarize_economy_note": _CODEX_SUMMARIZE_ECONOMY_NOTE,
@@ -3051,6 +3059,8 @@ class CodexResponsesSession(OpenAIResponsesSession):
                 "api_calls_ago": latest_seq - int(last_ws_full["seq"]),
                 "reason": last_ws_full["reason"] or "full",
             }
+        full_count = sum(1 for entry in entries if entry["mode"] == "F")
+        incremental_count = sum(1 for entry in entries if entry["mode"] == "I")
         return {
             "window_api_calls": 20,
             "recorded_api_calls": len(entries),
@@ -3059,9 +3069,13 @@ class CodexResponsesSession(OpenAIResponsesSession):
             "summary": {
                 "api_calls": len(entries),
                 "cache_rate": self._ws_cache_rate(total_input, total_cached),
-                "full_count": sum(1 for entry in entries if entry["mode"] == "F"),
+                "full_count": full_count,
+                "incremental_count": incremental_count,
+                "full_to_incremental_ratio": self._ws_full_to_incremental_ratio(
+                    full_count, incremental_count
+                ),
                 # Compatibility alias for older prompt/diagnostic consumers.
-                "ws_full_count": sum(1 for entry in entries if entry["mode"] == "F"),
+                "ws_full_count": full_count,
                 "miss_k": self._ws_tokens_k(total_miss),
             },
             "last_full": last_ws_full_comment,
@@ -3078,45 +3092,91 @@ class CodexResponsesSession(OpenAIResponsesSession):
         }
 
     @staticmethod
+    def _ws_full_to_incremental_ratio(
+        full_count: int, incremental_count: int
+    ) -> str:
+        """Render the full:incremental count as a ``"1:N"``-style ratio string.
+
+        Normalized so the full side is ``1`` whenever any full was recorded
+        (``"1:10"``); ``"0:N"`` when no full has been seen yet, and ``"1:0"`` when
+        only fulls were recorded.
+        """
+        if full_count <= 0:
+            return f"0:{int(incremental_count)}"
+        per_full = incremental_count / full_count
+        return f"1:{per_full:.1f}".replace(".0", "")
+
+    @staticmethod
     def _ws_maintenance_hint(
         *,
-        recorded_api_calls: int,
-        last_ws_full_api_calls_ago: int | None,
+        full_count: int,
+        incremental_count: int,
     ) -> dict[str, Any]:
-        if recorded_api_calls <= 0:
+        """Ratio-oriented summarize-economy hint for the dynamic adapter comment.
+
+        Replaces the older interval/countdown guidance ("wait N API calls after
+        the last full epoch"), which was misleading: summarize is an investment,
+        not a fixed cooldown. Each summarize spends a fresh ``full`` epoch (a
+        cache miss) now to buy future context/token savings, so it only pays off
+        when those savings exceed the miss. A healthy continuation keeps fulls
+        rare relative to incremental turns: the target is a full:incremental
+        ratio at or below ``1:10`` (≈ at most one full per ten incremental
+        turns). When fulls are too frequent the actionable fix is to summarize
+        less often / batch more so each full epoch earns its cost.
+        """
+        target_ratio = "1:10"
+        # full:incremental <= 1:10  <=>  full_count <= incremental_count / 10.
+        target_max_full_per_incremental = 0.1
+        if full_count <= 0:
             return {
-                "non_urgent_summarize": "unknown",
-                "reason": "no Codex continuation cache ledger entries yet",
-            }
-        if last_ws_full_api_calls_ago is None:
-            return {
-                "non_urgent_summarize": "ok",
-                "reason": "no full epoch in the last 20 Codex API calls",
-            }
-        delayed_summarize_min_api_calls = _CODEX_DELAYED_SUMMARIZE_MIN_API_CALLS
-        wait_remaining = max(
-            0, delayed_summarize_min_api_calls - int(last_ws_full_api_calls_ago)
-        )
-        if wait_remaining > 0:
-            return {
-                "non_urgent_summarize": "wait",
-                "wait_until_last_ws_full_api_calls_ago": delayed_summarize_min_api_calls,
-                "wait_api_calls_remaining": wait_remaining,
+                "summarize_economy": "ok" if incremental_count > 0 else "unknown",
+                "full_count": int(full_count),
+                "incremental_count": int(incremental_count),
+                "full_to_incremental_ratio": (
+                    CodexResponsesSession._ws_full_to_incremental_ratio(
+                        full_count, incremental_count
+                    )
+                ),
+                "target_full_to_incremental_ratio": target_ratio,
                 "reason": (
-                    f"last full epoch was {last_ws_full_api_calls_ago} API calls ago; "
-                    f"wait {wait_remaining} more if context pressure is low"
+                    "no full epoch in the last 20 Codex API calls; summarize "
+                    "frequency is healthy"
+                    if incremental_count > 0
+                    else "no Codex continuation cache ledger entries yet"
                 ),
             }
-        return {
-            "non_urgent_summarize": "ok",
-            "wait_until_last_ws_full_api_calls_ago": delayed_summarize_min_api_calls,
-            "wait_api_calls_remaining": 0,
-            "reason": (
-                f"last full epoch was {last_ws_full_api_calls_ago} API calls ago; "
-                "delayed summarize window satisfied; prefer batching multiple "
-                "already-consumed results when practical"
+        full_per_incremental = full_count / max(incremental_count, 1)
+        ratio_ok = (
+            incremental_count > 0
+            and full_per_incremental <= target_max_full_per_incremental
+        )
+        hint = {
+            "summarize_economy": "ok" if ratio_ok else "reduce_summarize_frequency",
+            "full_count": int(full_count),
+            "incremental_count": int(incremental_count),
+            "full_to_incremental_ratio": (
+                CodexResponsesSession._ws_full_to_incremental_ratio(
+                    full_count, incremental_count
+                )
             ),
+            "target_full_to_incremental_ratio": target_ratio,
         }
+        if ratio_ok:
+            hint["reason"] = (
+                f"full:incremental is {hint['full_to_incremental_ratio']} over the "
+                f"last 20 Codex API calls, within the {target_ratio} target; "
+                "summarize frequency is healthy"
+            )
+        else:
+            hint["reason"] = (
+                f"full:incremental is {hint['full_to_incremental_ratio']} over the "
+                f"last 20 Codex API calls, worse than the {target_ratio} target; "
+                "each full epoch is a cache miss, and summarize is an investment "
+                "that must buy back more than it spends — reduce summarize "
+                "frequency (defer/batch non-urgent summarize until the expected "
+                "savings justify the miss, or molt if context pressure stays high)"
+            )
+        return hint
 
     def static_adapter_comment(self):
         """Return the static, rule-like Codex adapter guidance.
@@ -3191,18 +3251,22 @@ class CodexResponsesSession(OpenAIResponsesSession):
                 )
                 comment["last_ws_full_reason"] = comment.get("last_full_reason")
 
-        recorded_api_calls = 0
+        full_count = 0
+        incremental_count = 0
         if isinstance(ledger, dict):
-            try:
-                recorded_api_calls = int(ledger.get("recorded_api_calls") or 0)
-            except (TypeError, ValueError):
-                recorded_api_calls = 0
-        last_ws_full_ago = comment.get("last_ws_full_api_calls_ago")
+            summary = ledger.get("summary")
+            if isinstance(summary, dict):
+                try:
+                    full_count = int(summary.get("full_count") or 0)
+                except (TypeError, ValueError):
+                    full_count = 0
+                try:
+                    incremental_count = int(summary.get("incremental_count") or 0)
+                except (TypeError, ValueError):
+                    incremental_count = 0
         comment["maintenance_hint"] = self._ws_maintenance_hint(
-            recorded_api_calls=recorded_api_calls,
-            last_ws_full_api_calls_ago=(
-                last_ws_full_ago if isinstance(last_ws_full_ago, int) else None
-            ),
+            full_count=full_count,
+            incremental_count=incremental_count,
         )
         return comment
 
