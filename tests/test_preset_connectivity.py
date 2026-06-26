@@ -181,18 +181,18 @@ def test_check_many_empty_list_returns_empty():
 
 
 # ---------------------------------------------------------------------------
-# Local CLI-login providers (e.g. claude-agent-sdk)
+# Local CLI-login providers (e.g. claude-code)
 # ---------------------------------------------------------------------------
 
 
-def test_claude_agent_sdk_ok_when_package_importable(monkeypatch):
-    """A local CLI-login provider with its package importable is `ok` —
+def test_claude_code_ok_when_module_importable(monkeypatch):
+    """A local CLI-login provider with its backing module importable is `ok` —
     no base_url, no api_key_env, and crucially no TCP probe."""
     from lingtai_kernel import preset_connectivity
     with patch.object(preset_connectivity, "_probe_host") as probe, \
          patch.object(preset_connectivity, "_module_available", return_value=True):
         result = preset_connectivity.check_connectivity(
-            provider="claude-agent-sdk",
+            provider="claude-code",
             base_url=None,
             api_key_env=None,
         )
@@ -200,14 +200,14 @@ def test_claude_agent_sdk_ok_when_package_importable(monkeypatch):
         probe.assert_not_called()  # local provider — never hits the network
 
 
-def test_claude_agent_sdk_no_base_url_does_not_error(monkeypatch):
-    """The bug: a saved claude-agent-sdk preset was reported unreachable with
+def test_claude_code_no_base_url_does_not_error(monkeypatch):
+    """The bug: a saved claude-code preset was reported unreachable with
     'no base_url and no default URL'. A local CLI-login provider must never
     fail just because it has no base_url."""
     from lingtai_kernel import preset_connectivity
     with patch.object(preset_connectivity, "_module_available", return_value=True):
         result = preset_connectivity.check_connectivity(
-            provider="claude-agent-sdk",
+            provider="claude-code",
             base_url=None,
             api_key_env=None,
         )
@@ -215,28 +215,28 @@ def test_claude_agent_sdk_no_base_url_does_not_error(monkeypatch):
         assert "no base_url" not in (result.get("error") or "")
 
 
-def test_claude_agent_sdk_underscore_alias_treated_as_local(monkeypatch):
-    """The underscore alias claude_agent_sdk is the same local provider."""
+def test_claude_code_underscore_alias_treated_as_local(monkeypatch):
+    """The underscore alias claude_code is the same local provider."""
     from lingtai_kernel import preset_connectivity
     with patch.object(preset_connectivity, "_module_available", return_value=True):
         result = preset_connectivity.check_connectivity(
-            provider="claude_agent_sdk",
+            provider="claude_code",
             base_url=None,
             api_key_env=None,
         )
         assert result["status"] == "ok"
 
 
-def test_claude_agent_sdk_missing_package_reports_no_credentials(monkeypatch):
-    """When the optional package is absent, report a clear, actionable status
+def test_claude_code_missing_module_reports_no_credentials(monkeypatch):
+    """When the backing module is absent, report a clear, actionable status
     (not the misleading 'no base_url' error)."""
     from lingtai_kernel import preset_connectivity
     with patch.object(preset_connectivity, "_module_available", return_value=False):
         result = preset_connectivity.check_connectivity(
-            provider="claude-agent-sdk",
+            provider="claude-code",
             base_url=None,
             api_key_env=None,
         )
         assert result["status"] == "no_credentials"
-        assert "claude-agent-sdk" in (result.get("error") or "")
+        assert "claude-code" in (result.get("error") or "")
         assert "no base_url" not in (result.get("error") or "")

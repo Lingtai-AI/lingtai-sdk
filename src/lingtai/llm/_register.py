@@ -156,6 +156,23 @@ def register_all_adapters() -> None:
 
     LLMService.register_adapter("codex", _codex)
 
+    def _claude_code(*, model=None, defaults=None, **kw):
+        # Drive the local `claude` CLI as the agent brain on a Claude
+        # subscription. The CLI owns auth (stored OAuth / CLAUDE_CODE_OAUTH_TOKEN),
+        # so there is no api_key/base_url — drop any env-resolved ones.
+        from .claude_code.adapter import ClaudeCodeAdapter
+        kw.pop("model", None)
+        kw.pop("api_key", None)
+        kw.pop("base_url", None)
+        kw.pop("default_headers", None)
+        return ClaudeCodeAdapter(model=model, **{k: v for k, v in kw.items() if v is not None})
+
+    # Register both the dash and underscore spellings: there is no dash/underscore
+    # normalization in LLMService, and preset_connectivity treats both as the same
+    # local CLI-login provider — so a saved `claude_code` preset must build too.
+    for name in ("claude-code", "claude_code"):
+        LLMService.register_adapter(name, _claude_code)
+
     def _deepseek(*, model=None, defaults=None, **kw):
         from .deepseek.adapter import DeepSeekAdapter
         kw.pop("model", None)
@@ -177,23 +194,6 @@ def register_all_adapters() -> None:
         return MimoAdapter(**{k: v for k, v in kw.items() if v is not None})
 
     LLMService.register_adapter("mimo", _mimo)
-
-    def _claude_agent_sdk(*, model=None, defaults=None, **kw):
-        # Experimental clean-room provider. The Claude Agent SDK authenticates
-        # through the local Claude CLI login (no per-request API key), so the
-        # env-resolved key and base_url are ignored.
-        from .claude_agent_sdk.adapter import ClaudeAgentSDKAdapter
-        kw.pop("api_key", None)
-        kw.pop("base_url", None)
-        adapter_kw: dict = {}
-        if model:
-            adapter_kw["model"] = model
-        if kw.get("max_rpm"):
-            adapter_kw["max_rpm"] = kw["max_rpm"]
-        return ClaudeAgentSDKAdapter(**adapter_kw)
-
-    for name in ("claude-agent-sdk", "claude_agent_sdk"):
-        LLMService.register_adapter(name, _claude_agent_sdk)
 
     # Providers routed through the generic custom adapter
     for name in ("grok", "qwen", "kimi"):

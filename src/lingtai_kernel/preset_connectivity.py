@@ -26,11 +26,11 @@ _PROBE_TIMEOUT_S = 2.0
 
 # Local CLI-login providers authenticate through a locally installed CLI/login
 # session (no per-request API key, no base_url) — so a TCP probe would be a
-# false negative. Health for these is "is the optional package importable?".
+# false negative. Health for these is "is the backing provider module importable?".
 # Maps the provider name (and its aliases) to the module that backs it.
 _LOCAL_CLI_LOGIN_PROVIDERS = {
-    "claude-agent-sdk": "claude_agent_sdk",
-    "claude_agent_sdk": "claude_agent_sdk",
+    "claude-code": "lingtai.llm.claude_code.adapter",
+    "claude_code": "lingtai.llm.claude_code.adapter",
 }
 
 # Default base_url per provider for presets that omit base_url.
@@ -99,10 +99,10 @@ def check_connectivity(
          "latency_ms": int (only on ok),
          "error": str | None}
     """
-    # Local CLI-login providers (e.g. claude-agent-sdk) have no network
+    # Local CLI-login providers (e.g. claude-code) have no network
     # endpoint and no API key — they authenticate through a local CLI/login
     # session. Probing a base_url would be a false negative, so gauge health
-    # by whether the optional backing package is importable. Never reach the
+    # by whether the backing provider module is importable. Never reach the
     # base_url resolution below for these.
     module_name = _LOCAL_CLI_LOGIN_PROVIDERS.get((provider or "").lower())
     if module_name is not None:
@@ -118,9 +118,9 @@ def check_connectivity(
             "checked_at": datetime.now(timezone.utc).isoformat(),
             "latency_ms": None,
             "error": (
-                f"{provider} is a local CLI-login provider but its package "
-                f"{module_name!r} is not installed — run `pip install "
-                f"{module_name.replace('_', '-')}` and `claude login`"
+                f"{provider} is a local CLI-login provider but its backing "
+                f"module {module_name!r} is not importable — ensure the kernel "
+                f"is installed and run `claude` (or `claude setup-token`) to log in"
             ),
         }
 

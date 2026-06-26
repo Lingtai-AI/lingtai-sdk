@@ -62,7 +62,7 @@ def test_default_adapters_registered():
     saved = dict(LLMService._adapter_registry)
     LLMService._adapter_registry.clear()
     register_all_adapters()
-    expected = {"gemini", "anthropic", "openai", "minimax", "deepseek", "grok", "qwen", "glm", "kimi", "custom", "claude-agent-sdk", "claude_agent_sdk"}
+    expected = {"gemini", "anthropic", "openai", "minimax", "deepseek", "grok", "qwen", "glm", "kimi", "custom", "claude-code", "claude_code"}
     assert expected.issubset(set(LLMService._adapter_registry.keys()))
     LLMService._adapter_registry.clear()
     LLMService._adapter_registry.update(saved)
