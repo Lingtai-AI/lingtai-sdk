@@ -112,6 +112,92 @@ def test_schema_allows_empty_chat_action():
     assert "empty string" in props["chat_action"]["description"]
 
 
+def test_schema_guides_generated_charts_to_documents():
+    props = SCHEMA["properties"]
+    media_description = props["media"]["description"]
+    action_description = props["action"]["description"]
+
+    assert "charts" in media_description
+    assert "generated artifacts" in media_description
+    assert "type='document'" in media_description
+    assert "type='photo'" in media_description
+    assert "crop" in media_description
+    assert "compress" in media_description
+    assert "charts" in action_description
+    assert "media.type='document'" in action_description
+
+
+def test_skill_file_exists_with_valid_frontmatter():
+    """The manual ships as a standard skill file (SKILL.md) in the Telegram MCP
+    package folder, with YAML frontmatter exposing at least name + description."""
+    from lingtai.mcp_servers.telegram.manager import (
+        _SKILL_BODY,
+        _SKILL_FRONTMATTER,
+        _SKILL_PATH,
+    )
+
+    skill_path = Path(_SKILL_PATH)
+    assert skill_path.name == "SKILL.md"
+    assert skill_path.is_file()
+    # parent folder is the Telegram MCP package
+    assert skill_path.parent.name == "telegram"
+
+    assert _SKILL_FRONTMATTER.get("name")
+    assert _SKILL_FRONTMATTER.get("description")
+    # body is the markdown after the frontmatter fence (no leading '---')
+    assert _SKILL_BODY.strip()
+    assert not _SKILL_BODY.lstrip().startswith("---")
+
+
+def test_schema_exposes_manual_action():
+    props = SCHEMA["properties"]
+    assert "manual" in props["action"]["enum"]
+    action_description = props["action"]["description"]
+    assert "manual:" in action_description
+    assert "progressive-disclosure" in action_description
+    # The frontmatter/catalog entry is injected into the schema: the action
+    # description advertises the skill name + its description.
+    from lingtai.mcp_servers.telegram.manager import _SKILL_FRONTMATTER
+
+    assert _SKILL_FRONTMATTER["name"] in action_description
+    # a distinctive phrase from the skill description survives injection
+    assert "media.type='document'" in action_description
+
+
+def test_manual_action_returns_usage_guidance(tmp_path):
+    manager, _account = _manager(tmp_path)
+    result = manager.handle({"action": "manual"})
+
+    assert result["status"] == "ok"
+    manual = result["manual"]
+    assert isinstance(manual, str) and manual.strip()
+
+    # manual action surfaces parsed metadata + the resolved SKILL.md path
+    assert result["skill"]
+    assert result["metadata"].get("name") == result["skill"]
+    assert result["metadata"].get("description")
+    assert Path(result["path"]).name == "SKILL.md"
+
+    # the returned body is read from SKILL.md, not a hardcoded string
+    from lingtai.mcp_servers.telegram.manager import _SKILL_BODY
+
+    assert manual == _SKILL_BODY
+
+    lowered = manual.lower()
+    # document / photo / chart guidance
+    assert "document" in lowered
+    assert "photo" in lowered
+    assert "chart" in lowered
+    # progressive disclosure framing
+    assert "progressive disclosure" in lowered
+    # the other facets the manual should cover
+    assert "placeholder" in lowered
+    assert "reply" in lowered
+    assert "parse_mode" in manual
+    assert "chat_action" in manual
+    assert "error" in lowered
+
+
 # ---------------------------------------------------------------------------
 # Manager pass-through (the acceptance-critical parse_mode path lives here)
 # ---------------------------------------------------------------------------

@@ -37,6 +37,93 @@ def _load_notification_header_template() -> str:
     )
 
 
+# ---------------------------------------------------------------------------
+# Bundled usage manual (skill format) — SKILL.md ships in this package folder.
+# action='manual' reads the full body; the YAML frontmatter is parsed and the
+# name/description are injected into the tool schema as a progressive-disclosure
+# catalog entry, while the full body stays behind action='manual'.
+# ---------------------------------------------------------------------------
+
+_SKILL_FILENAME = "SKILL.md"
+
+
+def _split_frontmatter(text: str) -> tuple[dict[str, str], str]:
+    """Split a SKILL.md into (frontmatter dict, body markdown).
+
+    Tiny dependency-free parser for the leading ``---`` YAML block. Handles the
+    flat ``key: value`` and ``key: |``/``key: >`` block-scalar forms used by our
+    skill frontmatter; it does not attempt to be a general YAML parser. Returns
+    an empty mapping and the original text when no frontmatter is present.
+    """
+    if not text.startswith("---"):
+        return {}, text
+    lines = text.splitlines(keepends=True)
+    # lines[0] is the opening '---'; find the closing fence.
+    end = None
+    for i in range(1, len(lines)):
+        if lines[i].rstrip("\n").strip() == "---":
+            end = i
+            break
+    if end is None:
+        return {}, text
+
+    fm_lines = [ln.rstrip("\n") for ln in lines[1:end]]
+    body = "".join(lines[end + 1:]).lstrip("\n")
+
+    meta: dict[str, str] = {}
+    key: str | None = None
+    block_parts: list[str] = []
+
+    def _flush() -> None:
+        if key is not None:
+            meta[key] = " ".join(" ".join(block_parts).split())
+
+    for raw in fm_lines:
+        if key is not None and (raw.startswith((" ", "\t")) or not raw.strip()):
+            # Continuation line of a block scalar (key: | / key: >).
+            block_parts.append(raw.strip())
+            continue
+        if ":" in raw and not raw.startswith((" ", "\t")):
+            _flush()
+            k, _, v = raw.partition(":")
+            key = k.strip()
+            block_parts = []
+            v = v.strip()
+            if v in ("|", ">", "|-", ">-", "|+", ">+"):
+                # Block scalar — value continues on indented lines below.
+                continue
+            block_parts.append(v.strip("'\""))
+    _flush()
+    return meta, body
+
+
+def _load_skill() -> tuple[dict[str, str], str, str]:
+    """Load the bundled SKILL.md → (frontmatter, body, path)."""
+    resource = resources.files(__package__).joinpath(_SKILL_FILENAME)
+    text = resource.read_text(encoding="utf-8")
+    frontmatter, body = _split_frontmatter(text)
+    return frontmatter, body, str(resource)
+
+
+_SKILL_FRONTMATTER, _SKILL_BODY, _SKILL_PATH = _load_skill()
+
+
+def _manual_action_description() -> str:
+    """Build the schema 'manual' action line from the skill frontmatter.
+
+    Injects the skill name + description (the frontmatter/catalog entry) so the
+    tool schema advertises the skill while the full body stays progressive-
+    disclosure behind action='manual'.
+    """
+    name = _SKILL_FRONTMATTER.get("name", "telegram-mcp-manual")
+    description = _SKILL_FRONTMATTER.get("description", "")
+    return (
+        f"manual: progressive-disclosure usage manual (skill '{name}') — "
+        "call this (no other args) to pull the full bundled SKILL.md. "
+        f"{description}"
+    ).strip()
+
+
 _NOTIFICATION_HEADER_TEMPLATE = _load_notification_header_template()
 _NOTIFICATION_CHANNEL = "mcp.telegram"
 _COMPOUND_ID_RE = re.compile(r"#([^\s:#]+:-?\d+:\d+)\b")
@@ -180,10 +267,11 @@ SCHEMA = {
                 "send", "check", "read", "reply", "search",
                 "delete", "edit",
                 "contacts", "add_contact", "remove_contact",
-                "accounts",
+                "accounts", "manual",
             ],
             "description": (
                 "send: send message to a chat (chat_id, text; optional media, reply_markup, placeholder, chat_action, parse_mode/entities). "
+                "For charts, reports, generated artifacts, and other files the user should open intact, prefer media.type='document'; use media.type='photo' only when an inline Telegram photo preview is desired, because photo previews may crop, compress, or display poorly for text-heavy graphics. "
                 "If chat_action is set and no text/media is provided, sends a typing "
                 "indicator (auto-expires after 5s) instead of a message. "
                 "check: list recent conversations with unread counts (optional account). "
@@ -196,7 +284,8 @@ SCHEMA = {
                 "add_contact: save a chat alias (chat_id, alias); this does not grant inbound permission. "
                 "To receive messages from that user, their Telegram user ID must also be in allowed_users. "
                 "remove_contact: remove a contact (alias or chat_id). "
-                "accounts: list configured bot accounts."
+                "accounts: list configured bot accounts. "
+                + _manual_action_description()
             ),
         },
         "account": {
@@ -221,7 +310,12 @@ SCHEMA = {
                 "type": {"type": "string", "enum": ["photo", "document", "voice", "audio"]},
                 "path": {"type": "string"},
             },
-            "description": "Media attachment: {type: 'photo'|'document'|'voice'|'audio', path: '/path/to/file'}",
+            "description": (
+                "Media attachment: {type: 'photo'|'document'|'voice'|'audio', path: '/path/to/file'}. "
+                "For charts, HTML/SVG/PNG reports, CSVs, PDFs, and other generated artifacts that should arrive as an intact file, use type='document'. "
+                "Use type='photo' only for native inline photo previews; Telegram photo delivery can crop, compress, thumbnail, or otherwise display text-heavy charts poorly. "
+                "Do not paste local file paths in message text as a substitute for attaching the file."
+            ),
         },
         "reply_markup": {
             "type": "object",
@@ -383,6 +477,8 @@ class TelegramManager:
                 return self._remove_contact(args)
             elif action == "accounts":
                 return self._accounts()
+            elif action == "manual":
+                return self._manual()
             else:
                 return {"error": f"Unknown telegram action: {action}"}
         except Exception as e:
@@ -1512,4 +1608,24 @@ class TelegramManager:
             "accounts": self._service.list_accounts(),
             "details": self._service.account_details(),
             "identity_path": str(self._service.identity_path()),
+        }
+
+    # ------------------------------------------------------------------
+    # Manual — progressive-disclosure usage guidance
+    # ------------------------------------------------------------------
+    #
+    # The manual lives in this package's bundled SKILL.md (standard skill
+    # format: YAML frontmatter + markdown body), loaded at import time above.
+    # action='manual' returns the full skill markdown plus parsed metadata and
+    # the resolved path; the frontmatter is also injected into the schema's
+    # 'manual' action description as a catalog entry.
+
+    def _manual(self) -> dict:
+        return {
+            "status": "ok",
+            "action": "manual",
+            "skill": _SKILL_FRONTMATTER.get("name", "telegram-mcp-manual"),
+            "metadata": dict(_SKILL_FRONTMATTER),
+            "path": _SKILL_PATH,
+            "manual": _SKILL_BODY,
         }
