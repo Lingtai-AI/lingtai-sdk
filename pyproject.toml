@@ -78,12 +78,12 @@ lingtai = [
     "bin/lingtai-search-sidecar",
     "bin/lingtai-search-sidecar.exe",
 ]
-"lingtai.mcp_servers.telegram" = ["notification_header.md", "SKILL.md"]
-"lingtai.mcp_servers.feishu" = ["notification_header.md", "SKILL.md"]
-"lingtai.mcp_servers.wechat" = ["notification_header.md", "SKILL.md"]
-"lingtai.mcp_servers.whatsapp" = ["notification_header.md", "SKILL.md"]
-"lingtai.mcp_servers.imap" = ["SKILL.md"]
-"lingtai.mcp_servers.cloud_mail" = ["SKILL.md"]
+"lingtai.mcp_servers.telegram" = ["notification_header.md", "SKILL.md", "reference/**/*", "assets/**/*"]
+"lingtai.mcp_servers.feishu" = ["notification_header.md", "SKILL.md", "reference/**/*", "assets/**/*"]
+"lingtai.mcp_servers.wechat" = ["notification_header.md", "SKILL.md", "reference/**/*", "assets/**/*"]
+"lingtai.mcp_servers.whatsapp" = ["notification_header.md", "SKILL.md", "reference/**/*", "assets/**/*"]
+"lingtai.mcp_servers.imap" = ["SKILL.md", "reference/**/*", "assets/**/*"]
+"lingtai.mcp_servers.cloud_mail" = ["SKILL.md", "reference/**/*", "assets/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

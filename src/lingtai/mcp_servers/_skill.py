@@ -100,6 +100,12 @@ def manual_payload(
 
     Returns the full skill markdown plus parsed metadata and the resolved
     SKILL.md path, mirroring the Telegram MCP's ``_manual`` result shape.
+
+    Asset/reference discovery deliberately stays in the SKILL.md text. Do not
+    add concrete asset/reference lists to this tool payload: the stable minimal
+    contract is the main manual body + the absolute SKILL.md path, and callers
+    can follow relative paths documented by the skill when they need bundled
+    side files.
     """
     return {
         "status": "ok",

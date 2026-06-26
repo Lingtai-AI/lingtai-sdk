@@ -172,11 +172,19 @@ def test_manual_action_returns_usage_guidance(tmp_path):
     manual = result["manual"]
     assert isinstance(manual, str) and manual.strip()
 
-    # manual action surfaces parsed metadata + the resolved SKILL.md path
+    # Minimal manual contract: return the main SKILL.md body plus its absolute
+    # path and parsed metadata. Concrete asset/reference catalogs stay in the
+    # SKILL.md text rather than expanding the tool payload/schema.
+    assert set(result) == {"status", "action", "skill", "metadata", "path", "manual"}
     assert result["skill"]
     assert result["metadata"].get("name") == result["skill"]
     assert result["metadata"].get("description")
-    assert Path(result["path"]).name == "SKILL.md"
+    skill_path = Path(result["path"])
+    assert skill_path.is_absolute()
+    assert skill_path.name == "SKILL.md"
+    assert skill_path.is_file()
+    assert "assets" not in result
+    assert "references" not in result
 
     # the returned body is read from SKILL.md, not a hardcoded string
     from lingtai.mcp_servers.telegram.manager import _SKILL_BODY

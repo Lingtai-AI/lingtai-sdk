@@ -13,6 +13,7 @@ up real accounts/services.
 from __future__ import annotations
 
 from pathlib import Path
+import tomllib
 
 import pytest
 
@@ -99,11 +100,19 @@ def test_manual_action_returns_usage_guidance(case):
     manual = result["manual"]
     assert isinstance(manual, str) and manual.strip()
 
-    # surfaces parsed metadata + the resolved SKILL.md path
+    # Minimal manual contract: return the main SKILL.md body plus its absolute
+    # path and parsed metadata. Concrete asset/reference catalogs stay in the
+    # SKILL.md text rather than expanding the tool payload/schema.
+    assert set(result) == {"status", "action", "skill", "metadata", "path", "manual"}
     assert result["skill"] == expected_name
     assert result["metadata"].get("name") == expected_name
     assert result["metadata"].get("description")
-    assert Path(result["path"]).name == "SKILL.md"
+    skill_path = Path(result["path"])
+    assert skill_path.is_absolute()
+    assert skill_path.name == "SKILL.md"
+    assert skill_path.is_file()
+    assert "assets" not in result
+    assert "references" not in result
 
     # the returned body is read from SKILL.md, not a hardcoded string
     assert manual == module._SKILL_BODY
@@ -141,3 +150,21 @@ def test_email_manuals_warn_about_external_side_effects():
         lowered = module._SKILL_BODY.lower()
         assert "real" in lowered
         assert "side effect" in lowered
+
+
+def test_mcp_skill_package_data_keeps_reference_and_asset_sidecars_packaged():
+    """Side files are discovered from SKILL.md text, but must ship in wheels."""
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    package_data = tomllib.loads(pyproject.read_text())["tool"]["setuptools"]["package-data"]
+    for package in [
+        "lingtai.mcp_servers.telegram",
+        "lingtai.mcp_servers.feishu",
+        "lingtai.mcp_servers.wechat",
+        "lingtai.mcp_servers.whatsapp",
+        "lingtai.mcp_servers.imap",
+        "lingtai.mcp_servers.cloud_mail",
+    ]:
+        entries = package_data[package]
+        assert "SKILL.md" in entries
+        assert "reference/**/*" in entries
+        assert "assets/**/*" in entries

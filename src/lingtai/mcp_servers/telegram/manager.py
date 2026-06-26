@@ -1618,7 +1618,9 @@ class TelegramManager:
     # format: YAML frontmatter + markdown body), loaded at import time above.
     # action='manual' returns the full skill markdown plus parsed metadata and
     # the resolved path; the frontmatter is also injected into the schema's
-    # 'manual' action description as a catalog entry.
+    # 'manual' action description as a catalog entry. Bundled assets/references,
+    # if any, are documented inside SKILL.md and are not returned as a structured
+    # tool-side list.
 
     def _manual(self) -> dict:
         return {
