@@ -2203,8 +2203,8 @@ class OpenAIAdapter(LLMAdapter):
 
 
 _CODEX_CONTEXT_BUDGET_NOTE = (
-    "Can wait until roughly 150k token context before proactive summarize, "
-    "but if summarizing still leaves the main context above roughly 100k "
+    "Can wait until roughly 200k token context before proactive summarize, "
+    "but if summarizing still leaves the main context above roughly 150k "
     "tokens, consider molt to avoid repeated summarize misses and improve "
     "token efficiency."
 )
@@ -2214,7 +2214,7 @@ _CODEX_SUMMARIZE_ECONOMY_NOTE = (
     "defer and batch consumed high-recoverability results; summarize when "
     "estimated future token savings can repay the cache miss with margin, "
     "or when current/projected context pressure risks overflow. If a "
-    "summarize pass still leaves the main context above roughly 100k tokens, "
+    "summarize pass still leaves the main context above roughly 150k tokens, "
     "consider molting instead of repeatedly paying summarize misses."
 )
 _CODEX_LONG_CONTEXT_STRATEGY = (

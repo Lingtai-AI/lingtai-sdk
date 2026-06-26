@@ -17,9 +17,9 @@ STATIC_CODEX_COMMENT = {
         "summarize until the expected savings justify the cache miss."
     ),
     "context_budget_note": (
-        "Can wait until roughly 150k token context before proactive "
+        "Can wait until roughly 200k token context before proactive "
         "summarize, but if summarizing still leaves the main context "
-        "above roughly 100k tokens, consider molt to avoid repeated "
+        "above roughly 150k tokens, consider molt to avoid repeated "
         "summarize misses and improve token efficiency."
     ),
 }
@@ -46,8 +46,8 @@ def test_agent_prompt_builder_refreshes_meta_guidance_adapter_rules(tmp_path):
     assert "responses_rest_epoch_reset" in prompt
     assert "investment, not routine cleanup" in prompt
     assert "1:10" in prompt
-    assert "roughly 150k token context" in prompt
-    assert "above roughly 100k tokens, consider molt" in prompt
+    assert "roughly 200k token context" in prompt
+    assert "above roughly 150k tokens, consider molt" in prompt
 
 
 def test_agent_batched_prompt_builder_refreshes_meta_guidance_adapter_rules(tmp_path):
@@ -58,5 +58,5 @@ def test_agent_batched_prompt_builder_refreshes_meta_guidance_adapter_rules(tmp_
     assert "## meta_guidance" in prompt
     assert "### codex runtime rules" in prompt
     assert "responses_rest_epoch_reset" in prompt
-    assert "roughly 150k token context" in prompt
-    assert "above roughly 100k tokens, consider molt" in prompt
+    assert "roughly 200k token context" in prompt
+    assert "above roughly 150k tokens, consider molt" in prompt
