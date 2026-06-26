@@ -105,7 +105,8 @@ def manual_payload(
     add concrete asset/reference lists to this tool payload: the stable minimal
     contract is the main manual body + the absolute SKILL.md path, and callers
     can follow relative paths documented by the skill when they need bundled
-    side files.
+    side files. This keeps MCP schemas small and makes SKILL.md the single
+    source of truth for sidecar organization.
     """
     return {
         "status": "ok",

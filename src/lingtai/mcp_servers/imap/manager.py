@@ -296,8 +296,10 @@ class IMAPMailManager:
         # format: YAML frontmatter + markdown body), loaded at import time.
         # action='manual' returns the full skill markdown plus parsed metadata
         # and the resolved path; the frontmatter is also injected into the
-        # schema's 'manual' action description as a catalog entry. It is
-        # account-independent, so it skips the account lookup / meta injection.
+        # schema's 'manual' action description as a catalog entry. Bundled
+        # asset/reference sidecars, if any, are documented inside SKILL.md and
+        # are not returned as structured tool fields.
+        # It is account-independent, so it skips account lookup/meta injection.
         return _skill.manual_payload(
             _SKILL_FRONTMATTER, _SKILL_BODY, _SKILL_PATH, _SKILL_NAME
         )

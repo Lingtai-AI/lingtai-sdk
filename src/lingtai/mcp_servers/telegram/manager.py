@@ -1620,7 +1620,7 @@ class TelegramManager:
     # the resolved path; the frontmatter is also injected into the schema's
     # 'manual' action description as a catalog entry. Bundled assets/references,
     # if any, are documented inside SKILL.md and are not returned as a structured
-    # tool-side list.
+    # tool-side list; do not add assets/references fields here.
 
     def _manual(self) -> dict:
         return {
