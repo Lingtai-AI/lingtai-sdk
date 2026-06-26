@@ -26,6 +26,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from lingtai_kernel.notifications import (
@@ -2121,3 +2122,38 @@ def test_sync_notifications_idle_refuses_touch_when_poisoned(tmp_path: Path) -> 
         "skip_chat_history_save": True,
         "skip_save_reason": "worker_still_running_interface_unsafe",
     }]
+
+
+def test_heal_pending_tool_calls_logs_pending_tail_diagnostics(tmp_path: Path) -> None:
+    """Successful heal logs a bounded pending-tail summary without tool args."""
+    from lingtai_kernel.base_agent import BaseAgent
+    from lingtai_kernel.llm.interface import ChatInterface, TextBlock, ToolCallBlock
+
+    iface = ChatInterface()
+    iface.add_user_message("before")
+    iface.add_assistant_message([TextBlock("thinking aloud")])
+    iface.add_assistant_message([
+        ToolCallBlock(id="call_1", name="bash", args={"command": "SECRET"}),
+        ToolCallBlock(id="call_2", name="email", args={"message": "SECRET"}),
+    ])
+
+    logs: list[tuple[str, dict]] = []
+    saves: list[str] = []
+    agent = SimpleNamespace(
+        _chat=SimpleNamespace(interface=iface),
+        _log=lambda event, **fields: logs.append((event, fields)),
+        _save_chat_history=lambda *, ledger_source="main": saves.append(ledger_source),
+    )
+
+    assert BaseAgent._heal_pending_tool_calls(agent, reason="wake_inject_blocked") is True
+
+    event, fields = logs[-1]
+    assert event == "heal_pending_tool_calls"
+    assert fields["reason"] == "wake_inject_blocked"
+    assert fields["pending_tool_call_count"] == 2
+    assert fields["pending_tool_call_ids"] == ["call_1", "call_2"]
+    assert fields["pending_tool_names"] == ["bash", "email"]
+    assert fields["pending_tail_roles"] == ["user", "assistant", "assistant"]
+    assert fields["pending_tail_block_types"] == [["text"], ["text"], ["tool_call", "tool_call"]]
+    assert "SECRET" not in str(fields)
+    assert saves == ["heal"]

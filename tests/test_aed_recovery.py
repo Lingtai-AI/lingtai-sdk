@@ -18,6 +18,8 @@ from types import SimpleNamespace
 import pytest
 
 from lingtai_kernel.base_agent import turn
+from lingtai_kernel.llm import LLMResponse
+from lingtai_kernel.llm.base import UsageMetadata
 from lingtai_kernel.llm_utils import WorkerStillRunningError
 from lingtai_kernel.message import _make_message, MSG_REQUEST
 from lingtai_kernel.state import AgentState
@@ -284,3 +286,105 @@ def test_status_code_classifier_treats_only_5xx_as_transient():
     assert turn._is_transient_provider_error(StatusError(503)) is True
     assert turn._is_transient_provider_error(StatusError(429)) is False
     assert turn._is_transient_provider_error(StatusError(400)) is False
+
+
+def test_empty_llm_response_error_carries_provider_diagnostics():
+    logs: list[tuple[str, dict]] = []
+    agent = SimpleNamespace(
+        _cancel_event=threading.Event(),
+        _executor=SimpleNamespace(guard=SimpleNamespace()),
+        _log=lambda event, **fields: logs.append((event, fields)),
+    )
+    raw = SimpleNamespace(
+        id="resp_123",
+        model="gpt-test",
+        choices=[SimpleNamespace(finish_reason="stop")],
+    )
+    response = LLMResponse(
+        text="",
+        tool_calls=[],
+        thoughts=[],
+        usage=UsageMetadata(output_tokens=0, thinking_tokens=0),
+        raw=raw,
+        api_call_id="api_123",
+    )
+
+    with pytest.raises(turn.EmptyLLMResponseError) as excinfo:
+        turn._process_response(agent, response, ledger_source="tc_wake")
+
+    err = excinfo.value
+    assert err.ledger_source == "tc_wake"
+    assert err.in_tool_loop is False
+    assert err.response_id == "resp_123"
+    assert err.response_model == "gpt-test"
+    assert err.finish_reason == "stop"
+    assert err.api_call_id == "api_123"
+    assert err.diagnostic_fields() == {
+        "ledger_source": "tc_wake",
+        "in_tool_loop": False,
+        "response_id": "resp_123",
+        "response_model": "gpt-test",
+        "finish_reason": "stop",
+        "api_call_id": "api_123",
+    }
+    assert any(
+        event == "empty_llm_response"
+        and fields["response_id"] == "resp_123"
+        and fields["api_call_id"] == "api_123"
+        for event, fields in logs
+    )
+
+
+def test_tc_wake_error_logs_empty_response_diagnostics(tmp_path):
+    from lingtai_kernel.llm.interface import ChatInterface, ToolCallBlock, ToolResultBlock
+    from lingtai_kernel.message import _make_message, MSG_TC_WAKE
+
+    iface = ChatInterface()
+    iface.add_assistant_message([ToolCallBlock(id="call_notification", name="system", args={})])
+    iface.add_user_blocks([
+        ToolResultBlock(id="call_notification", name="system", content={"ok": True})
+    ])
+
+    logs: list[tuple[str, dict]] = []
+    raw = SimpleNamespace(
+        id="resp_tc",
+        model="gpt-test",
+        choices=[SimpleNamespace(finish_reason="stop")],
+    )
+    response = LLMResponse(
+        text="",
+        tool_calls=[],
+        thoughts=[],
+        usage=UsageMetadata(output_tokens=0, thinking_tokens=0),
+        raw=raw,
+        api_call_id="api_tc",
+    )
+
+    agent = SimpleNamespace(
+        _chat=SimpleNamespace(interface=iface),
+        _tc_inbox=SimpleNamespace(drain=lambda: [], enqueue=lambda item: None),
+        _appendix_ids_by_source={},
+        _dispatch_tool=lambda *a, **kw: None,
+        service=SimpleNamespace(make_tool_result=lambda *a, **kw: None),
+        _config=SimpleNamespace(provider="test", language="en"),
+        _intrinsics={},
+        _tool_handlers={},
+        _PARALLEL_SAFE_TOOLS=set(),
+        _working_dir=tmp_path,
+        _cancel_event=threading.Event(),
+        _session=SimpleNamespace(send=lambda message: response),
+        _save_chat_history=lambda *a, **kw: None,
+        _log=lambda event, **fields: logs.append((event, fields)),
+    )
+
+    with pytest.raises(turn.EmptyLLMResponseError):
+        turn._handle_tc_wake(agent, _make_message(MSG_TC_WAKE, "system", ""))
+
+    event, fields = logs[-1]
+    assert event == "tc_wake_error"
+    assert fields["ledger_source"] == "tc_wake"
+    assert fields["in_tool_loop"] is False
+    assert fields["response_id"] == "resp_tc"
+    assert fields["response_model"] == "gpt-test"
+    assert fields["finish_reason"] == "stop"
+    assert fields["api_call_id"] == "api_tc"

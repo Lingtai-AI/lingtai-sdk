@@ -40,14 +40,37 @@ class EmptyLLMResponseError(RuntimeError):
     transitioning to IDLE and abandoning the in-progress task.
     """
 
-    def __init__(self, *, ledger_source: str, in_tool_loop: bool):
+    def __init__(
+        self,
+        *,
+        ledger_source: str,
+        in_tool_loop: bool,
+        response_id: str | None = None,
+        response_model: str | None = None,
+        finish_reason: str | None = None,
+        api_call_id: str | None = None,
+    ):
         self.ledger_source = ledger_source
         self.in_tool_loop = in_tool_loop
+        self.response_id = response_id
+        self.response_model = response_model
+        self.finish_reason = finish_reason
+        self.api_call_id = api_call_id
         where = "after tool results" if in_tool_loop else "on initial send"
         super().__init__(
             f"LLM returned empty response (no text, no tool_calls, no thoughts) "
             f"{where}; ledger={ledger_source}"
         )
+
+    def diagnostic_fields(self) -> dict:
+        return {
+            "ledger_source": self.ledger_source,
+            "in_tool_loop": self.in_tool_loop,
+            "response_id": self.response_id,
+            "response_model": self.response_model,
+            "finish_reason": self.finish_reason,
+            "api_call_id": self.api_call_id,
+        }
 
 
 _TRANSIENT_AED_RETRY_LIMIT = 3
@@ -1208,7 +1231,10 @@ def _handle_tc_wake(agent, msg: Message) -> None:
                 tool_completed=True,
             )
             agent._save_chat_history()
-        agent._log("tc_wake_error", error=str(e)[:300])
+        fields = {"error": str(e)[:300]}
+        if isinstance(e, EmptyLLMResponseError):
+            fields.update(e.diagnostic_fields())
+        agent._log("tc_wake_error", **fields)
         raise
 
 
@@ -1426,6 +1452,10 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
             raise EmptyLLMResponseError(
                 ledger_source=ledger_source,
                 in_tool_loop=in_tool_loop,
+                response_id=_diag.get("response_id"),
+                response_model=_diag.get("response_model"),
+                finish_reason=_diag.get("finish_reason"),
+                api_call_id=getattr(response, "api_call_id", None),
             )
 
         if response.text:

@@ -47,6 +47,46 @@ from ..trace_redaction import redact_for_trajectory
 logger = get_logger()
 
 
+def _block_type_name(block: object) -> str:
+    """Return a compact, safe block type label for diagnostics."""
+    try:
+        data = block.to_dict()  # type: ignore[attr-defined]
+        btype = data.get("type") if isinstance(data, dict) else None
+        if isinstance(btype, str) and btype:
+            return btype
+    except Exception:
+        pass
+    name = type(block).__name__
+    if name.endswith("Block"):
+        name = name[:-5]
+    return name[:80]
+
+
+def _pending_tool_call_diagnostics(iface, *, tail_limit: int = 3) -> dict:
+    """Bounded, argument-free diagnostics for a pending tool-call tail."""
+    entries = list(getattr(iface, "entries", None) or [])
+    tail_entries = entries[-tail_limit:]
+    tail = entries[-1] if entries else None
+    pending_calls = []
+    if getattr(tail, "role", None) == "assistant":
+        pending_calls = [
+            block
+            for block in getattr(tail, "content", []) or []
+            if hasattr(block, "id") and hasattr(block, "name") and hasattr(block, "args")
+        ]
+
+    return {
+        "pending_tool_call_count": len(pending_calls),
+        "pending_tool_call_ids": [getattr(call, "id", None) for call in pending_calls],
+        "pending_tool_names": [getattr(call, "name", None) for call in pending_calls],
+        "pending_tail_roles": [getattr(entry, "role", None) for entry in tail_entries],
+        "pending_tail_block_types": [
+            [_block_type_name(block) for block in (getattr(entry, "content", []) or [])]
+            for entry in tail_entries
+        ],
+    }
+
+
 # Issue #164 — event types that count as "the agent made forward
 # progress." Bumping ``_last_progress_at`` on these gives the ACTIVE-
 # without-progress watchdog a single, robust signal that survives
@@ -1312,12 +1352,18 @@ class BaseAgent:
             pass
         if not iface.has_pending_tool_calls():
             return False
+        diagnostics = _pending_tool_call_diagnostics(iface)
         try:
             iface.close_pending_tool_calls(reason=f"heal:{reason}")
         except Exception as e:
-            self._log("heal_pending_tool_calls_failed", reason=reason, error=str(e)[:200])
+            self._log(
+                "heal_pending_tool_calls_failed",
+                reason=reason,
+                error=str(e)[:200],
+                **diagnostics,
+            )
             return False
-        self._log("heal_pending_tool_calls", reason=reason)
+        self._log("heal_pending_tool_calls", reason=reason, **diagnostics)
         try:
             self._save_chat_history(ledger_source="heal")
         except Exception:
