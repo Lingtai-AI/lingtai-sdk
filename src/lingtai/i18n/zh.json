@@ -1,5 +1,5 @@
 {
-  "read.description": "读取文本文件的内容，返回带行号的文本。仅支持文本文件，不能读取二进制、图片或音频。使用 read 前，尤其是大文件、完整读取、截断或 line_truncated 处理，必须先读 read-manual skill。如遇非 UTF-8 或需要谨慎搜索/编辑，请先读 file-manual。用 offset/limit 控制行窗口，并可用可选 max_chars 控制单次字符预算。read 默认预算为 50 000 字符；max_chars 可在单次调用中放大/缩小，但会被不可配置的 runtime 硬上限 200 000 字符 clamp。读取成功仍可能截断：检查 truncated=true、cap_chars、returned_chars、next_offset、remaining_lines_estimate 和 line_truncated，并用 next_offset 续读至结束。若 line_truncated=true，所示物理行只是前缀；next_offset 会跳到下一行，不能恢复该行隐藏尾部。按 read-manual 推荐，先用 bash/Python 查看文件大小、总行数、最长行等 metadata/stats，再决定 offset/limit/max_chars；长行内容用 grep/sed/Python 等定向处理。",
+  "read.description": "读取文本文件的内容，返回带行号的文本。仅支持文本文件，不能读取二进制、图片或音频。使用 read 前，尤其是大文件、完整读取、截断或 line_truncated 处理，必须先读 read-manual skill。如遇非 UTF-8 或需要谨慎搜索/编辑，请先读 file-manual。用 offset/limit 控制行窗口，并可用可选 max_chars 控制单次字符预算。read 默认预算为 100 000 字符；max_chars 可在单次调用中放大/缩小，但会被不可配置的 runtime 硬上限 200 000 字符 clamp。读取成功仍可能截断：检查 truncated=true、cap_chars、returned_chars、next_offset、remaining_lines_estimate 和 line_truncated，并用 next_offset 续读至结束。若 line_truncated=true，所示物理行只是前缀；next_offset 会跳到下一行，不能恢复该行隐藏尾部。按 read-manual 推荐，先用 bash/Python 查看文件大小、总行数、最长行等 metadata/stats，再决定 offset/limit/max_chars；长行内容用 grep/sed/Python 等定向处理。",
   "read.file_path": "文件的绝对路径",
   "read.offset": "起始行号（从 1 开始）",
   "read.limit": "最大读取行数",
@@ -63,5 +63,5 @@
   "daemon.tasks.system_prompt": "可选的一次性行为契约，只附加到此 daemon 任务：角色、约束、工具使用策略、协作边界与安全姿态。留空或省略表示使用默认 daemon 身份。它可以引导 daemon 的工作方式，但不能覆盖工具可用性、取消/超时限制或工具执行/审批 gate。",
   "daemon.tasks.skills": "此 daemon 任务的可选 skill 上下文。字符串数组；每项可以是 skill 目录（内含 SKILL.md），也可以是直接的 SKILL.md 文件路径。相对路径按父 agent 工作目录解析。daemon runtime 会解析每个 skill 的 frontmatter，并把紧凑 YAML skill list 注入本次 prompt；用 system_prompt 说明何时/如何应用这些 skills。",
   "daemon.tasks.mcp": "此 daemon 任务的可选一次性 MCP 注册。对象数组；每项为完整 MCP 注册对象：{name, transport/type: stdio|http，stdio 使用 command+args+env，http 使用 url+headers}。这些注册会以 YAML 序列化进 daemon prompt；LingTai backend 还会将其启动为本次任务专属 MCP client 并暴露其 tools。CLI backends 会收到同一份序列化注册作为上下文，如其运行时支持 MCP 可自行加载。prompt 中的 env/header secret 会被脱敏。",
-  "read.max_chars": "可选的单次读取字符预算。默认 50 000；超过 runtime 硬上限的值会被 clamp 到 200 000。大文件设置此参数前先读 read-manual。"
+  "read.max_chars": "可选的单次读取字符预算。默认 100 000；超过 runtime 硬上限的值会被 clamp 到 200 000。大文件设置此参数前先读 read-manual。"
 }

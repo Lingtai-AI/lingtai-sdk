@@ -368,7 +368,7 @@ def _compact_history_before_retry(agent, *, source: str) -> "CompactionStats | N
 
     Walks ``agent._session.chat.interface._entries`` and replaces any
     ``ToolResultBlock.content`` larger than the retroactive cap (default
-    5K chars — tighter than the preventive 10K cap because we want to
+    5K chars — tighter than the preventive 200K cap because we want to
     actually free provider tokens before retry) with a spill manifest.
     Entries, ordering, ids, and ``tool_call``/``tool_result`` pairing are
     untouched.  Already-compacted manifests are skipped.

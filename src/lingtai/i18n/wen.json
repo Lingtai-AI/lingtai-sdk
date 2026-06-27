@@ -1,5 +1,5 @@
 {
-  "read.description": "阅文本卷，返带行号之文。唯文本可读，二进制、图像、音声不可。凡用 read，尤大卷、全卷续读、截断、line_truncated 之处置，必先读 read-manual 一技。若非 UTF-8 或须慎搜慎改，先读 file-manual。以 offset/limit 定行段；可以 max_chars 定此召字符之额。read 默额二万字；max_chars 可于一召增减，然不得逾 runtime 不可配置之硬限十万字，逾则裁之。阅之虽成，犹或截断：当察 truncated=true、cap_chars、returned_chars、next_offset、remaining_lines_estimate、line_truncated；以 next_offset 续阅至尽。若 line_truncated=true，则所示物理行唯前缀；next_offset 越至下行，不复其隐尾。当循 read-manual，以 bash/Python 先察卷大、行数、最长行等 metadata/stats，再定 offset/limit/max_chars；长行则以 grep/sed/Python 等定向处之。",
+  "read.description": "阅文本卷，返带行号之文。唯文本可读，二进制、图像、音声不可。凡用 read，尤大卷、全卷续读、截断、line_truncated 之处置，必先读 read-manual 一技。若非 UTF-8 或须慎搜慎改，先读 file-manual。以 offset/limit 定行段；可以 max_chars 定此召字符之额。read 默额十万字；max_chars 可于一召增减，然不得逾 runtime 不可配置之硬限二十万字，逾则裁之。阅之虽成，犹或截断：当察 truncated=true、cap_chars、returned_chars、next_offset、remaining_lines_estimate、line_truncated；以 next_offset 续阅至尽。若 line_truncated=true，则所示物理行唯前缀；next_offset 越至下行，不复其隐尾。当循 read-manual，以 bash/Python 先察卷大、行数、最长行等 metadata/stats，再定 offset/limit/max_chars；长行则以 grep/sed/Python 等定向处之。",
   "read.file_path": "文卷之绝对路径",
   "read.offset": "起始行号（自一起算）",
   "read.limit": "至多读取之行数",
@@ -63,5 +63,5 @@
   "daemon.tasks.system_prompt": "可选一次性心令，仅附此 daemon 一务：定其身、约其行、明工具用法、协作边界与安危姿态。留白或省之，即用 daemon 默认之身。可导其行事之法，不可越工具、取消/时限、执行/核准之门。",
   "daemon.tasks.skills": "此 daemon 一务之可选 skill 上下文。字符串列；每项可为 skill 目录（内有 SKILL.md），亦可直指 SKILL.md。相对路径按父灵工作目录解之。daemon runtime 解析诸 skill frontmatter，渲为紧凑 YAML skill list 注入本次心令；以 system_prompt 明其何时/如何用之。",
   "daemon.tasks.mcp": "此 daemon 一务之可选一次性 MCP 注册。对象列；每项为完整 MCP 注册：{name, transport/type: stdio|http；stdio 用 command+args+env，http 用 url+headers}。诸注册以 YAML 序入 daemon 心令；LingTai 后端亦临时启为本务 MCP client，显其 tools。CLI 后端得同一序列化注册为上下文，若其运行时可载 MCP 则自用之。心令中 env/header 密值皆脱敏。",
-  "read.max_chars": "可选：此召 read 内容之字符额。默认二万；逾 runtime 硬限者裁至十万。大卷设此参数前，先读 read-manual。"
+  "read.max_chars": "可选：此召 read 内容之字符额。默认十万；逾 runtime 硬限者裁至二十万。大卷设此参数前，先读 read-manual。"
 }

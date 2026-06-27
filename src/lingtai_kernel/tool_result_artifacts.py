@@ -22,7 +22,7 @@ Both paths produce the same manifest dict, recognised by
 content that is already a manifest, making compaction idempotent across
 repeated AED retries.
 
-The 100K hard cap on the live wire vs. the 5K cap on history is deliberate: a
+The 200K hard cap on the live wire vs. the 5K cap on history is deliberate: a
 freshly-built result has room for stamp_meta and small reserved warnings,
 while a result already sitting in history is a sunk cost we want to shrink
 hard before retry to free up provider tokens.

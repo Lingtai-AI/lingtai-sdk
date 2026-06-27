@@ -1,0 +1,21 @@
+ .../intrinsic_skills/psyche-manual/SKILL.md        |   8 +-
+ .../reference/procedures-manual/SKILL.md           |  43 +-
+ .../reference/substrate-manual/SKILL.md            |  38 +-
+ .../reference/summarize-manual/SKILL.md            |  61 ++-
+ src/lingtai/llm/openai/ANATOMY.md                  |   2 +-
+ src/lingtai/llm/openai/adapter.py                  | 341 ++++----------
+ src/lingtai/prompts/guidance.json                  |  19 +-
+ src/lingtai/prompts/procedures.md                  |  24 +-
+ src/lingtai/prompts/substrate.md                   |  32 +-
+ src/lingtai_kernel/ANATOMY.md                      |   4 +-
+ src/lingtai_kernel/base_agent/ANATOMY.md           |   4 +-
+ src/lingtai_kernel/config.py                       |  14 +-
+ src/lingtai_kernel/intrinsics/soul/ANATOMY.md      |   2 +-
+ src/lingtai_kernel/intrinsics/system/summarize.py  |  19 +-
+ src/lingtai_kernel/meta_block.py                   | 222 +++++----
+ tests/test_agent_meta_guidance.py                  |  62 ++-
+ tests/test_codex_ws_session.py                     | 512 ++++++++-------------
+ tests/test_meta_block.py                           | 216 ++++++---
+ tests/test_notification_sync.py                    |  23 +-
+ tests/test_system_summarize.py                     |  11 +
+ 20 files changed, 871 insertions(+), 786 deletions(-)

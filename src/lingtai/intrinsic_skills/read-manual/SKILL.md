@@ -10,14 +10,14 @@ tags: [read, files, continuation, truncation, cap, pagination]
 This skill documents the complete workflow for reading files with the `read` tool.
 For basic tool choice (read vs write vs edit vs grep vs glob), see the `file-manual` skill.
 
-## Cap model: 50k read default, 200k runtime hard ceiling
+## Cap model: 100k read default, 200k runtime hard ceiling
 
 Before using `read`, load this manual when you are dealing with large files,
 complete-content workflows, truncation, or `line_truncated` results.
 
 There are two limits:
 
-- `read` default page budget: **50 000 characters per call**.
+- `read` default page budget: **100 000 characters per call**.
 - Runtime tool-result hard ceiling: **200 000 characters**. This ceiling is not
   configurable by agents or prompts; it prevents provider-visible tool results
   from exploding.
@@ -72,7 +72,7 @@ PY
 Use the result to decide:
 
 - `limit` = how many lines to request.
-- `max_chars` = per-call character budget (default 50k, max 200k).
+- `max_chars` = per-call character budget (default 100k, max 200k).
 - `offset` = where to begin or resume.
 
 ## Complete-content workflow
@@ -128,7 +128,7 @@ If you need a smaller window (to avoid transport spill or to target a region):
 Two separate caps apply:
 
 1. **Read-level pagination cap**: the effective per-call budget chosen by
-   `max_chars` or the 50k default. When content exceeds this cap, the result is
+   `max_chars` or the 100k default. When content exceeds this cap, the result is
    returned with `truncated=true` and continuation metadata. The agent reads the
    next chunk by calling `read` again with `next_offset`.
 

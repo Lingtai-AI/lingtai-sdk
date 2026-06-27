@@ -19,7 +19,7 @@ PROVIDERS = {"providers": [], "default": "builtin"}
 # Read defaults to a smaller everyday page budget while the runtime tool-result
 # boundary remains a larger non-configurable hard ceiling. Callers may pass
 # ``max_chars`` per read call; values above the runtime ceiling are clamped.
-DEFAULT_READ_CAP_CHARS: int = 50_000
+DEFAULT_READ_CAP_CHARS: int = 100_000
 READ_HARD_CAP_CHARS: int = PREVENTIVE_MAX_CHARS
 
 
