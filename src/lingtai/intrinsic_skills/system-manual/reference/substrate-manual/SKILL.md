@@ -141,8 +141,10 @@ At the provider layer, runtimes serve requests by *appending* onto a stable
 cache/continuation prefix rather than *reconstructing* it each turn; rebuilding
 that prefix on every summarize would discard the cache benefit. So below 0.75 of
 the context window the summarize stays pending and the session keeps appending —
-this delay is normal — and at 0.75 of the context window the runtime automatically reconstructs context
-with the compacted history on the next request, with no manual action required.
+this delay is normal. If summarized history is pending, then at 0.75 of the
+context window the runtime automatically reconstructs context with that compacted
+history on the next request, with no manual action required. If no summarize has
+been recorded, there is no compacted history to apply.
 `refresh` is reserved for emergency reconstruction (see above); molt is the final
 boundary when summarize/reconstruction cannot get context below the threshold.
 

@@ -104,9 +104,11 @@ does not immediately force the provider to rebuild context:
 - **Below 0.75 of the context window:** the summarize stays "pending" at the
   provider layer. The session keeps appending; you can keep working and may issue
   more summarize calls safely. This delay is normal and is not a failure.
-- **At or above 0.75 of the context window:** the runtime automatically reconstructs context with the
-  compacted history on the next provider request. You do not need to take any
-  manual action for this to happen.
+- **At or above 0.75 of the context window:** if summarized history is
+  pending, the runtime automatically reconstructs context with that compacted
+  history on the next provider request. You do not need to call summarize again
+  or take manual action for this to happen. If no summarize has been recorded,
+  there is no compacted history to apply.
 
 `refresh` is an **emergency** reconstruction path — for context that is broken or
 stale, or when an immediate rebuild is urgently needed. It is not a routine knob

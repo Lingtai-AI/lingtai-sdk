@@ -183,6 +183,7 @@ def test_summarize_single_item_success():
     assert "reconstruction" in result
     assert "delayed" in result["reconstruction"]
     assert "keep working" in result["reconstruction"]
+    assert "summarized history" in result["reconstruction"]
     # Not a provider-specific policy object — a plain status string.
     assert isinstance(result["reconstruction"], str)
 

@@ -65,9 +65,10 @@ provider-side context reconstruction is intentionally delayed. Most runtimes
 serve each request by *appending* to a stable cache prefix rather than
 *reconstructing* it; rebuilding that prefix on every summarize would discard the
 cache/continuation benefit. So below 0.75 of the context window, summarize
-does not force a rebuild and the session keeps appending. At 0.75 of the context window the runtime
-automatically reconstructs context with the compacted history on the next
-request — no manual action is needed. `refresh` is an *emergency* reconstruction
+does not force a rebuild and the session keeps appending. If summarized history is pending, then at 0.75 of the context window the
+runtime automatically reconstructs context with that compacted history on the
+next request — no manual action is needed. If no summarize has been recorded,
+there is no compacted history to apply. `refresh` is an *emergency* reconstruction
 path for broken/stale context, not part of the normal summarize flow. Molt is the
 final boundary: if summarizing/reconstruction cannot bring context back below the
 threshold, tend durable stores and molt deliberately. Reading and clearing

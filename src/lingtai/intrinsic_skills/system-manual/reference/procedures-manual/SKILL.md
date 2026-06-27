@@ -70,9 +70,12 @@ reminders cleared), but provider-side reconstruction is delayed and that delay i
 expected. Runtimes append onto a stable cache prefix instead of rebuilding it
 every turn, so below 0.75 of the context window you simply keep working — do not
 treat the "pending"/delayed status as a failure or reach for `refresh` to force a
-rebuild. At 0.75 of the context window the runtime reconstructs context automatically on the next
-request. Reserve `refresh` for emergencies (broken/stale context). If summarize
-plus that automatic reconstruction still cannot get context below the threshold,
+rebuild. If summarized history is pending, then at 0.75 of the context window
+the runtime reconstructs context automatically on the next request with that
+compacted history; no extra summarize call is needed. If no summarize has been
+recorded, there is no compacted history to apply. Reserve `refresh` for
+emergencies (broken/stale context). If summarize plus that automatic
+reconstruction still cannot get context below the threshold,
 molt deliberately.
 
 Runtime `_meta.guidance` gives the high-attention reminder when summarization is

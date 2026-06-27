@@ -15,8 +15,10 @@ Summarize normally — after digesting large results, when preserving key facts,
 when context grows bulky. The local effect is immediate; provider-side
 reconstruction is delayed and that delay is expected, not a problem. Below 0.75 of
 the context window, keep working: the runtime continues appending and does not
-rebuild context per summarize. At 0.75 of the context window it reconstructs automatically on the next
-request, so you do not need to act. Use `refresh` only as an emergency when
+rebuild context per summarize. If summarized history is pending, then at 0.75
+of the context window it reconstructs automatically on the next request with that
+compacted history, so you do not need to act. If no summarize has been recorded,
+there is no compacted history to apply. Use `refresh` only as an emergency when
 context is broken/stale, not as a routine summarize step. If summarize and
 reconstruction still cannot bring context below the threshold, molt deliberately
 (read `psyche-manual` first).

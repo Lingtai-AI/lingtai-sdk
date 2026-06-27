@@ -299,14 +299,14 @@ def _summarize(agent, args: dict) -> dict:
     # provider-side context reconstruction is intentionally delayed.  The
     # visible result blocks were replaced and the large-result reminders
     # cleared immediately above; only the provider request still rides the
-    # existing append/continuation prefix until context reaches the runtime
+    # existing append/continuation prefix until summarized history is pending and context reaches the runtime
     # reconstruction threshold (0.75 of the window).  This is a short,
     # generic status, not a per-provider policy object — runtimes that
     # reconstruct on every request simply observe no delay.
     if summarized_count > 0:
         result["reconstruction"] = (
             "Summary recorded and applied locally now. Provider-side context "
-            "reconstruction is delayed until context reaches 0.75 of the window; "
+            "reconstruction for this summarized history is delayed until context reaches 0.75 of the window; "
             "this is normal — keep working."
         )
 
