@@ -146,9 +146,10 @@ this delay is normal. If summarized history is pending, then at 0.75 of the
 context window the runtime automatically reconstructs context with that compacted
 history on the next request, with no manual action required. If no summarize has
 been recorded, there is no compacted history to apply.
-`refresh` is reserved for emergency reconstruction (see above); molt is the
-stronger summarize boundary when summarize/reconstruction cannot get context
-below 0.7 of the window. A completed task is also an efficiency boundary: after
+`refresh` is reserved for emergency reconstruction (see above). Summarize
+is a mini molt for a consumed tool result; molt is the stronger
+whole-conversation summarize boundary when summarize/reconstruction cannot get
+context below 0.7 of the window. A completed task is also an efficiency boundary: after
 necessary reporting and durable-store updates, if no concrete next action
 remains, molt regardless of context size. If you have already decided to molt,
 do not spend a separate summarize call merely to prepare. This is not for

@@ -61,8 +61,9 @@ improves cache/continuation efficiency for the next turn.
 Idle cleanup is also the right time to choose a deliberate molt. If the current
 task is complete, necessary reporting/durable stores are tended, no human reply
 is pending, and no concrete next action remains, molt regardless of context
-size. Once you have decided to molt, do not spend a separate summarize call
-merely to prepare; molt is the stronger summarize boundary. This is a
+size. Summarize is a mini molt for a consumed tool result. Once you have decided
+to molt, do not spend a separate summarize call merely to prepare; molt is the
+stronger whole-conversation summarize boundary. This is a
 token-economy boundary, not an aesthetic reset: keeping a finished task segment
 alive raises future token per API call and can reduce cache/continuation
 efficiency.

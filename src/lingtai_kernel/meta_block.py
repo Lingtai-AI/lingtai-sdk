@@ -398,12 +398,16 @@ def build_meta_readme() -> dict:
         ),
         AGENT_META_KEY: (
             "Agent/current-state snapshot (time, context usage, stamina, "
-            "active_turn_tool_calls, current_tool_result_chars, optional "
-            "adapter_comment). Latest tool result only; older copies are "
-            "stripped as newer results arrive. current_tool_result_chars is "
-            "a compact dict with total_chars and top_results "
-            "(id, tool_name, chars; no preview) for proactive "
-            "summarization candidates. adapter_comment is a small "
+            "token_efficiency, active_turn_tool_calls, "
+            "current_tool_result_chars, optional adapter_comment). Latest "
+            "tool result only; older copies are stripped as newer results "
+            "arrive. token_efficiency is a compact current_session token "
+            "economy snapshot with api_calls, input/cached tokens, cache "
+            "rate, average input tokens per API call, context tokens/window, "
+            "and a guidance_ref back to meta_guidance.token_efficiency. "
+            "current_tool_result_chars is a compact dict with total_chars "
+            "and top_results (id, tool_name, chars; no preview) for "
+            "proactive summarization candidates. adapter_comment is a small "
             "provider/adapter-authored note carrying only dynamic per-turn "
             "runtime scalars; the adapter's static "
             "rules live in the system-prompt section meta_guidance."
@@ -712,6 +716,7 @@ def build_meta(agent) -> dict:
                 "molt": dict,                # optional pressure stage/action; present at >=75%
             },
             "stamina_left_seconds": float,   # session time remaining; -1 if unstarted
+            "token_efficiency": dict,        # optional current_session token economy
             "current_tool_result_chars": dict, # total + top formal tool results >1000 chars
         }
 
@@ -742,6 +747,8 @@ def build_meta(agent) -> dict:
             pass  # leave dirty; sentinels below
 
     decomp_ran = session is not None and not session._token_decomp_dirty
+    context_tokens_for_efficiency = -1
+    context_window_for_efficiency = -1
 
     if decomp_ran:
         sys_prompt = session._system_prompt_tokens
@@ -788,6 +795,8 @@ def build_meta(agent) -> dict:
             limit = agent._config.context_limit or chat_obj.context_window()
         else:
             limit = agent._config.context_limit or 0
+        context_tokens_for_efficiency = system_tokens + history_tokens
+        context_window_for_efficiency = limit if limit > 0 else -1
         usage = (system_tokens + history_tokens) / limit if limit > 0 else -1.0
 
         meta["context"] = {
@@ -805,6 +814,14 @@ def build_meta(agent) -> dict:
     molt = build_molt_context(agent, meta["context"].get("usage", -1.0))
     if molt:
         meta["context"]["molt"] = molt
+
+    token_efficiency = build_token_efficiency(
+        agent,
+        context_tokens=context_tokens_for_efficiency,
+        context_window=context_window_for_efficiency,
+    )
+    if token_efficiency:
+        meta["token_efficiency"] = token_efficiency
 
     # Stamina — transient runtime resource, can't sit in the cached system
     # prompt. Surface here so the agent sees how much session time it has
@@ -1297,7 +1314,8 @@ def attach_active_runtime(
         any notification keys.
       * Promote the latest dict-shaped result's per-tool ``_runtime_pending``
         snapshot (recorded by :func:`stamp_meta`) into ``_meta.agent_meta``
-        (kernel runtime state + ``elapsed_ms`` + ``active_turn_tool_calls``)
+        (kernel runtime state including ``token_efficiency``, plus
+        ``elapsed_ms`` + ``active_turn_tool_calls``)
         and ``_meta.guidance`` (from ``guidance.json`` plus the latest-only
         ``meta_readme`` section).
       * Strip the transient ``_runtime_pending`` scaffolding from *all* results.
@@ -1362,3 +1380,91 @@ def _active_turn_tool_calls(agent) -> int | None:
         return int(total) if total is not None else None
     except Exception:
         return None
+
+
+def _non_negative_int(value, *, default: int = 0) -> int:
+    """Best-effort conversion for agent-facing token counters."""
+    try:
+        if isinstance(value, bool):
+            raise TypeError
+        ivalue = int(value)
+    except Exception:
+        return default
+    return ivalue if ivalue >= 0 else default
+
+
+def _fallback_context_window(agent) -> int:
+    """Return a best-effort context window for token_efficiency."""
+    try:
+        config_limit = int(getattr(getattr(agent, "_config", None), "context_limit", 0) or 0)
+    except Exception:
+        config_limit = 0
+    if config_limit > 0:
+        return config_limit
+    try:
+        session = getattr(agent, "_session", None)
+        chat = getattr(session, "chat", None)
+        if chat is None:
+            chat = getattr(session, "_chat", None)
+        window_fn = getattr(chat, "context_window", None)
+        if callable(window_fn):
+            window = _non_negative_int(window_fn(), default=-1)
+            return window if window > 0 else -1
+    except Exception:
+        pass
+    return -1
+
+
+def build_token_efficiency(
+    agent,
+    *,
+    context_tokens: int = -1,
+    context_window: int = -1,
+) -> dict | None:
+    """Return a compact current-session token economy snapshot for agent_meta.
+
+    The snapshot intentionally mirrors the TUI-facing token counters the agent
+    can act on now.  It reads the live SessionManager through
+    ``agent.get_token_usage()`` and does not reread durable ledgers.
+    """
+    usage_fn = getattr(agent, "get_token_usage", None)
+    if not callable(usage_fn):
+        return None
+    try:
+        usage = usage_fn()
+    except Exception:
+        return None
+    if not isinstance(usage, Mapping):
+        return None
+
+    api_calls = _non_negative_int(usage.get("api_calls"))
+    input_tokens = _non_negative_int(usage.get("input_tokens"))
+    cached_tokens = _non_negative_int(usage.get("cached_tokens"))
+
+    context_tokens_value = _non_negative_int(context_tokens, default=-1)
+    if context_tokens_value < 0:
+        context_tokens_value = _non_negative_int(usage.get("ctx_total_tokens"), default=-1)
+    context_window_value = _non_negative_int(context_window, default=-1)
+    if context_window_value <= 0:
+        context_window_value = _fallback_context_window(agent)
+
+    avg_input = int(round(input_tokens / api_calls)) if api_calls > 0 else 0
+    guiding_avg = int(0.6 * context_window_value) if context_window_value > 0 else -1
+    cache_rate = (
+        round(min(cached_tokens / input_tokens, 1.0), 5)
+        if input_tokens > 0
+        else 0.0
+    )
+
+    return {
+        "scope": "current_session",
+        "api_calls": api_calls,
+        "input_tokens": input_tokens,
+        "cached_tokens": cached_tokens,
+        "cache_rate": cache_rate,
+        "avg_input_tokens_per_api_call": avg_input,
+        "guiding_avg_input_tokens_per_api_call": guiding_avg,
+        "context_tokens": context_tokens_value,
+        "context_window": context_window_value,
+        "guidance_ref": "meta_guidance.token_efficiency",
+    }

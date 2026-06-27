@@ -81,8 +81,9 @@ reconstruction still cannot get context below 0.7 of the window, molt
 deliberately. At a task boundary, after necessary reporting and durable stores
 are tended, if there is no concrete next action, molt regardless of context
 size to reduce future token per API call and preserve cache/continuation
-efficiency. If you have already decided to molt, do not summarize first merely
-to prepare: molt is the stronger summarize boundary.
+efficiency. Summarize is a mini molt for a consumed tool result. If you
+have already decided to molt, do not summarize first merely to prepare: molt is
+the stronger whole-conversation summarize boundary.
 
 Runtime `_meta.guidance` gives the high-attention reminder when summarization is
 timely. For the full procedure — urgent large-result handling, idle cleanup
@@ -107,6 +108,12 @@ For human-facing work:
 - Never reply to humans via diary text.
 - Do not infer approval for external side effects when standing rules require
   explicit confirmation.
+- Before delegating a PR, diff, or implementation for GLM/Claude/daemon
+  review, re-check recent human-channel instructions for missed scope,
+  boundary, or authorization changes. Use the producer channel, not memory
+  or a notification digest alone; if the human named a window such as the
+  last 30 messages, use that exact window and frame the reviewer with the
+  latest contract.
 
 Examples of external side effects that normally need explicit confirmation:
 creating/filing issues, opening PRs, pushing commits, merging, deleting/closing
