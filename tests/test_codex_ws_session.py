@@ -764,11 +764,31 @@ def test_rest_incremental_never_sends_previous_response_id():
     assert "codex_fallback_error_type" not in second.usage.extra
 
 
-def test_rest_summarize_forces_next_full_epoch_reset():
-    """``on_history_summarized`` resets the continuation epoch on REST too, so the
-    next turn is a full request even though it was a strict additive extension."""
+def test_rest_summarize_delays_epoch_reset_below_context_threshold(monkeypatch):
+    """REST also delays the Codex epoch reset label until local context pressure
+    reaches the threshold; summarize still returns normally before then."""
     client = RealisticRestClient()
     session = _make_rest_session(client)
+    monkeypatch.setattr(session._interface, "estimate_context_tokens", lambda: 100)
+    monkeypatch.setattr(session, "context_window", lambda: 1000)
+
+    first = session.send("one")
+    second = session.send("two")
+    session.on_history_summarized(["call_old"])
+    third = session.send("three")
+
+    assert first.usage.extra["codex_request_mode"] == "rest_full"
+    assert second.usage.extra["codex_request_mode"] == "rest_incremental"
+    assert third.usage.extra["codex_request_mode"] == "rest_incremental"
+    assert third.usage.extra["codex_ws_delta_reason"] == "ok"
+    assert session.dynamic_adapter_comment()["summarize_effect"]["delayed"] is True
+
+
+def test_rest_summarize_releases_delayed_epoch_reset_at_context_threshold(monkeypatch):
+    client = RealisticRestClient()
+    session = _make_rest_session(client)
+    monkeypatch.setattr(session._interface, "estimate_context_tokens", lambda: 850)
+    monkeypatch.setattr(session, "context_window", lambda: 1000)
 
     first = session.send("one")
     second = session.send("two")
@@ -779,6 +799,7 @@ def test_rest_summarize_forces_next_full_epoch_reset():
     assert second.usage.extra["codex_request_mode"] == "rest_incremental"
     assert third.usage.extra["codex_request_mode"] == "rest_full"
     assert third.usage.extra["codex_ws_delta_reason"] == "epoch_reset"
+    assert third.usage.extra["codex_ws_epoch_reset_reason"] == "summarize_delayed"
 
 
 class _MultiToolCallRestResponses:
@@ -1057,105 +1078,42 @@ def test_new_user_turn_after_tool_loop_keeps_incremental_chain():
     assert "call the tool" not in flat3
 
 
-def test_codex_adapter_comment_explains_epoch_reset_and_cache_ledger():
-    session = _make_session(FakeWsTransport())
+def test_codex_adapter_comment_explains_delayed_summarize_without_soft_constraints():
+    t = FakeWsTransport()
+    session = _make_session(t)
 
+    session.send("hello")
+    session.send("again")
+    session.on_history_summarized(["call_old"])
     comment = session.adapter_comment()
-
-    assert comment["adapter"] == "codex"
-    assert comment["ws_enabled"] is True
-    assert comment["feature"] == "responses_websocket_epoch_reset"
-    # The routine turn-count epoch reset is cancelled: the default limit is 0
-    # (disabled), so no full is forced by turn count. The resident meta omits the
-    # periodic-countdown fields entirely so it never implies a reset that won't
-    # happen; they reappear only when an operator explicitly opts back in.
-    assert "epoch_reset_turns" not in comment
-    assert "turns_since_epoch_reset" not in comment
-    assert "next_reset_in" not in comment
-    assert comment["last_full_api_calls_ago"] is None
-    assert comment["last_full_reason"] == "not_recorded"
-    assert comment["last_ws_full_api_calls_ago"] is None
-    assert comment["last_ws_full_reason"] == "not_recorded"
+    static = session.static_adapter_comment()
 
     note = comment["cache_note"]
-    assert comment["summarize_full_note"] == note
-    assert comment["summarize_ws_full_note"] == note
-    assert "full epoch" in note
-    assert "incremental prefix" in note
-    # Ratio-oriented guidance replaces the old ">=20 API calls" interval rule.
-    assert ">=20 API calls" not in note
-    assert "1:10" in note
-    assert "ratio" in note
-    assert "reduce_summarize_frequency" in note
-    assert "context pressure" in note
-    assert "cache miss" in note
-    assert "Summarize" in note
-    assert "Notification dismiss" in note
-    assert "non-urgent summarize" in note
-    # summarize is framed as an investment that buys future savings, and molt
-    # is the escalation when context pressure stays high afterwards.
-    assert "investment" in note
-    assert "buy future context" in note
-    assert "consider molt" in note
+    assert "Responses API" in note
+    assert "fresh full replay/cache epoch effect is delayed" in note
+    assert "previous_response_id/cache epoch" in note
+    assert "roughly 80%" in note
+    assert "additional summarize calls safely" in note
     assert "do not summarize first unless context overflow is imminent" in note
-    assert "molt is the higher-level replacement for summarize" in note
 
-    static = session.static_adapter_comment()
-    assert static["adapter"] == "codex"
-    assert static["feature"] == "responses_websocket_epoch_reset"
-    assert ">=20 API calls" not in static["summarize_note"]
-    assert "1:10" in static["summarize_note"]
-    assert "reduce_summarize_frequency" in static["summarize_note"]
-    assert "do not summarize first unless context overflow is imminent" in static["summarize_note"]
-    assert "roughly 200k token context" in static["context_budget_note"]
-    assert "above roughly 150k" in static["context_budget_note"]
-    assert "investment, not a fixed countdown" in static["summarize_economy_note"]
-    assert "cache miss with margin" in static["summarize_economy_note"]
-    assert "prefer daemon/file-based exploration" in static["long_context_strategy"]
-    assert "Avoid ingesting large raw outputs" in static["long_context_strategy"]
-    assert "dismiss-only turns" in static["notification_dismiss_note"]
-    assert "dismiss itself causing a reset" in static["notification_dismiss_note"]
-    assert "FROZEN" in static["system_prompt_update_note"]
-    assert "update_system_prompt is a no-op" in static["system_prompt_update_note"]
-    assert "molt / refresh / restart / bootstrap" in static["system_prompt_update_note"]
+    summarize_effect = comment["summarize_effect"]
+    assert summarize_effect["delayed"] is True
+    assert summarize_effect["pending_count"] == 1
+    assert summarize_effect["threshold_ratio"] == 0.8
 
-    ledger = comment["cache_ledger"]
-    assert ledger["window_api_calls"] == 20
-    assert ledger["recorded_api_calls"] == 0
-    assert ledger["cols"] == ["ago", "mode", "cache", "in_k", "miss_k", "reason"]
-    assert ledger["rows"] == []
-    assert ledger["summary"] == {
-        "api_calls": 0,
-        "cache_rate": None,
-        "full_count": 0,
-        "incremental_count": 0,
-        "full_to_incremental_ratio": "0:0",
-        "ws_full_count": 0,
-        "miss_k": 0.0,
-    }
-    expected_last_full = {
-        "api_calls_ago": None,
-        "reason": "not_recorded",
-    }
-    assert ledger["last_full"] == expected_last_full
-    assert ledger["last_ws_full"] == expected_last_full
-    assert ledger["legend"]["I"] == "incremental"
-    assert ledger["legend"]["F"] == "full"
-    assert ledger["legend"]["sum"] == "epoch_reset:summarize"
-
-    # The maintenance hint is ratio-oriented (full:incremental), not an
-    # interval/countdown. With no entries it is "unknown" and carries no
-    # wait_api_calls_remaining countdown.
-    hint = comment["maintenance_hint"]
-    assert hint["summarize_economy"] == "unknown"
-    assert hint["full_count"] == 0
-    assert hint["incremental_count"] == 0
-    assert hint["full_to_incremental_ratio"] == "0:0"
-    assert hint["target_full_to_incremental_ratio"] == "1:10"
-    assert "no Codex continuation cache ledger" in hint["reason"]
-    assert "non_urgent_summarize" not in hint
-    assert "wait_api_calls_remaining" not in hint
-
+    for payload in (comment, static):
+        assert "context_budget_note" not in payload
+        assert "summarize_economy_note" not in payload
+        assert "cache_ledger" not in payload
+        assert "cache_ledger_summary" not in payload
+        assert "maintenance_hint" not in payload
+        assert "last_full_reason" not in payload
+        assert "last_ws_full_reason" not in payload
+    assert "1:10" not in note
+    assert "150k" not in note
+    assert "200k" not in note
+    assert "full:incremental" not in note
+    assert "reduce_summarize_frequency" not in note
 
 
 def test_codex_adapter_static_comment_available_before_chat_creation():
@@ -1166,14 +1124,17 @@ def test_codex_adapter_static_comment_available_before_chat_creation():
     assert comment["adapter"] == "codex"
     assert comment["feature"] == "responses_rest_epoch_reset"
     assert ">=20 API calls" not in comment["summarize_note"]
-    assert "1:10" in comment["summarize_note"]
-    assert "reduce_summarize_frequency" in comment["summarize_note"]
+    assert "Responses API" in comment["summarize_note"]
+    assert "fresh full replay/cache epoch effect is delayed" in comment["summarize_note"]
+    assert "previous_response_id/cache epoch" in comment["summarize_note"]
+    assert "roughly 80%" in comment["summarize_note"]
     assert "do not summarize first unless context overflow is imminent" in comment["summarize_note"]
-    assert "roughly 200k token context" in comment["context_budget_note"]
-    assert "above roughly 150k" in comment["context_budget_note"]
-    assert "investment, not a fixed countdown" in comment["summarize_economy_note"]
-    assert "current/projected context pressure risks overflow" in comment["summarize_economy_note"]
-    assert "consider molting" in comment["summarize_economy_note"]
+    assert "context_budget_note" not in comment
+    assert "summarize_economy_note" not in comment
+    assert "1:10" not in comment["summarize_note"]
+    assert "150k" not in comment["summarize_note"]
+    assert "200k" not in comment["summarize_note"]
+    assert "reduce_summarize_frequency" not in comment["summarize_note"]
     assert "prefer daemon/file-based exploration" in comment["long_context_strategy"]
     assert "main Codex context" in comment["long_context_strategy"]
     assert "does not compact history" in comment["notification_dismiss_note"]
@@ -1207,182 +1168,90 @@ def test_codex_update_system_prompt_is_no_op_and_keeps_instructions_frozen():
     assert second.usage.extra["codex_request_mode"] == "rest_incremental"
 
 
-def test_codex_adapter_comment_reports_compact_cache_ledger():
-    session = _make_session(FakeWsTransport())
-
-    session._record_ws_cache_ledger(
-        request_mode="ws_full",
-        usage=UsageMetadata(input_tokens=100_000, output_tokens=0, thinking_tokens=0, cached_tokens=50_000),
-        ws_diag={"reason": "epoch_reset", "epoch_reset_reason": "summarize"},
-    )
-    session._record_ws_cache_ledger(
-        request_mode="ws_incremental",
-        usage=UsageMetadata(input_tokens=100_000, output_tokens=0, thinking_tokens=0, cached_tokens=90_000),
-        ws_diag={"reason": "ok"},
-    )
-    session._record_ws_cache_ledger(
-        request_mode="ws_full",
-        usage=UsageMetadata(input_tokens=50_000, output_tokens=0, thinking_tokens=0, cached_tokens=30_000),
-        ws_diag={"reason": "prefix_mismatch"},
-    )
-
-    comment = session.adapter_comment()
-
-    assert comment["last_ws_full_api_calls_ago"] == 0
-    assert comment["last_ws_full_reason"] == "pm"
-    # 2 fulls vs 1 incremental is far worse than the 1:10 target, so the hint
-    # flags reduce_summarize_frequency and reports the current ratio.
-    hint = comment["maintenance_hint"]
-    assert hint["summarize_economy"] == "reduce_summarize_frequency"
-    assert hint["full_count"] == 2
-    assert hint["incremental_count"] == 1
-    assert hint["full_to_incremental_ratio"] == "1:0.5"
-    assert hint["target_full_to_incremental_ratio"] == "1:10"
-    assert "reduce summarize frequency" in hint["reason"]
-    # The poor-ratio reason frames the tradeoff: summarize is an investment
-    # that must earn back more than the cache miss it spends.
-    assert "investment" in hint["reason"]
-    assert "expected savings justify" in hint["reason"]
-    assert "wait_api_calls_remaining" not in hint
-
-    ledger = comment["cache_ledger"]
-    assert ledger["recorded_api_calls"] == 3
-    assert ledger["rows"] == [
-        [2, "F", 0.5, 100.0, 50.0, "sum"],
-        [1, "I", 0.9, 100.0, 10.0, ""],
-        [0, "F", 0.6, 50.0, 20.0, "pm"],
-    ]
-    assert ledger["summary"] == {
-        "api_calls": 3,
-        "cache_rate": 0.68,
-        "full_count": 2,
-        "incremental_count": 1,
-        "full_to_incremental_ratio": "1:0.5",
-        "ws_full_count": 2,
-        "miss_k": 80.0,
-    }
-    expected_last_full = {
-        "api_calls_ago": 0,
-        "reason": "pm",
-    }
-    assert ledger["last_full"] == expected_last_full
-    assert ledger["last_ws_full"] == expected_last_full
-
-
-def test_codex_maintenance_hint_ok_when_full_to_incremental_ratio_within_target():
-    """A healthy continuation keeps fulls rare: 1 full per 12 incremental turns
-    (1:12) is at/under the 1:10 target, so the ratio-oriented hint reports an
-    economical summarize cadence with no reduce_summarize_frequency flag."""
-    session = _make_session(FakeWsTransport())
-
-    session._record_ws_cache_ledger(
-        request_mode="ws_full",
-        usage=UsageMetadata(input_tokens=100_000, output_tokens=0, thinking_tokens=0, cached_tokens=50_000),
-        ws_diag={"reason": "no_baseline"},
-    )
-    for _ in range(12):
-        session._record_ws_cache_ledger(
-            request_mode="ws_incremental",
-            usage=UsageMetadata(input_tokens=100_000, output_tokens=0, thinking_tokens=0, cached_tokens=95_000),
-            ws_diag={"reason": "ok"},
-        )
-
-    comment = session.adapter_comment()
-
-    summary = comment["cache_ledger"]["summary"]
-    assert summary["full_count"] == 1
-    assert summary["incremental_count"] == 12
-    assert summary["full_to_incremental_ratio"] == "1:12"
-
-    hint = comment["maintenance_hint"]
-    assert hint["summarize_economy"] == "ok"
-    assert hint["full_to_incremental_ratio"] == "1:12"
-    assert hint["target_full_to_incremental_ratio"] == "1:10"
-    assert "healthy" in hint["reason"]
-    assert "wait_api_calls_remaining" not in hint
-    assert "non_urgent_summarize" not in hint
-
-
-def test_codex_send_populates_cache_ledger_end_to_end():
+def test_codex_cache_ledger_stays_internal_not_adapter_comment():
     t = FakeWsTransport()
     session = _make_session(t)
 
-    first = session.send("one")
-    second = session.send("two")
+    session.send("one")
+    session.send("two")
+    session.on_history_summarized(["call_old"])
 
-    assert first.usage.extra["codex_request_mode"] == "ws_full"
-    assert second.usage.extra["codex_request_mode"] == "ws_incremental"
-    assert t.sent_frames[1]["previous_response_id"] == "resp_ws_1"
-
+    ledger = session._ws_cache_ledger_comment()
+    assert isinstance(ledger, dict)
+    assert ledger["legend"]["sumd"] == "epoch_reset:summarize_delayed"
+    assert isinstance(ledger["rows"], list)
     comment = session.adapter_comment()
-    assert comment["last_full_api_calls_ago"] == 1
-    assert comment["last_full_reason"] == "nb"
-    assert comment["last_ws_full_api_calls_ago"] == 1
-    assert comment["last_ws_full_reason"] == "nb"
-    # 1 full + 1 incremental = 1:1, worse than the 1:10 target.
-    assert (
-        comment["maintenance_hint"]["summarize_economy"]
-        == "reduce_summarize_frequency"
-    )
-    assert comment["maintenance_hint"]["full_to_incremental_ratio"] == "1:1"
-
-    ledger = comment["cache_ledger"]
-    assert ledger["recorded_api_calls"] == 2
-    assert [row[1] for row in ledger["rows"]] == ["F", "I"]
-    assert [row[5] for row in ledger["rows"]] == ["nb", ""]
-    expected_last_full = {
-        "api_calls_ago": 1,
-        "reason": "nb",
-    }
-    assert ledger["last_full"] == expected_last_full
-    assert ledger["last_ws_full"] == expected_last_full
+    assert "cache_ledger" not in comment
+    assert "cache_ledger_summary" not in comment
+    assert "maintenance_hint" not in comment
 
 
-def test_codex_adapter_comment_is_rest_continuation_when_ws_disabled():
-    """``ws_enabled=False`` now means the REST transport, which STILL runs the
-    full/incremental continuation machine (not stateless-full-every-turn)."""
-    session = _make_session(FakeWsTransport(), ws_enabled=False)
+def test_codex_adapter_comment_is_rest_continuation_without_soft_constraints():
+    client = RealisticRestClient()
+    session = _make_rest_session(client)
+    comment = session.dynamic_adapter_comment()
 
-    comment = session.adapter_comment()
-
-    assert comment["adapter"] == "codex"
     assert comment["transport"] == "rest"
     assert comment["ws_enabled"] is False
     assert comment["continuation_enabled"] is True
-    assert comment["feature"] == "responses_rest_epoch_reset"
-    # The continuation comment carries the cache-ledger machinery, but with the
-    # routine turn-count reset cancelled (default 0) it omits the periodic-reset
-    # countdown fields so the resident meta never implies a forced reset.
-    assert "turns_since_epoch_reset" not in comment
-    assert "epoch_reset_turns" not in comment
-    assert "next_reset_in" not in comment
-    assert "cache_ledger" in comment
-    assert "maintenance_hint" in comment
-    assert "cache_note" in comment
+    assert "periodic_reset_turns" not in comment
+    assert "cache_ledger" not in comment
+    assert "cache_ledger_summary" not in comment
+    assert "maintenance_hint" not in comment
 
 
 def test_codex_adapter_comment_stateless_only_when_continuation_off():
-    """The legacy stateless-full-replay comment surfaces only when the
-    continuation machine itself is disabled (a future stateless mode)."""
-    session = _make_session(FakeWsTransport(), ws_enabled=False)
-    session._continuation_enabled = False
-
-    comment = session.adapter_comment()
-
-    assert comment["feature"] == "stateless_full_replay"
-    assert comment["continuation_enabled"] is False
-    assert comment["transport"] == "rest"
-    assert "cache_ledger" not in comment
-    note = comment["summarize_ws_full_note"]
-    assert "stateless" in comment["summary"]
-    assert "Summarize" in note
-    assert "Notification dismiss" in note
-    assert "do not summarize first unless context overflow is imminent" in note
-
-
-def test_history_summarized_forces_next_ws_full_epoch_reset():
     t = FakeWsTransport()
     session = _make_session(t)
+    session._continuation_enabled = False
+
+    comment = session.dynamic_adapter_comment()
+    static = session.static_adapter_comment()
+
+    assert comment["continuation_enabled"] is False
+    assert "cache_ledger" not in comment
+    assert "cache_ledger_summary" not in comment
+    assert "maintenance_hint" not in comment
+    assert "summarize_effect" not in comment
+    assert "fresh full replay/cache epoch effect is delayed" not in static["summarize_note"]
+    assert "context_budget_note" not in static
+    assert "summarize_economy_note" not in static
+
+
+def test_history_summarized_delays_next_ws_full_below_context_threshold(monkeypatch):
+    t = FakeWsTransport()
+    session = _make_session(t)
+    monkeypatch.setattr(session._interface, "estimate_context_tokens", lambda: 100)
+    monkeypatch.setattr(session, "context_window", lambda: 1000)
+
+    first = session.send("one")
+    second = session.send("two")
+    session.on_history_summarized(["call_old"])
+
+    comment = session.dynamic_adapter_comment()
+    summarize_effect = comment["summarize_effect"]
+    assert summarize_effect["delayed"] is True
+    assert summarize_effect["pending_count"] == 1
+    assert summarize_effect["threshold_ratio"] == 0.8
+    assert summarize_effect["threshold_context_tokens"] == 800
+    assert summarize_effect["current_context_usage"] == 0.1
+    assert "additional summarize calls safely" in summarize_effect["message"]
+
+    third = session.send("three")
+
+    assert first.usage.extra["codex_request_mode"] == "ws_full"
+    assert second.usage.extra["codex_request_mode"] == "ws_incremental"
+    assert third.usage.extra["codex_request_mode"] == "ws_incremental"
+    assert third.usage.extra["codex_ws_delta_reason"] == "ok"
+    assert "codex_ws_epoch_reset_reason" not in third.usage.extra
+    assert t.sent_frames[2]["previous_response_id"] == "resp_ws_2"
+
+
+def test_history_summarized_releases_delayed_ws_full_at_context_threshold(monkeypatch):
+    t = FakeWsTransport()
+    session = _make_session(t)
+    monkeypatch.setattr(session._interface, "estimate_context_tokens", lambda: 850)
+    monkeypatch.setattr(session, "context_window", lambda: 1000)
 
     first = session.send("one")
     second = session.send("two")
@@ -1393,8 +1262,12 @@ def test_history_summarized_forces_next_ws_full_epoch_reset():
     assert second.usage.extra["codex_request_mode"] == "ws_incremental"
     assert third.usage.extra["codex_request_mode"] == "ws_full"
     assert third.usage.extra["codex_ws_delta_reason"] == "epoch_reset"
-    assert third.usage.extra["codex_ws_epoch_reset_reason"] == "summarize"
+    assert third.usage.extra["codex_ws_epoch_reset_reason"] == "summarize_delayed"
     assert "previous_response_id" not in t.sent_frames[2]
+
+    summarize_effect = session.dynamic_adapter_comment()["summarize_effect"]
+    assert summarize_effect["delayed"] is False
+    assert summarize_effect["released_by"] == "summarize_delayed"
 
 
 def test_notification_dismissed_keeps_incremental_ws_chain():

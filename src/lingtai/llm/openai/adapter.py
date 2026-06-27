@@ -2202,25 +2202,21 @@ class OpenAIAdapter(LLMAdapter):
 # ---------------------------------------------------------------------------
 
 
-_CODEX_CONTEXT_BUDGET_NOTE = (
-    "Can wait until roughly 200k token context before proactive summarize, "
-    "but if summarizing still leaves the main context above roughly 150k "
-    "tokens, consider molt to avoid repeated summarize misses and improve "
-    "token efficiency."
-)
-_CODEX_SUMMARIZE_ECONOMY_NOTE = (
-    "Summarize breaks the current continuation/cache prefix and should be "
-    "treated as an investment, not a fixed countdown. Under low pressure, "
-    "defer and batch consumed high-recoverability results; summarize when "
-    "estimated future token savings can repay the cache miss with margin, "
-    "or when current/projected context pressure risks overflow. If a "
-    "summarize pass still leaves the main context above roughly 150k tokens, "
-    "consider molting instead of repeatedly paying summarize misses."
-)
 _CODEX_PRE_MOLT_SUMMARIZE_NOTE = (
     "If you are already planning to molt, do not summarize first unless "
     "context overflow is imminent; molt is the higher-level replacement for "
     "summarize, so pre-molt summarize is wasted work."
+)
+_CODEX_SUMMARIZE_DELAY_THRESHOLD_RATIO = 0.8
+_CODEX_SUMMARIZE_DELAY_NOTE = (
+    "For Codex continuation over the Responses API, summarize calls are "
+    "accepted and recorded immediately, but their fresh full replay/cache "
+    "epoch effect is delayed until local context reaches roughly 80% of the "
+    "context window. The delay exists because Codex keeps a "
+    "previous_response_id/cache epoch; resetting that epoch for every "
+    "summarize would discard continuation/cache benefit. Before the delayed "
+    "full replay, the existing epoch continues, so you can keep working and "
+    "may issue additional summarize calls safely."
 )
 _CODEX_LONG_CONTEXT_STRATEGY = (
     "For long logs, diffs, repo scans, papers, issue sweeps, runtime traces, "
@@ -2268,13 +2264,11 @@ def _codex_static_adapter_comment(
                 "deleted by request-side resets."
             ),
             "summarize_note": (
-                "Summarize still rewrites visible history and can change the "
-                "next full request. Notification dismiss is only notification "
-                "cleanup and does not compact context. "
+                "Summarize normally when useful. In stateless full-replay mode, "
+                "each request is rebuilt from local chat_history, so no delayed "
+                "Responses continuation epoch applies. "
                 + _CODEX_PRE_MOLT_SUMMARIZE_NOTE
             ),
-            "context_budget_note": _CODEX_CONTEXT_BUDGET_NOTE,
-            "summarize_economy_note": _CODEX_SUMMARIZE_ECONOMY_NOTE,
             "long_context_strategy": _CODEX_LONG_CONTEXT_STRATEGY,
             "notification_dismiss_note": _CODEX_NOTIFICATION_DISMISS_NOTE,
             "system_prompt_update_note": _CODEX_SYSTEM_PROMPT_UPDATE_NOTE,
@@ -2295,30 +2289,11 @@ def _codex_static_adapter_comment(
             "summarized."
         ),
         "summarize_note": (
-            "Summarize rewrites older tool-result payloads and/or carried "
-            "context, breaks the previous_response_id/incremental prefix, "
-            "and forces the next request to open a fresh full epoch, usually "
-            "causing a cache miss. Treat summarize as an investment, not "
-            "routine cleanup: it spends a full/cache-miss cost now to buy "
-            "future context and token savings, so it only pays off when those "
-            "expected savings exceed the miss. Keep full epochs rare relative "
-            "to incremental turns: the target full:incremental ratio is at or "
-            "below 1:10 (roughly at most one full per ten incremental turns). "
-            "Under low pressure, defer and batch non-urgent summarize until "
-            "the expected savings justify reopening a full epoch, so the ratio "
-            "stays healthy; the dynamic maintenance_hint reports the current "
-            "full:incremental ratio and flags reduce_summarize_frequency when "
-            "fulls are too frequent. Under high context pressure or after a "
-            "very noisy result, the investment is worth it immediately — "
-            "summarize regardless of ratio; if context pressure stays high "
-            "after summarize, consider molt. "
+            "Summarize normally when useful. "
+            + _CODEX_SUMMARIZE_DELAY_NOTE
+            + " "
             + _CODEX_PRE_MOLT_SUMMARIZE_NOTE
-            + " Notification dismiss is only "
-            "notification cleanup: it does not compact context, delete local "
-            "history, or reset the epoch."
         ),
-        "context_budget_note": _CODEX_CONTEXT_BUDGET_NOTE,
-        "summarize_economy_note": _CODEX_SUMMARIZE_ECONOMY_NOTE,
         "long_context_strategy": _CODEX_LONG_CONTEXT_STRATEGY,
         "notification_dismiss_note": _CODEX_NOTIFICATION_DISMISS_NOTE,
         "system_prompt_update_note": _CODEX_SYSTEM_PROMPT_UPDATE_NOTE,
@@ -2428,6 +2403,10 @@ class CodexResponsesSession(OpenAIResponsesSession):
             self._ws_epoch_reset_turn_limit = max(0, int(ws_epoch_reset_turns))
         self._ws_turns_since_epoch_reset = 0
         self._ws_epoch_reset_reason_pending: str | None = None
+        self._summarize_delay_threshold_ratio = _CODEX_SUMMARIZE_DELAY_THRESHOLD_RATIO
+        self._summarize_effect_delayed_pending_ids: set[str] = set()
+        self._summarize_effect_delayed_last_context: dict[str, Any] = {}
+        self._summarize_effect_delayed_last_release_reason: str | None = None
         # The user's own ChatGPT account id (decoded upstream from their OAuth
         # auth data). When present it is sent as the ``ChatGPT-Account-ID`` HTTP
         # Account routing is a ChatGPT-account concern and intentionally
@@ -2935,9 +2914,51 @@ class CodexResponsesSession(OpenAIResponsesSession):
         self._ws_frozen_outputs.clear()
         self._ws_turns_since_epoch_reset = 0
         self._ws_epoch_reset_reason_pending = reason
+        if self._summarize_effect_delayed_pending_ids:
+            self._summarize_effect_delayed_pending_ids.clear()
+            self._summarize_effect_delayed_last_release_reason = reason
+
+    def _summarize_delay_context(self) -> dict[str, Any]:
+        current_tokens: int | None = None
+        context_window: int | None = None
+        usage: float | None = None
+        try:
+            current_tokens = int(self._interface.estimate_context_tokens())
+        except Exception:
+            current_tokens = None
+        try:
+            context_window = int(self.context_window())
+        except Exception:
+            context_window = None
+        if current_tokens is not None and context_window and context_window > 0:
+            usage = current_tokens / context_window
+        return {
+            "current_context_tokens": current_tokens,
+            "context_window": context_window,
+            "threshold_ratio": self._summarize_delay_threshold_ratio,
+            "threshold_context_tokens": (
+                int(context_window * self._summarize_delay_threshold_ratio)
+                if context_window and context_window > 0
+                else None
+            ),
+            "current_context_usage": usage,
+        }
+
+    def _maybe_release_delayed_summarize_effect(self) -> bool:
+        if not self._summarize_effect_delayed_pending_ids:
+            return False
+        ctx = self._summarize_delay_context()
+        self._summarize_effect_delayed_last_context = ctx
+        usage = ctx.get("current_context_usage")
+        if usage is None or usage < self._summarize_delay_threshold_ratio:
+            return False
+        self._reset_ws_epoch("summarize_delayed")
+        return True
 
     def _maybe_reset_ws_epoch(self) -> None:
         self._refresh_ws_epoch_reset_turn_limit()
+        if self._maybe_release_delayed_summarize_effect():
+            return
         limit = self._ws_epoch_reset_turn_limit
         if limit <= 0:
             return
@@ -2946,12 +2967,15 @@ class CodexResponsesSession(OpenAIResponsesSession):
         self._reset_ws_epoch("turn_count")
 
     def on_history_summarized(self, summarized_ids: list[str]) -> None:
-        # Runs for BOTH transports: summarize rewrites older tool-result payloads
-        # and breaks the strict-prefix continuation, so the next request must be a
-        # full re-send regardless of REST vs WebSocket.
+        # Runs for BOTH transports. Summarize rewrites local visible history, but
+        # Codex continuation keeps the remote previous_response_id epoch alive
+        # until local context pressure justifies a full replay. The summarized
+        # local history becomes model-facing when the delayed reset fires.
         if not summarized_ids or not self._continuation_enabled:
             return
-        self._reset_ws_epoch("summarize")
+        self._summarize_effect_delayed_pending_ids.update(str(s) for s in summarized_ids)
+        self._summarize_effect_delayed_last_context = self._summarize_delay_context()
+        self._summarize_effect_delayed_last_release_reason = None
 
     def on_notification_dismissed(self, channel: str | None = None) -> None:
         # Notification dismiss is high-frequency housekeeping, not context
@@ -2993,6 +3017,7 @@ class CodexResponsesSession(OpenAIResponsesSession):
             reset_reason = str(ws_diag.get("epoch_reset_reason") or "")
             reset_codes = {
                 "summarize": "sum",
+                "summarize_delayed": "sumd",
                 "turn_count": "turns",
             }
             if reset_reason in reset_codes:
@@ -3093,6 +3118,7 @@ class CodexResponsesSession(OpenAIResponsesSession):
                 "I": "incremental",
                 "F": "full",
                 "sum": "epoch_reset:summarize",
+                "sumd": "epoch_reset:summarize_delayed",
                 "turns": "epoch_reset:turn_count",
                 "pm": "prefix_mismatch",
                 "nb": "no_baseline",
@@ -3218,8 +3244,6 @@ class CodexResponsesSession(OpenAIResponsesSession):
         if not self._continuation_enabled:
             return comment
 
-        ledger = self._ws_cache_ledger_comment()
-        comment["cache_ledger"] = ledger
         # The mandatory turn-count epoch reset is cancelled by default
         # (``_ws_epoch_reset_turn_limit <= 0`` / disabled). When disabled, the
         # resident meta OMITS the periodic-countdown fields entirely so it never
@@ -3238,44 +3262,21 @@ class CodexResponsesSession(OpenAIResponsesSession):
                     ),
                 }
             )
-        if isinstance(ledger, dict):
-            summary = ledger.get("summary")
-            if isinstance(summary, dict):
-                comment["cache_ledger_summary"] = summary
-            last_full = ledger.get("last_full")
-            if isinstance(last_full, dict):
-                comment["last_full_api_calls_ago"] = last_full.get("api_calls_ago")
-                comment["last_full_reason"] = last_full.get("reason")
-            else:
-                comment["last_full_api_calls_ago"] = None
-                comment["last_full_reason"] = "not_recorded"
-            last_ws_full = ledger.get("last_ws_full")
-            if isinstance(last_ws_full, dict):
-                comment["last_ws_full_api_calls_ago"] = last_ws_full.get("api_calls_ago")
-                comment["last_ws_full_reason"] = last_ws_full.get("reason")
-            else:
-                comment["last_ws_full_api_calls_ago"] = comment.get(
-                    "last_full_api_calls_ago"
-                )
-                comment["last_ws_full_reason"] = comment.get("last_full_reason")
-
-        full_count = 0
-        incremental_count = 0
-        if isinstance(ledger, dict):
-            summary = ledger.get("summary")
-            if isinstance(summary, dict):
-                try:
-                    full_count = int(summary.get("full_count") or 0)
-                except (TypeError, ValueError):
-                    full_count = 0
-                try:
-                    incremental_count = int(summary.get("incremental_count") or 0)
-                except (TypeError, ValueError):
-                    incremental_count = 0
-        comment["maintenance_hint"] = self._ws_maintenance_hint(
-            full_count=full_count,
-            incremental_count=incremental_count,
-        )
+        if self._summarize_effect_delayed_pending_ids:
+            ctx = self._summarize_delay_context()
+            self._summarize_effect_delayed_last_context = ctx
+            comment["summarize_effect"] = {
+                "delayed": True,
+                "pending_count": len(self._summarize_effect_delayed_pending_ids),
+                **ctx,
+                "message": _CODEX_SUMMARIZE_DELAY_NOTE,
+            }
+        elif self._summarize_effect_delayed_last_release_reason:
+            comment["summarize_effect"] = {
+                "delayed": False,
+                "released_by": self._summarize_effect_delayed_last_release_reason,
+                "message": "Delayed Codex summarize effect has been applied by a fresh full replay.",
+            }
         return comment
 
     def adapter_comment(self):

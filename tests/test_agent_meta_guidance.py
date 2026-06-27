@@ -12,18 +12,15 @@ STATIC_CODEX_COMMENT = {
     "feature": "responses_rest_epoch_reset",
     "summary": "Codex plans turns as full or incremental.",
     "summarize_note": (
-        "Summarize is an investment, not routine cleanup: keep the "
-        "full:incremental ratio at or below 1:10 and defer non-urgent "
-        "summarize until the expected savings justify the cache miss. "
-        "If you are already planning to molt, do not summarize first unless "
-        "context overflow is imminent; molt is the higher-level replacement "
-        "for summarize."
-    ),
-    "context_budget_note": (
-        "Can wait until roughly 200k token context before proactive "
-        "summarize, but if summarizing still leaves the main context "
-        "above roughly 150k tokens, consider molt to avoid repeated "
-        "summarize misses and improve token efficiency."
+        "Summarize normally when useful. For Codex continuation over the "
+        "Responses API, summarize calls are accepted and recorded immediately, "
+        "but their fresh full replay/cache epoch effect is delayed until local "
+        "context reaches roughly 80% of the context window. The delay exists "
+        "because Codex keeps a previous_response_id/cache epoch; resetting "
+        "that epoch for every summarize would discard continuation/cache "
+        "benefit. If you are already planning to molt, do not summarize first "
+        "unless context overflow is imminent; molt is the higher-level "
+        "replacement for summarize."
     ),
 }
 
@@ -47,12 +44,16 @@ def test_agent_prompt_builder_refreshes_meta_guidance_adapter_rules(tmp_path):
     assert "## meta_guidance" in prompt
     assert "### codex runtime rules" in prompt
     assert "responses_rest_epoch_reset" in prompt
-    assert "investment, not routine cleanup" in prompt
+    assert "Summarize normally when useful" in prompt
+    assert "Responses API" in prompt
+    assert "fresh full replay/cache epoch effect is delayed" in prompt
+    assert "previous_response_id/cache epoch" in prompt
     assert "do not summarize first unless context overflow is imminent" in prompt
     assert "molt is the higher-level replacement for summarize" in prompt
-    assert "1:10" in prompt
-    assert "roughly 200k token context" in prompt
-    assert "above roughly 150k tokens, consider molt" in prompt
+    codex_note = agent.service.static_adapter_comment()["summarize_note"]
+    assert "1:10" not in codex_note
+    assert "roughly 200k token context" not in codex_note
+    assert "above roughly 150k tokens" not in codex_note
 
 
 def test_agent_batched_prompt_builder_refreshes_meta_guidance_adapter_rules(tmp_path):
@@ -63,6 +64,9 @@ def test_agent_batched_prompt_builder_refreshes_meta_guidance_adapter_rules(tmp_
     assert "## meta_guidance" in prompt
     assert "### codex runtime rules" in prompt
     assert "responses_rest_epoch_reset" in prompt
+    assert "Responses API" in prompt
+    assert "fresh full replay/cache epoch effect is delayed" in prompt
     assert "do not summarize first unless context overflow is imminent" in prompt
-    assert "roughly 200k token context" in prompt
-    assert "above roughly 150k tokens, consider molt" in prompt
+    codex_note = agent.service.static_adapter_comment()["summarize_note"]
+    assert "roughly 200k token context" not in codex_note
+    assert "above roughly 150k tokens" not in codex_note
