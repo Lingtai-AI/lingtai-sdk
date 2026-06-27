@@ -150,6 +150,39 @@ def test_worker_hang_system_notification_is_high_priority(tmp_path):
     assert event["recommended_action"] == "wait_for_refresh_then_continue_from_restored_history"
 
 
+
+
+def test_agent_log_includes_kernel_runtime_identity(tmp_path):
+    import json
+
+    agent = BaseAgent(service=make_mock_service(), working_dir=tmp_path / "test")
+    agent._runtime_identity_event_fields = {
+        "kernel_version": "test-version",
+        "kernel_runtime_stamp": "test-version+unit",
+        "kernel_runtime": {
+            "version": "test-version",
+            "stamp": "test-version+unit",
+            "mode": "test",
+            "source": "unit",
+        },
+    }
+
+    agent._log("runtime_identity_probe", detail="ok")
+
+    log_path = agent.working_dir / "logs" / "events.jsonl"
+    events = [json.loads(line) for line in log_path.read_text().splitlines() if line.strip()]
+    event = events[-1]
+
+    assert event["type"] == "runtime_identity_probe"
+    assert event["kernel_version"] == "test-version"
+    assert event["kernel_runtime_stamp"] == "test-version+unit"
+    assert event["kernel_runtime"] == {
+        "version": "test-version",
+        "stamp": "test-version+unit",
+        "mode": "test",
+        "source": "unit",
+    }
+
 # ------------------------------------------------------------------
 # Message basics
 # ------------------------------------------------------------------

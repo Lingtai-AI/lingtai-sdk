@@ -43,6 +43,7 @@ from ..session import SessionManager
 from ..tc_inbox import TCInbox
 from ..token_ledger import append_token_entry
 from ..trace_redaction import redact_for_trajectory
+from ..runtime_identity import runtime_identity_event_fields
 
 logger = get_logger()
 
@@ -312,6 +313,7 @@ class BaseAgent:
         self._last_usage = None  # UsageMetadata from last LLM call, for ledger
         self._created_at: str = ""
         self._uptime_anchor: float | None = None  # set in start(), None means not started
+        self._runtime_identity_event_fields = runtime_identity_event_fields()
 
         # Working directory (caller-owned path)
         self._workdir = WorkingDir(working_dir)
@@ -871,6 +873,7 @@ class BaseAgent:
                 "address": self._working_dir.name,
                 "agent_name": self.agent_name,
                 "ts": time.time(),
+                **self._runtime_identity_event_fields,
                 **fields,
             })
 

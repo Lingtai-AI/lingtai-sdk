@@ -720,6 +720,11 @@ def _perform_refresh(
         "    def _redact_for_trajectory(value):\n"
         "        return value\n"
         "    _REDACTOR_IMPORT_OK = False\n"
+        "try:\n"
+        "    from lingtai_kernel.runtime_identity import runtime_identity_event_fields as _runtime_identity_event_fields\n"
+        "except Exception:\n"
+        "    def _runtime_identity_event_fields():\n"
+        "        return {}\n"
         # Terminal-failure visibility (PR #292): when all relaunch attempts are
         # exhausted the watcher writes logs/refresh_failed_permanent.json and a
         # high-priority system notification carrying this failure_state so the
@@ -750,7 +755,7 @@ def _perform_refresh(
         "    'recovery_guidance': RECOVERY_GUIDANCE,\n"
         "}\n"
         "def log(typ, **kw):\n"
-        "    entry = {'type': typ, 'address': addr, 'agent_name': name, 'ts': time.time(), **kw}\n"
+        "    entry = {'type': typ, 'address': addr, 'agent_name': name, 'ts': time.time(), **_runtime_identity_event_fields(), **kw}\n"
         "    if not _REDACTOR_IMPORT_OK:\n"
         "        entry['redaction_unavailable'] = True\n"
         "    else:\n"
