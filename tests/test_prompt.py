@@ -153,6 +153,27 @@ def test_activeness_principle_en_renders_between_language_and_base_prompt():
     assert prompt.index("Framework guidance.") < prompt.index("Be good.")
 
 
+def test_dynamic_prefix_and_kernel_owned_principle_stay_adjacent():
+    mgr = SystemPromptManager()
+    mgr.write_section("principle", "Kernel-owned principle body.", protected=True)
+    mgr.write_section("covenant", "Be good.", protected=True)
+    prompt = build_system_prompt(
+        mgr,
+        base_prompt="Framework guidance.",
+        language="en",
+        activeness="quiet",
+    )
+    assert prompt.startswith("Agent language: English.")
+    assert prompt.index("Agent activeness: quiet.") < prompt.index("Token efficiency principle:")
+    assert prompt.index("Token efficiency principle:") < prompt.index("Kernel-owned principle body.")
+    assert prompt.index("Kernel-owned principle body.") < prompt.index("Framework guidance.")
+    assert prompt.index("Framework guidance.") < prompt.index("Be good.")
+    between_preface_and_principle = prompt[
+        prompt.index("Token efficiency principle:") : prompt.index("Kernel-owned principle body.")
+    ]
+    assert "Framework guidance." not in between_preface_and_principle
+
+
 def test_activeness_principle_localized_levels():
     cases = [
         ("zh", "balanced", "智能体主动程度：均衡。"),

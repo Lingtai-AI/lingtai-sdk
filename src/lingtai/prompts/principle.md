@@ -6,3 +6,5 @@ Progressive disclosure principle: each resident prompt layer has one job and poi
 - Reference manuals are why, boundaries, examples, and troubleshooting: load them on demand when the concise resident layer is not enough.
 
 Keep each layer concise. A rule should have one source of truth; other layers should point to that source instead of restating it.
+
+The dynamic kernel preface (language, activeness, localized progressive-disclosure hook, and token-efficiency rule) is the front of this same principle layer. It renders adjacent to this packaged principle body, before wrapper-level `base_prompt` material, so kernel-owned principles stay together instead of being split around operator or framework text.

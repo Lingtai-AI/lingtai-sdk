@@ -6,7 +6,7 @@ sections by mutation frequency so cache breakpoints can be placed between
 batches:
 
     Batch 1 — immovable after init (ideal cache-read prefix):
-        principle (no header) → covenant → tools → substrate → procedures → comment
+        dynamic principle preface + principle (no header) → covenant → tools → substrate → procedures → comment
     Batch 2 — rarely mutated (most stable first):
         rules → brief → skills → knowledge → identity → character → pad →
         meta_guidance (always the final, resident kernel-runtime-guidance section)
@@ -21,11 +21,12 @@ as the packaged default (v1); the `Agent` subclass copies it to
 `system/substrate.md` on first boot, where the agent (or human) can
 edit it freely.
 
-build_system_prompt() assembles kernel-injected runtime principles +
-base_prompt + rendered sections. The runtime principles include language,
-activeness, progressive-disclosure layering, and token-efficiency action
-rules. They always render first, before base_prompt, so ordinary operating
-rules are pinned before all other prompt material.
+build_system_prompt() assembles the kernel-owned principle layer +
+base_prompt + rendered sections. The principle layer includes the dynamic
+runtime preface (language, activeness, progressive-disclosure hook, and
+token-efficiency action rules) immediately adjacent to the packaged raw
+`principle` section, then renders wrapper-level base_prompt material after
+that combined principle block.
 """
 from __future__ import annotations
 
@@ -141,10 +142,10 @@ _ACTIVENESS_ALIASES: dict[str, str] = {
 }
 
 
-# Kernel-injected progressive-disclosure hook. The detailed layer contract is
-# kernel-owned in the packaged raw `principle` section (`prompts/principle.md`);
-# this localized prefix only tells the agent that one rule should have one source
-# of truth and that resident layers route downward for detail.
+# Localized progressive-disclosure hook for the dynamic principle preface. The
+# detailed layer contract is kernel-owned in the packaged raw `principle`
+# section (`prompts/principle.md`); build_system_prompt_batches() renders this
+# preface adjacent to that raw section so they form one principle layer.
 _PROGRESSIVE_DISCLOSURE_PRINCIPLES: dict[str, str] = {
     "en": (
         "Progressive disclosure principle: each prompt layer has one job and "
@@ -374,10 +375,12 @@ def build_system_prompt(
 ) -> str:
     """Build the full system prompt from components.
 
-    Order: language → activeness → progressive disclosure → token efficiency
-    principles → base prompt → section batches. Runtime principles are
-    kernel-injected and always come first. base_prompt is
-    framework-level guidance injected by the wrapper package (lingtai).
+    Order: dynamic principle preface → packaged principle section → base
+    prompt → remaining section batches. The dynamic preface is kernel-owned
+    principle material (language, activeness, progressive-disclosure hook,
+    token-efficiency) and renders adjacent to the raw `principle` section.
+    base_prompt is framework-level guidance injected by the wrapper package
+    (lingtai), so it follows the combined principle layer.
 
     This delegates to build_system_prompt_batches() and joins non-empty
     batches with ``\\n\\n``. That matches LLMChatSession.update_system_prompt_batches()
@@ -409,12 +412,12 @@ def build_system_prompt_batches(
     that want a string can do ``"\\n\\n".join(filter(None, batches))``
     — and build_system_prompt() does exactly that composition.
 
-    The runtime principle prefix (language, activeness, progressive-disclosure
-    hook, token efficiency, and ``base_prompt`` if any) is prepended to Batch 1, the
-    cache-stable prefix batch, using the same
-    ``\\n\\n---\\n\\n`` prefix separator that the historical single-string
-    builder used between framework-level guidance and sections. Empty
-    non-prefix batches stay empty so caller indexing remains stable.
+    The dynamic principle preface (language, activeness, progressive-disclosure
+    hook, token efficiency) is folded into the first/cache-stable batch adjacent
+    to the raw `principle` section. ``base_prompt`` follows that combined
+    principle layer, then the remaining Batch-1 sections. Separators stay the
+    historical ``\n\n---\n\n`` between major blocks. Empty non-prefix batches
+    stay empty so caller indexing remains stable.
     """
     batches = prompt_manager.render_batches()
 
@@ -424,15 +427,33 @@ def build_system_prompt_batches(
         prefix_parts.append(activeness_principle)
     prefix_parts.append(_progressive_disclosure_principle(language))
     prefix_parts.append(_token_efficiency_principle(language))
-    prefix = "\n\n".join(prefix_parts)
-    if base_prompt:
-        prefix = f"{prefix}\n\n---\n\n{base_prompt}"
+    dynamic_principle_preface = "\n\n".join(prefix_parts)
 
-    if batches[0]:
-        batches[0] = f"{prefix}\n\n---\n\n{batches[0]}"
+    first_batch = batches[0]
+    principle = prompt_manager.read_section("principle")
+    if principle and first_batch.startswith(principle):
+        # `principle` is now kernel-owned, so the dynamic runtime preface is
+        # part of that same principle layer. Keep them adjacent and put any
+        # wrapper-level base_prompt after the combined principle block rather
+        # than between the preface and packaged principle body.
+        remaining_first_batch = first_batch[len(principle):]
+        if remaining_first_batch.startswith("\n\n"):
+            remaining_first_batch = remaining_first_batch[2:]
+        blocks = [f"{dynamic_principle_preface}\n\n{principle}"]
+        if base_prompt:
+            blocks.append(base_prompt)
+        if remaining_first_batch:
+            blocks.append(remaining_first_batch)
+        batches[0] = "\n\n---\n\n".join(blocks)
     else:
-        # Keep the dynamic principle in the first/cache-stable batch even when
-        # an otherwise-minimal prompt only has tail sections (or no sections).
-        batches[0] = prefix
+        # Minimal/test managers may not have a packaged principle section. Keep
+        # the dynamic principle in the first/cache-stable batch, preserving the
+        # historical order for that degenerate case.
+        blocks = [dynamic_principle_preface]
+        if base_prompt:
+            blocks.append(base_prompt)
+        if first_batch:
+            blocks.append(first_batch)
+        batches[0] = "\n\n---\n\n".join(blocks)
 
     return batches
