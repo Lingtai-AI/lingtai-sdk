@@ -307,7 +307,7 @@ def _summarize(agent, args: dict) -> dict:
         result["reconstruction"] = (
             "Summary recorded and applied locally now. Provider-side context "
             "reconstruction for this summarized history is delayed until context reaches 0.75 of the window; "
-            "this is normal — keep working."
+            "this is normal — keep working. See meta_guidance and substrate for details."
         )
 
     return result

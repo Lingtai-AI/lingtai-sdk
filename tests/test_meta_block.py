@@ -345,6 +345,10 @@ def test_build_meta_guidance_renders_guidance_meta_readme_and_adapter():
     assert "_meta envelope" in section or "_meta` envelope" in section
     assert "tool_meta" in section
     assert "agent_meta" in section
+    assert "Token efficiency state" in section
+    assert "guiding_avg_input_tokens_per_api_call" in section
+    assert "Review delegation instruction check" in section
+    assert "recent human-channel instructions" in section
     # Static adapter rules are present (the 4 required Codex points).
     assert "full epoch" in section
     assert "1:10" in section
@@ -671,6 +675,58 @@ def test_build_meta_emits_context_fields_when_decomp_ran():
     assert meta["context"]["history_tokens"] == 200
     # usage = (5500 + 200) / 100000 = 0.057
     assert abs(meta["context"]["usage"] - 0.057) < 1e-6
+
+
+def test_build_meta_token_efficiency_current_session_snapshot():
+    agent = _fake_agent_with_session(
+        system_prompt_tokens=1000,
+        tools_tokens=500,
+        history_tokens=5500,
+        context_limit=10000,
+    )
+    agent.get_token_usage = lambda: {
+        "api_calls": 4,
+        "input_tokens": 22000,
+        "cached_tokens": 5500,
+        "ctx_total_tokens": 99999,  # build_meta's live context wins
+    }
+
+    meta = build_meta(agent)
+
+    assert meta["context"]["system_tokens"] == 1500
+    assert meta["context"]["history_tokens"] == 5500
+    assert meta["token_efficiency"] == {
+        "scope": "current_session",
+        "api_calls": 4,
+        "input_tokens": 22000,
+        "cached_tokens": 5500,
+        "cache_rate": 0.25,
+        "avg_input_tokens_per_api_call": 5500,
+        "guiding_avg_input_tokens_per_api_call": 6000,
+        "context_tokens": 7000,
+        "context_window": 10000,
+        "guidance_ref": "meta_guidance.token_efficiency",
+    }
+    assert "avg_input_tokens_over_guide" not in meta["token_efficiency"]
+
+
+def test_build_meta_token_efficiency_clamps_cache_rate_to_fraction():
+    agent = _fake_agent_with_session(
+        system_prompt_tokens=100,
+        tools_tokens=0,
+        history_tokens=900,
+        context_limit=2000,
+    )
+    agent.get_token_usage = lambda: {
+        "api_calls": 1,
+        "input_tokens": 1000,
+        "cached_tokens": 1200,
+        "ctx_total_tokens": 1000,
+    }
+
+    meta = build_meta(agent)
+
+    assert meta["token_efficiency"]["cache_rate"] == 1.0
 
 
 def test_build_meta_emits_sentinels_before_decomp_runs():
@@ -1190,6 +1246,33 @@ def test_attach_active_runtime_counts_current_batch_tool_result_chars():
     ]
 
 
+def test_attach_active_runtime_preserves_token_efficiency_snapshot():
+    agent = _runtime_agent(total_calls=3)
+    token_efficiency = {
+        "scope": "current_session",
+        "api_calls": 2,
+        "input_tokens": 5000,
+        "cached_tokens": 1000,
+        "cache_rate": 0.2,
+        "avg_input_tokens_per_api_call": 2500,
+        "guiding_avg_input_tokens_per_api_call": 6000,
+        "context_tokens": 7000,
+        "context_window": 10000,
+        "guidance_ref": "meta_guidance.token_efficiency",
+    }
+    result = _stamped_result(
+        {"current_time": "T", "token_efficiency": token_efficiency},
+        elapsed_ms=12,
+    )
+    block = ToolResultBlock(id="tc-eff", name="bash", content=result)
+
+    attach_active_runtime(agent, [block])
+
+    agent_meta = block.content["_meta"]["agent_meta"]
+    assert agent_meta["token_efficiency"] == token_efficiency
+    assert agent_meta["active_turn_tool_calls"] == 3
+
+
 def test_attach_active_runtime_stamps_latest_with_state_and_guidance():
     agent = _runtime_agent(total_calls=3)
     content = _stamped_result({"current_time": "T", "context": {"usage": 0.1}}, 12)
@@ -1358,9 +1441,16 @@ def test_packaged_guidance_resource_is_valid():
     assert "token per API call" in body
     assert "cache/continuation efficiency" in body
     assert "When the current task is complete" in body
-    assert "molt is the stronger summarize boundary" in body
+    assert "mini molt for a consumed tool result" in body
+    assert "stronger whole-conversation summarize boundary" in body
     assert "do not pay a separate summarize call" in body
     assert "below 0.7 of the window" in body
+    assert "token_efficiency" in body
+    assert "current_session" in body
+    assert "guiding_avg_input_tokens_per_api_call" in body
+    assert "recent human-channel instructions" in body
+    assert "last 30 Telegram messages" in body
+    assert "not a personal standing rule file" in body
 
 
 def test_validate_runtime_guidance_accepts_well_formed():

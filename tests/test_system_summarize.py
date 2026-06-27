@@ -184,6 +184,7 @@ def test_summarize_single_item_success():
     assert "delayed" in result["reconstruction"]
     assert "keep working" in result["reconstruction"]
     assert "summarized history" in result["reconstruction"]
+    assert "See meta_guidance and substrate for details" in result["reconstruction"]
     # Not a provider-specific policy object — a plain status string.
     assert isinstance(result["reconstruction"], str)
 

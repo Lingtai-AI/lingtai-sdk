@@ -74,9 +74,9 @@ does not force a rebuild and the session keeps appending. If summarized history 
 runtime automatically reconstructs context with that compacted history on the
 next request — no manual action is needed. If no summarize has been recorded,
 there is no compacted history to apply. `refresh` is an *emergency* reconstruction
-path for broken/stale context, not part of the normal summarize flow. Molt is the
-stronger summarize boundary: if you have already decided to molt, do not spend a
-separate summarize call merely to prepare. If summarize/reconstruction cannot
+path for broken/stale context, not part of the normal summarize flow. Summarize is a mini molt for a consumed tool result; molt is the
+stronger whole-conversation summarize boundary. If you have already decided to
+molt, do not spend a separate summarize call merely to prepare. If summarize/reconstruction cannot
 bring context back below 0.7 of the window, tend durable stores and molt
 deliberately. Reading and clearing
 notifications is a
