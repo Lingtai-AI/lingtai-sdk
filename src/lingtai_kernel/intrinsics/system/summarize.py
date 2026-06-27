@@ -286,7 +286,7 @@ def _summarize(agent, args: dict) -> dict:
                 pass
 
     overall_status = "ok" if failed_count == 0 else ("partial" if summarized_count > 0 else "error")
-    return {
+    result: dict[str, Any] = {
         "status": overall_status,
         "summarized": summarized_count,
         "failed": failed_count,
@@ -294,3 +294,20 @@ def _summarize(agent, args: dict) -> dict:
         "cleared_reminders": cleared_reminder_ref_ids,
         "notification_threshold_chars": current_threshold,
     }
+
+    # Reassure the agent that the local effect already happened and that
+    # provider-side context reconstruction is intentionally delayed.  The
+    # visible result blocks were replaced and the large-result reminders
+    # cleared immediately above; only the provider request still rides the
+    # existing append/continuation prefix until context reaches the runtime
+    # reconstruction threshold (0.75 of the window).  This is a short,
+    # generic status, not a per-provider policy object — runtimes that
+    # reconstruct on every request simply observe no delay.
+    if summarized_count > 0:
+        result["reconstruction"] = (
+            "Summary recorded and applied locally now. Provider-side context "
+            "reconstruction is delayed until context reaches 0.75 of the window; "
+            "this is normal — keep working."
+        )
+
+    return result

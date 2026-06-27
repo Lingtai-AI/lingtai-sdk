@@ -767,8 +767,11 @@ def test_rest_incremental_never_sends_previous_response_id():
 
 
 def test_rest_summarize_delays_epoch_reset_below_context_threshold(monkeypatch):
-    """REST also delays the Codex epoch reset label until local context pressure
-    reaches the threshold; summarize still returns normally before then."""
+    """REST delays the epoch reset until local context pressure reaches the threshold.
+
+    Codex adapter comments are disabled; behavior is asserted through request modes
+    and the internal pending marker.
+    """
     client = RealisticRestClient(input_tokens=100)
     session = _make_rest_session(client)
     monkeypatch.setattr(session, "context_window", lambda: 1000)
@@ -776,13 +779,13 @@ def test_rest_summarize_delays_epoch_reset_below_context_threshold(monkeypatch):
     first = session.send("one")
     second = session.send("two")
     session.on_history_summarized(["call_old"])
+    assert "call_old" in session._summarize_effect_delayed_pending_ids
     third = session.send("three")
 
     assert first.usage.extra["codex_request_mode"] == "rest_full"
     assert second.usage.extra["codex_request_mode"] == "rest_incremental"
     assert third.usage.extra["codex_request_mode"] == "rest_incremental"
     assert third.usage.extra["codex_ws_delta_reason"] == "ok"
-    assert session.dynamic_adapter_comment()["summarize_effect"]["delayed"] is True
 
 
 def test_rest_summarize_releases_delayed_epoch_reset_at_context_threshold(monkeypatch):
@@ -814,11 +817,10 @@ def test_rest_summarize_release_uses_previous_provider_input_not_interface_estim
     session.send("one")
     session.send("two")
     session.on_history_summarized(["call_old"])
-    context = session.dynamic_adapter_comment()["summarize_effect"]
+    assert session._summarize_effect_delayed_last_release_reason == "summarize_delayed"
+    assert not session._summarize_effect_delayed_pending_ids
     third = session.send("three")
 
-    assert context["delayed"] is False
-    assert context["released_by"] == "summarize_delayed"
     assert third.usage.extra["codex_request_mode"] == "rest_full"
     assert third.usage.extra["codex_ws_epoch_reset_reason"] == "summarize_delayed"
 
@@ -826,24 +828,23 @@ def test_rest_summarize_release_uses_previous_provider_input_not_interface_estim
 def test_rest_summarize_uses_configured_context_window_when_base_returns_zero(monkeypatch):
     """Real Codex Responses sessions inherit ChatSession's 0 default unless the
     service-level context_window is carried into the session.  At 187.5k/250k the
-    0.75 threshold must release the delayed summarize effect."""
+    0.75 threshold must release the delayed summarize effect.
+    """
     client = RealisticRestClient(input_tokens=187_500)
     session = _make_rest_session(client, context_window=250_000)
 
     first = session.send("one")
     second = session.send("two")
     session.on_history_summarized(["call_old"])
-    release_comment = session.dynamic_adapter_comment()["summarize_effect"]
+    assert session._summarize_effect_delayed_last_release_reason == "summarize_delayed"
+    assert not session._summarize_effect_delayed_pending_ids
     third = session.send("three")
 
-    assert release_comment["delayed"] is False
-    assert release_comment["released_by"] == "summarize_delayed"
     assert session.context_window() == 250_000
     assert first.usage.extra["codex_request_mode"] == "rest_full"
     assert second.usage.extra["codex_request_mode"] == "rest_incremental"
     assert third.usage.extra["codex_request_mode"] == "rest_full"
     assert third.usage.extra["codex_ws_delta_reason"] == "epoch_reset"
-    assert third.usage.extra["codex_ws_epoch_reset_reason"] == "summarize_delayed"
 
 
 class _MultiToolCallRestResponses:
@@ -1122,42 +1123,16 @@ def test_new_user_turn_after_tool_loop_keeps_incremental_chain():
     assert "call the tool" not in flat3
 
 
-def test_codex_adapter_comment_explains_delayed_summarize_without_soft_constraints():
+def test_codex_adapter_comment_disabled():
     t = FakeWsTransport()
     session = _make_session(t)
 
-    session.send("hello")
-    session.send("again")
+    session.send("one")
     session.on_history_summarized(["call_old"])
-    comment = session.adapter_comment()
-    static = session.static_adapter_comment()
 
-    note = comment["cache_note"]
-    assert "Responses API" in note
-    assert "fresh full replay/cache epoch effect is delayed" in note
-    assert "previous_response_id/cache epoch" in note
-    assert "roughly 75%" in note
-    assert "additional summarize calls safely" in note
-    assert "do not summarize first unless context overflow is imminent" in note
-
-    summarize_effect = comment["summarize_effect"]
-    assert summarize_effect["delayed"] is True
-    assert summarize_effect["pending_count"] == 1
-    assert summarize_effect["threshold_ratio"] == 0.75
-
-    for payload in (comment, static):
-        assert "context_budget_note" not in payload
-        assert "summarize_economy_note" not in payload
-        assert "cache_ledger" not in payload
-        assert "cache_ledger_summary" not in payload
-        assert "maintenance_hint" not in payload
-        assert "last_full_reason" not in payload
-        assert "last_ws_full_reason" not in payload
-    assert "1:10" not in note
-    assert "150k" not in note
-    assert "200k" not in note
-    assert "full:incremental" not in note
-    assert "reduce_summarize_frequency" not in note
+    assert session.static_adapter_comment() is None
+    assert session.dynamic_adapter_comment() is None
+    assert session.adapter_comment() is None
 
 
 def test_rest_cache_ledger_counts_real_requests_not_pending_summarize_events(monkeypatch):
@@ -1169,11 +1144,9 @@ def test_rest_cache_ledger_counts_real_requests_not_pending_summarize_events(mon
     second = session.send("two")
     session.on_history_summarized(["call_old_1"])
     session.on_history_summarized(["call_old_2"])
-    pending = session.dynamic_adapter_comment()["summarize_effect"]
+    assert session._summarize_effect_delayed_pending_ids == {"call_old_1", "call_old_2"}
     third = session.send("three")
 
-    assert pending["pending_count"] == 2
-    assert pending["delayed"] is True
     assert first.usage.extra["codex_request_mode"] == "rest_full"
     assert second.usage.extra["codex_request_mode"] == "rest_incremental"
     assert third.usage.extra["codex_request_mode"] == "rest_incremental"
@@ -1225,32 +1198,10 @@ def test_codex_adapter_create_chat_carries_context_window_to_responses_session()
     assert session.context_window() == 250_000
 
 
-def test_codex_adapter_static_comment_available_before_chat_creation():
-    adapter = CodexOpenAIAdapter(api_key="test")
+def test_codex_adapter_static_comment_disabled_before_chat_creation():
+    adapter = CodexOpenAIAdapter(api_key="test", use_responses=True, force_responses=True)
 
-    comment = adapter.static_adapter_comment()
-
-    assert comment["adapter"] == "codex"
-    assert comment["feature"] == "responses_rest_epoch_reset"
-    assert ">=20 API calls" not in comment["summarize_note"]
-    assert "Responses API" in comment["summarize_note"]
-    assert "fresh full replay/cache epoch effect is delayed" in comment["summarize_note"]
-    assert "previous_response_id/cache epoch" in comment["summarize_note"]
-    assert "roughly 75%" in comment["summarize_note"]
-    assert "do not summarize first unless context overflow is imminent" in comment["summarize_note"]
-    assert "context_budget_note" not in comment
-    assert "summarize_economy_note" not in comment
-    assert "1:10" not in comment["summarize_note"]
-    assert "150k" not in comment["summarize_note"]
-    assert "200k" not in comment["summarize_note"]
-    assert "reduce_summarize_frequency" not in comment["summarize_note"]
-    assert "prefer daemon/file-based exploration" in comment["long_context_strategy"]
-    assert "main Codex context" in comment["long_context_strategy"]
-    assert "does not compact history" in comment["notification_dismiss_note"]
-    assert "coalesce dismissals with useful work" in comment["notification_dismiss_note"]
-    assert "FROZEN" in comment["system_prompt_update_note"]
-    assert "take effect immediately" in comment["system_prompt_update_note"]
-    assert "fresh epoch / cache cost" in comment["system_prompt_update_note"]
+    assert adapter.static_adapter_comment() is None
 
 
 def test_codex_update_system_prompt_is_no_op_and_keeps_instructions_frozen():
@@ -1289,42 +1240,25 @@ def test_codex_cache_ledger_stays_internal_not_adapter_comment():
     assert isinstance(ledger, dict)
     assert ledger["legend"]["sumd"] == "epoch_reset:summarize_delayed"
     assert isinstance(ledger["rows"], list)
-    comment = session.adapter_comment()
-    assert "cache_ledger" not in comment
-    assert "cache_ledger_summary" not in comment
-    assert "maintenance_hint" not in comment
+    assert session.adapter_comment() is None
 
 
-def test_codex_adapter_comment_is_rest_continuation_without_soft_constraints():
+def test_codex_dynamic_adapter_comment_disabled_for_rest_continuation():
     client = RealisticRestClient()
     session = _make_rest_session(client)
-    comment = session.dynamic_adapter_comment()
 
-    assert comment["transport"] == "rest"
-    assert comment["ws_enabled"] is False
-    assert comment["continuation_enabled"] is True
-    assert "periodic_reset_turns" not in comment
-    assert "cache_ledger" not in comment
-    assert "cache_ledger_summary" not in comment
-    assert "maintenance_hint" not in comment
+    assert session.dynamic_adapter_comment() is None
+    assert session.adapter_comment() is None
 
 
-def test_codex_adapter_comment_stateless_only_when_continuation_off():
+def test_codex_adapter_comment_disabled_when_continuation_off():
     t = FakeWsTransport()
     session = _make_session(t)
     session._continuation_enabled = False
 
-    comment = session.dynamic_adapter_comment()
-    static = session.static_adapter_comment()
-
-    assert comment["continuation_enabled"] is False
-    assert "cache_ledger" not in comment
-    assert "cache_ledger_summary" not in comment
-    assert "maintenance_hint" not in comment
-    assert "summarize_effect" not in comment
-    assert "fresh full replay/cache epoch effect is delayed" not in static["summarize_note"]
-    assert "context_budget_note" not in static
-    assert "summarize_economy_note" not in static
+    assert session.dynamic_adapter_comment() is None
+    assert session.static_adapter_comment() is None
+    assert session.adapter_comment() is None
 
 
 def test_history_summarized_delays_next_ws_full_below_context_threshold(monkeypatch):
@@ -1335,22 +1269,12 @@ def test_history_summarized_delays_next_ws_full_below_context_threshold(monkeypa
     first = session.send("one")
     second = session.send("two")
     session.on_history_summarized(["call_old"])
-
-    comment = session.dynamic_adapter_comment()
-    summarize_effect = comment["summarize_effect"]
-    assert summarize_effect["delayed"] is True
-    assert summarize_effect["pending_count"] == 1
-    assert summarize_effect["threshold_ratio"] == 0.75
-    assert summarize_effect["threshold_context_tokens"] == 750
-    assert summarize_effect["current_context_usage"] == 0.1
-    assert "additional summarize calls safely" in summarize_effect["message"]
-
+    assert "call_old" in session._summarize_effect_delayed_pending_ids
     third = session.send("three")
 
     assert first.usage.extra["codex_request_mode"] == "ws_full"
     assert second.usage.extra["codex_request_mode"] == "ws_incremental"
     assert third.usage.extra["codex_request_mode"] == "ws_incremental"
-    assert third.usage.extra["codex_ws_delta_reason"] == "ok"
     assert "codex_ws_epoch_reset_reason" not in third.usage.extra
     assert t.sent_frames[2]["previous_response_id"] == "resp_ws_2"
 
@@ -1363,21 +1287,16 @@ def test_history_summarized_releases_delayed_ws_full_at_context_threshold(monkey
     first = session.send("one")
     second = session.send("two")
     session.on_history_summarized(["call_old"])
-    release_comment = session.dynamic_adapter_comment()["summarize_effect"]
+    assert session._summarize_effect_delayed_last_release_reason == "summarize_delayed"
+    assert not session._summarize_effect_delayed_pending_ids
     third = session.send("three")
 
-    assert release_comment["delayed"] is False
-    assert release_comment["released_by"] == "summarize_delayed"
     assert first.usage.extra["codex_request_mode"] == "ws_full"
     assert second.usage.extra["codex_request_mode"] == "ws_incremental"
     assert third.usage.extra["codex_request_mode"] == "ws_full"
     assert third.usage.extra["codex_ws_delta_reason"] == "epoch_reset"
     assert third.usage.extra["codex_ws_epoch_reset_reason"] == "summarize_delayed"
     assert "previous_response_id" not in t.sent_frames[2]
-
-    summarize_effect = session.dynamic_adapter_comment()["summarize_effect"]
-    assert summarize_effect["delayed"] is False
-    assert summarize_effect["released_by"] == "summarize_delayed"
 
 
 def test_notification_dismissed_keeps_incremental_ws_chain():
@@ -1524,25 +1443,13 @@ def test_ws_epoch_reset_forces_full_after_configured_successes():
     assert t.sent_frames[3]["previous_response_id"] == "resp_ws_3"
 
 
-def test_ws_epoch_reset_countdown_fields_reappear_only_when_opted_in():
-    """The resident-meta countdown fields are surfaced only for an opted-in limit.
-
-    Disabled (default 0): the fields are omitted so the meta never implies a
-    forced reset. Opted in (explicit ``ws_epoch_reset_turns``): they reappear and
-    describe the real countdown — the conservative safety valve, not the normal
-    cadence.
-    """
+def test_ws_epoch_reset_countdown_fields_not_exposed_as_adapter_comment():
+    """Codex adapter comments are disabled even when an internal reset limit is opted in."""
     disabled = _make_session(FakeWsTransport())
-    disabled_comment = disabled.dynamic_adapter_comment()
-    assert "epoch_reset_turns" not in disabled_comment
-    assert "turns_since_epoch_reset" not in disabled_comment
-    assert "next_reset_in" not in disabled_comment
+    assert disabled.dynamic_adapter_comment() is None
 
     opted_in = _make_session(FakeWsTransport(), ws_epoch_reset_turns=50)
-    opted_in_comment = opted_in.dynamic_adapter_comment()
-    assert opted_in_comment["epoch_reset_turns"] == 50
-    assert opted_in_comment["turns_since_epoch_reset"] == 0
-    assert opted_in_comment["next_reset_in"] == 50
+    assert opted_in.dynamic_adapter_comment() is None
 
 
 def test_ws_epoch_reset_clears_frozen_outputs_before_full_replay():

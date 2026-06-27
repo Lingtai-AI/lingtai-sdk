@@ -11,6 +11,16 @@ High-attention tool-result summarization guidance lives in the runtime
 rules, examples, and summary-quality guidance, read `system-manual` →
 `reference/procedures-manual/SKILL.md`.
 
+Summarize normally — after digesting large results, when preserving key facts, or
+when context grows bulky. The local effect is immediate; provider-side
+reconstruction is delayed and that delay is expected, not a problem. Below 0.75 of
+the context window, keep working: the runtime continues appending and does not
+rebuild context per summarize. At 0.75 of the context window it reconstructs automatically on the next
+request, so you do not need to act. Use `refresh` only as an emergency when
+context is broken/stale, not as a routine summarize step. If summarize and
+reconstruction still cannot bring context below the threshold, molt deliberately
+(read `psyche-manual` first).
+
 ### Write Skills As You Work
 
 If rediscovering a workflow would be painful, make or update a skill immediately.

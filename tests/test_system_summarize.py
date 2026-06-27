@@ -178,6 +178,13 @@ def test_summarize_single_item_success():
     assert len(result["items"]) == 1
     assert result["items"][0]["status"] == "ok"
     assert result["items"][0]["tool_call_id"] == "tc-001"
+    # A successful summarize carries a short, generic reassurance that the
+    # local effect happened now and provider reconstruction is delayed.
+    assert "reconstruction" in result
+    assert "delayed" in result["reconstruction"]
+    assert "keep working" in result["reconstruction"]
+    # Not a provider-specific policy object — a plain status string.
+    assert isinstance(result["reconstruction"], str)
 
 
 def test_summarize_notifies_chat_after_successful_history_mutation():
@@ -403,6 +410,8 @@ def test_summarize_all_failures_returns_error_status():
     assert result["status"] == "error"
     assert result["summarized"] == 0
     assert result["failed"] == 2
+    # Nothing was summarized, so no reconstruction reassurance is emitted.
+    assert "reconstruction" not in result
 
 
 def test_summarize_save_failure_is_non_fatal():

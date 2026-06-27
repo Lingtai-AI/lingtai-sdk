@@ -82,6 +82,12 @@ installed capabilities. Refresh preserves identity and conversation while
 rebuilding the runtime surface. If a new MCP/tool still does not appear after
 refresh, inspect registry/config health before retrying.
 
+Refresh is also the **emergency** context-reconstruction path: reach for it when
+context is broken or stale, or when an immediate provider-side rebuild is urgently
+needed. It is not part of the normal summarize flow — summarize already drives
+delayed reconstruction automatically at 0.75 of the context window (see
+`summarize` below), so do not refresh just to "apply" a summarize.
+
 ### `presets`
 
 Use to list preset bundles and their tier/connectivity/capability tags. Tier tags
@@ -129,10 +135,22 @@ section inside `sections[]`, alongside the packaged sections from
 `src/lingtai/prompts/guidance.json`; follow that latest guidance first when it
 appears.
 
+Summarize has an immediate local effect and a delayed provider effect. Locally,
+the visible result is replaced and any large-result reminder is cleared at once.
+At the provider layer, runtimes serve requests by *appending* onto a stable
+cache/continuation prefix rather than *reconstructing* it each turn; rebuilding
+that prefix on every summarize would discard the cache benefit. So below 0.75 of
+the context window the summarize stays pending and the session keeps appending —
+this delay is normal — and at 0.75 of the context window the runtime automatically reconstructs context
+with the compacted history on the next request, with no manual action required.
+`refresh` is reserved for emergency reconstruction (see above); molt is the final
+boundary when summarize/reconstruction cannot get context below the threshold.
+
 For the full operating procedure — urgent large-result summarization, idle
 cleanup sweeps, original-result recovery by `tool_call_id`, summary quality,
-large-result notification behavior, and the distinction between summarize and
-molt — read `reference/summarize-manual/SKILL.md`.
+large-result notification behavior, append-vs-reconstruction timing, and the
+distinction between summarize and molt — read
+`reference/summarize-manual/SKILL.md`.
 
 ### Sleep, lull, interrupt, suspend, CPR, clear, nirvana
 

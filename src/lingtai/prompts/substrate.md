@@ -59,7 +59,19 @@ digest it and use `system(action="summarize")` to replace the context-visible
 payload with a detailed summary for future-you: the summary is the
 progressive-disclosure entry point, not a casual one-liner. Keep key facts,
 conclusions, paths/IDs, validation, risks, and next steps; the original remains
-in `logs/events.jsonl` only as fallback. Reading and clearing notifications is a
+in `logs/events.jsonl` only as fallback. Summarize takes effect locally at once
+— visible results are replaced and large-result reminders cleared — but
+provider-side context reconstruction is intentionally delayed. Most runtimes
+serve each request by *appending* to a stable cache prefix rather than
+*reconstructing* it; rebuilding that prefix on every summarize would discard the
+cache/continuation benefit. So below 0.75 of the context window, summarize
+does not force a rebuild and the session keeps appending. At 0.75 of the context window the runtime
+automatically reconstructs context with the compacted history on the next
+request — no manual action is needed. `refresh` is an *emergency* reconstruction
+path for broken/stale context, not part of the normal summarize flow. Molt is the
+final boundary: if summarizing/reconstruction cannot bring context back below the
+threshold, tend durable stores and molt deliberately. Reading and clearing
+notifications is a
 dedicated `notification` tool (`check`, `dismiss_channel`, `dismiss_event`,
 `dismiss_ref`) — `system` owns no notification verb. For lifecycle actions
 (`refresh`, `presets`, `lull`, `interrupt`, `suspend`, `cpr`, `clear`,

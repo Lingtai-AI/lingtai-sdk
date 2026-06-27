@@ -86,6 +86,38 @@ Operational rules:
   clears the reminder.
 - If the result is still ambiguous, reopen or inspect it before summarizing.
 
+## 3a · Local effect now, reconstruction delayed
+
+Summarize has two layers of effect, and they are deliberately decoupled.
+
+**Local effect — immediate.** The moment the call succeeds, the visible
+tool-result blocks are replaced with your summary and any matching large-result
+reminders are cleared. The successful result carries a short reassurance to that
+effect. You see the compacted context right away.
+
+**Provider-side reconstruction — delayed.** Runtimes serve most requests by
+*appending* new turns onto a stable cache/continuation prefix, not by
+*reconstructing* that prefix from scratch each time. Rebuilding the prefix on
+every summarize would throw away the cache/continuation benefit. So summarizing
+does not immediately force the provider to rebuild context:
+
+- **Below 0.75 of the context window:** the summarize stays "pending" at the
+  provider layer. The session keeps appending; you can keep working and may issue
+  more summarize calls safely. This delay is normal and is not a failure.
+- **At or above 0.75 of the context window:** the runtime automatically reconstructs context with the
+  compacted history on the next provider request. You do not need to take any
+  manual action for this to happen.
+
+`refresh` is an **emergency** reconstruction path — for context that is broken or
+stale, or when an immediate rebuild is urgently needed. It is not a routine knob
+for the normal summarize flow; do not reach for it just to "apply" a summarize.
+
+If summarize and the automatic reconstruction still cannot bring context back
+below the threshold, that is the signal to **molt** (see §6 and `psyche-manual`).
+
+Runtimes that already reconstruct on every request simply observe no delay; the
+above is generic behavior, not a single provider's policy.
+
 ## 4 · Recovering the original result
 
 A summarized block should carry a retrieval hint. The usual fallback is to search

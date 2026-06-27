@@ -65,10 +65,21 @@ daemons to keep the raw bulk out of main context; use summarize for the bulk tha
 already landed there. See `## 3. Use the right body` for the full daemon workflow
 methodology.
 
+Summarize takes effect locally at once (visible results replaced, large-result
+reminders cleared), but provider-side reconstruction is delayed and that delay is
+expected. Runtimes append onto a stable cache prefix instead of rebuilding it
+every turn, so below 0.75 of the context window you simply keep working — do not
+treat the "pending"/delayed status as a failure or reach for `refresh` to force a
+rebuild. At 0.75 of the context window the runtime reconstructs context automatically on the next
+request. Reserve `refresh` for emergencies (broken/stale context). If summarize
+plus that automatic reconstruction still cannot get context below the threshold,
+molt deliberately.
+
 Runtime `_meta.guidance` gives the high-attention reminder when summarization is
 timely. For the full procedure — urgent large-result handling, idle cleanup
-sweeps, quality checklist, original-result recovery, and summarize-vs-molt
-boundaries — read `reference/summarize-manual/SKILL.md`.
+sweeps, quality checklist, original-result recovery, append-vs-reconstruction
+timing, and summarize-vs-molt boundaries — read
+`reference/summarize-manual/SKILL.md`.
 
 ## 2. Action and responsiveness
 

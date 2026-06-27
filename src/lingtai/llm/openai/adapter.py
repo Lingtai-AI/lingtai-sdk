@@ -2213,112 +2213,8 @@ class OpenAIAdapter(LLMAdapter):
 # ---------------------------------------------------------------------------
 
 
-_CODEX_PRE_MOLT_SUMMARIZE_NOTE = (
-    "If you are already planning to molt, do not summarize first unless "
-    "context overflow is imminent; molt is the higher-level replacement for "
-    "summarize, so pre-molt summarize is wasted work."
-)
 _CODEX_SUMMARIZE_DELAY_THRESHOLD_RATIO = 0.75
-_CODEX_SUMMARIZE_DELAY_NOTE = (
-    "For Codex continuation over the Responses API, summarize calls are "
-    "accepted and recorded immediately, but their fresh full replay/cache "
-    "epoch effect is delayed until local context reaches roughly 75% of the "
-    "context window. The delay exists because Codex keeps a "
-    "previous_response_id/cache epoch; resetting that epoch for every "
-    "summarize would discard continuation/cache benefit. Before the delayed "
-    "full replay, the existing epoch continues, so you can keep working and "
-    "may issue additional summarize calls safely. Timing: below the threshold, "
-    "summarize remains pending and does not reset the epoch. At or above the "
-    "threshold, summarize immediately schedules the fresh full replay and is "
-    "reported as non-pending; the next provider request is sent as that full "
-    "replay with the compacted history. Refresh is only an optional force path "
-    "when you need to rebuild even below the threshold; it is not required for "
-    "the normal above-threshold summarize path."
-)
-_CODEX_LONG_CONTEXT_STRATEGY = (
-    "For long logs, diffs, repo scans, papers, issue sweeps, runtime traces, "
-    "or other noisy high-context reads, prefer daemon/file-based exploration "
-    "and return a distilled report to the main agent. Avoid ingesting large "
-    "raw outputs into the main Codex context just to summarize them later. "
-    "When local context reaches about 75% of the context window, "
-    "summarize/batch the noisy history; if that summarize pass cannot bring "
-    "local context back below that threshold, molt instead of repeatedly "
-    "paying fresh full replays."
-)
-_CODEX_NOTIFICATION_DISMISS_NOTE = (
-    "Notification dismiss only clears notification state; it does not compact "
-    "history or reset Codex continuation. Avoid low-value dismiss-only turns: "
-    "coalesce dismissals with useful work when safe, and do not interpret a "
-    "full-labeled dismiss turn as dismiss itself causing a reset."
-)
-_CODEX_SYSTEM_PROMPT_UPDATE_NOTE = (
-    "In-flight Codex/Responses sessions keep their system prompt (instructions) "
-    "FROZEN: update_system_prompt is a no-op on this path, so pad / system-prompt "
-    "edits do not break the current input-prefix continuation or cache — they are "
-    "preserved. A changed system prompt takes effect only when a NEW Codex session "
-    "is created (molt / refresh / restart / bootstrap). If you need an instruction "
-    "change to take effect immediately, refresh or molt deliberately and expect a "
-    "fresh epoch / cache cost; otherwise let it apply on the next natural session."
-)
 
-
-def _codex_static_adapter_comment(
-    *,
-    use_responses_api: bool,
-    continuation_enabled: bool,
-    ws_enabled: bool,
-) -> dict[str, Any] | None:
-    """Return static, prompt-safe Codex adapter guidance.
-
-    Shared by the adapter-level hook (available before chat creation) and the
-    session-level compatibility hook (available after chat creation).
-    """
-    if not use_responses_api:
-        return None
-    if not continuation_enabled:
-        return {
-            "adapter": "codex",
-            "feature": "stateless_full_replay",
-            "summary": (
-                "Codex is in stateless full-replay mode: every request is "
-                "rebuilt from local chat_history. Local history is not "
-                "deleted by request-side resets."
-            ),
-            "summarize_note": (
-                "Summarize normally when useful. In stateless full-replay mode, "
-                "each request is rebuilt from local chat_history, so no delayed "
-                "Responses continuation epoch applies. "
-                + _CODEX_PRE_MOLT_SUMMARIZE_NOTE
-            ),
-            "long_context_strategy": _CODEX_LONG_CONTEXT_STRATEGY,
-            "notification_dismiss_note": _CODEX_NOTIFICATION_DISMISS_NOTE,
-            "system_prompt_update_note": _CODEX_SYSTEM_PROMPT_UPDATE_NOTE,
-        }
-
-    return {
-        "adapter": "codex",
-        "feature": (
-            "responses_websocket_epoch_reset"
-            if ws_enabled
-            else "responses_rest_epoch_reset"
-        ),
-        "summary": (
-            "Codex plans turns as full or incremental over the selected "
-            "REST/WebSocket transport. A fresh full epoch clears only "
-            "request-side continuation state and rebuilds the next request "
-            "from local chat_history; local history is not deleted or "
-            "summarized."
-        ),
-        "summarize_note": (
-            "Summarize normally when useful. "
-            + _CODEX_SUMMARIZE_DELAY_NOTE
-            + " "
-            + _CODEX_PRE_MOLT_SUMMARIZE_NOTE
-        ),
-        "long_context_strategy": _CODEX_LONG_CONTEXT_STRATEGY,
-        "notification_dismiss_note": _CODEX_NOTIFICATION_DISMISS_NOTE,
-        "system_prompt_update_note": _CODEX_SYSTEM_PROMPT_UPDATE_NOTE,
-    }
 
 class CodexResponsesSession(OpenAIResponsesSession):
     """Responses session for Codex's `/backend-api/codex/responses`.
@@ -3248,97 +3144,25 @@ class CodexResponsesSession(OpenAIResponsesSession):
         return hint
 
     def static_adapter_comment(self):
-        """Return the static, rule-like Codex adapter guidance.
+        """Codex adapter comments are intentionally disabled.
 
-        This content is safe to hoist into the resident ``meta_guidance``
-        section because it does not depend on the current cache ledger, epoch,
-        or per-turn counters.
+        Generic summarize/reconstruction guidance lives in substrate/procedures
+        and in the ``system.summarize`` tool result; Codex should not inject a
+        separate agent-facing policy block.
         """
-        return _codex_static_adapter_comment(
-            use_responses_api=getattr(self, "_use_responses_api", True),
-            continuation_enabled=self._continuation_enabled,
-            ws_enabled=self._ws_enabled,
-        )
+        return None
 
     def dynamic_adapter_comment(self):
-        """Return dynamic, per-turn Codex adapter state for tail ``_meta``."""
-        if not getattr(self, "_use_responses_api", True):
-            return None
+        """Codex exposes no adapter-specific tail guidance.
 
-        comment = {
-            "adapter": "codex",
-            "feature": (
-                "responses_websocket_epoch_reset"
-                if self._ws_enabled
-                else "responses_rest_epoch_reset"
-            ) if self._continuation_enabled else "stateless_full_replay",
-            "transport": "websocket" if self._ws_enabled else "rest",
-            "ws_enabled": self._ws_enabled,
-            "continuation_enabled": self._continuation_enabled,
-        }
-        if not self._continuation_enabled:
-            return comment
-
-        # The mandatory turn-count epoch reset is cancelled by default
-        # (``_ws_epoch_reset_turn_limit <= 0`` / disabled). When disabled, the
-        # resident meta OMITS the periodic-countdown fields entirely so it never
-        # implies a forced reset that the runtime won't perform. They reappear only
-        # when an operator has explicitly opted back in via ``ws_epoch_reset_turns``
-        # / the env var, in which case they describe a real countdown.
-        if self._ws_epoch_reset_turn_limit > 0:
-            comment.update(
-                {
-                    "epoch_reset_turns": self._ws_epoch_reset_turn_limit,
-                    "turns_since_epoch_reset": self._ws_turns_since_epoch_reset,
-                    "next_reset_in": max(
-                        self._ws_epoch_reset_turn_limit
-                        - self._ws_turns_since_epoch_reset,
-                        0,
-                    ),
-                }
-            )
-        if self._summarize_effect_delayed_pending_ids:
-            ctx = self._summarize_delay_context()
-            self._summarize_effect_delayed_last_context = ctx
-            comment["summarize_effect"] = {
-                "delayed": True,
-                "pending_count": len(self._summarize_effect_delayed_pending_ids),
-                **ctx,
-                "message": _CODEX_SUMMARIZE_DELAY_NOTE,
-            }
-        elif self._summarize_effect_delayed_last_release_reason:
-            comment["summarize_effect"] = {
-                "delayed": False,
-                "released_by": self._summarize_effect_delayed_last_release_reason,
-                "message": "Delayed Codex summarize effect has been applied by a fresh full replay.",
-            }
-        return comment
+        Runtime context/summarize guidance is generic and should come from
+        resident substrate/procedures plus ordinary tool results.
+        """
+        return None
 
     def adapter_comment(self):
-        """Return the legacy combined Codex adapter note.
-
-        Kernel tail rendering now prefers ``dynamic_adapter_comment``.  This
-        compatibility method composes the explicit static/dynamic partitions so
-        older tests or callers still see the historical note aliases without
-        re-authoring the static prose in a second place.
-        """
-        static = self.static_adapter_comment()
-        dynamic = self.dynamic_adapter_comment()
-        if static is None:
-            return dynamic
-        if dynamic is None:
-            return static
-        if not isinstance(static, dict) or not isinstance(dynamic, dict):
-            return dynamic or static
-
-        comment = dict(static)
-        comment.update(dynamic)
-        summarize_note = static.get("summarize_note")
-        if isinstance(summarize_note, str):
-            comment["cache_note"] = summarize_note
-            comment["summarize_full_note"] = summarize_note
-            comment["summarize_ws_full_note"] = summarize_note
-        return comment
+        """Legacy compatibility hook; Codex adapter comments are disabled."""
+        return None
     def reset_provider_turn_state(self) -> None:
         self.reset_ws_turn()
 
@@ -4028,12 +3852,8 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         return None
 
     def static_adapter_comment(self):
-        """Return prompt-safe Codex guidance before a ChatSession exists."""
-        return _codex_static_adapter_comment(
-            use_responses_api=getattr(self, "_use_responses_api", True),
-            continuation_enabled=getattr(self, "_continuation_enabled", True),
-            ws_enabled=getattr(self, "_ws_enabled", False),
-        )
+        """Codex adapter comments are intentionally disabled before chat creation."""
+        return None
 
     def _resolve_codex_ids(self, model: str) -> tuple[str | None, str | None]:
         """Resolve the (session_id, thread_id) headers for ``model``.
