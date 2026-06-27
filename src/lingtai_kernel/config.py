@@ -15,7 +15,7 @@ THINKING_LEVELS = ("low", "medium", "high", "xhigh")
 # but are ignored — they no longer override these values. See
 # ``lingtai/agent.py`` (config reload) and ``lingtai/init_schema.py``
 # (MANIFEST_LEGACY_IGNORED).
-MOLT_NOTICE_THRESHOLD = 0.75  # >= this fraction -> single summarize/molt consideration prompt
+MOLT_NOTICE_THRESHOLD = 0.60  # >= this fraction -> summarize/molt consideration prompt
 MOLT_PRESSURE_THRESHOLD = MOLT_NOTICE_THRESHOLD  # legacy alias; not a separate stage
 MOLT_URGENCY_THRESHOLD = MOLT_NOTICE_THRESHOLD  # legacy alias; not a separate stage
 DEFAULT_SOUL_DELAY_SECONDS = 999999999.0

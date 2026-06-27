@@ -77,7 +77,7 @@ there is no compacted history to apply. `refresh` is an *emergency* reconstructi
 path for broken/stale context, not part of the normal summarize flow. Summarize is a mini molt for a consumed tool result; molt is the
 stronger whole-conversation summarize boundary. If you have already decided to
 molt, do not spend a separate summarize call merely to prepare. If summarize/reconstruction cannot
-bring context back below 0.7 of the window, tend durable stores and molt
+bring context back below `0.6 * context_window`, tend durable stores and molt
 deliberately. Reading and clearing
 notifications is a
 dedicated `notification` tool (`check`, `dismiss_channel`, `dismiss_event`,

@@ -885,15 +885,12 @@ def test_sync_idle_injects_pair_with_synthesized_marker(tmp_path: Path) -> None:
     assert body["_synthesized"] is True
     # Notification payload nests under the unified _meta envelope.
     meta = body["_meta"]
-    assert "not automatically human instructions" in meta["notification_guidance"]
-    assert "source(s): email" in meta["notification_guidance"]
-    assert "normal read tool" in meta["notification_guidance"]
-    assert "secondary" not in meta["notification_guidance"]
+    assert meta["notification_guidance"] == {
+        "ref": "meta_guidance.notification_handling",
+        "sources": ["email"],
+    }
     assert "email" in meta["notifications"]
-    assert "not necessarily a human instruction" in meta["notifications"]["email"]["notification_guidance"]
-    assert "'email' notification channel" in meta["notifications"]["email"]["notification_guidance"]
-    assert "normal read action" in meta["notifications"]["email"]["notification_guidance"]
-    assert "secondary" not in meta["notifications"]["email"]["notification_guidance"]
+    assert "notification_guidance" not in meta["notifications"]["email"]
 
     assert agent._notification_block_id == call_block.id
 
@@ -1963,14 +1960,16 @@ def test_inject_notification_pair_emits_block_injected_event(tmp_path: Path) -> 
     assert "sections" not in guidance
     assert guidance.get("ref") == "meta_guidance"
 
-    assert "notification_guidance" in meta
-    assert "not automatically human instructions" in meta["notification_guidance"]
+    assert meta["notification_guidance"] == {
+        "ref": "meta_guidance.notification_handling",
+        "sources": ["email", "system"],
+    }
     assert "notifications" in meta
     notifs = meta["notifications"]
     assert "email" in notifs
     assert "system" in notifs
-    # Per-channel guidance present
-    assert "notification_guidance" in notifs["email"]
+    # Per-channel duplicate static guidance is omitted.
+    assert "notification_guidance" not in notifs["email"]
 
 
 def test_block_injected_payload_not_mutated_by_skeletonization(tmp_path: Path) -> None:

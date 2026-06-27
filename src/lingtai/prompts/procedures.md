@@ -27,8 +27,7 @@ decided to molt, do not summarize first merely to prepare: molt is the stronger
 whole-conversation summarize boundary. It is the main action that lowers
 whole-conversation context and
 improves future token per API call and cache/continuation efficiency. If
-summarize and reconstruction still cannot bring context below 0.7 of the
-window, molt deliberately (read `psyche-manual` first).
+summarize and reconstruction still cannot bring context below `0.6 * context_window`, molt deliberately (read `psyche-manual` first).
 
 ### Write Skills As You Work
 

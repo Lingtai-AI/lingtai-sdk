@@ -123,7 +123,7 @@ stale, or when an immediate rebuild is urgently needed. It is not a routine knob
 for the normal summarize flow; do not reach for it just to "apply" a summarize.
 
 If summarize and the automatic reconstruction still cannot bring context back
-below 0.7 of the window, that is the signal to **molt** (see §6 and
+below `0.6 * context_window`, that is the signal to **molt** (see §6 and
 `psyche-manual`).
 
 Runtimes that already reconstruct on every request simply observe no delay; the

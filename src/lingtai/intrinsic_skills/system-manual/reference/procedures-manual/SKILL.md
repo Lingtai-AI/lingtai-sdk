@@ -77,7 +77,7 @@ the runtime reconstructs context automatically on the next request with that
 compacted history; no extra summarize call is needed. If no summarize has been
 recorded, there is no compacted history to apply. Reserve `refresh` for
 emergencies (broken/stale context). If summarize plus that automatic
-reconstruction still cannot get context below 0.7 of the window, molt
+reconstruction still cannot get context below `0.6 * context_window`, molt
 deliberately. At a task boundary, after necessary reporting and durable stores
 are tended, if there is no concrete next action, molt regardless of context
 size to reduce future token per API call and preserve cache/continuation
