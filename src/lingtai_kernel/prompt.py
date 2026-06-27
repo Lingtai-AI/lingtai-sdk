@@ -21,11 +21,11 @@ as the packaged default (v1); the `Agent` subclass copies it to
 `system/substrate.md` on first boot, where the agent (or human) can
 edit it freely.
 
-build_system_prompt() assembles language principle + activeness principle + base_prompt + rendered sections. The kernel-injected
-runtime principles are derived from the agent's configured language
-(en/zh/wen) and activeness level (quiet/balanced/responsive, default
-balanced); they always render first, before base_prompt, so runtime
-communication posture is pinned before all other prompt material.
+build_system_prompt() assembles kernel-injected runtime principles +
+base_prompt + rendered sections. The runtime principles include language,
+activeness, progressive-disclosure layering, and token-efficiency action
+rules. They always render first, before base_prompt, so ordinary operating
+rules are pinned before all other prompt material.
 """
 from __future__ import annotations
 
@@ -139,6 +139,66 @@ _ACTIVENESS_ALIASES: dict[str, str] = {
     "active": "responsive",
     "verbose": "responsive",
 }
+
+
+# Kernel-injected progressive-disclosure layering principle. Resident prompt
+# layers carry operational rules; reference/manual layers carry rationale and
+# examples. Kept in the principle prefix so every agent sees the rule before
+# substrate/procedures/meta_guidance.
+_PROGRESSIVE_DISCLOSURE_PRINCIPLES: dict[str, str] = {
+    "en": (
+        "Progressive disclosure principle: resident system-prompt layers carry "
+        "the operating rules — what happens, when to act, and which tool or "
+        "memory layer to use. Reference/manual layers carry why the design works, "
+        "edge cases, examples, and troubleshooting. If a rule must guide ordinary "
+        "turns, keep the rule resident and route only the explanation downward."
+    ),
+    "zh": (
+        "渐进式披露原则：常驻 system prompt 层承载操作规则——发生什么、何时行动、"
+        "该用哪个工具或记忆层；reference/manual 层承载为什么这样设计、边界、例子和排障。"
+        "凡普通回合必须遵守的规则，应留在常驻层，只把解释下沉。"
+    ),
+    "wen": (
+        "渐披之则：常驻 system prompt 层载其行法——所发生者、何时当行、当用何器何藏；"
+        "reference/manual 层载其所以、边界、例证、排障。凡常轮所必遵之规，当驻于常驻层；"
+        "其解释乃下沉。"
+    ),
+}
+
+
+# Kernel-injected token-efficiency operating principle. Detailed provider/cache
+# rationale stays in manuals; the resident principle states when to act.
+_TOKEN_EFFICIENCY_PRINCIPLES: dict[str, str] = {
+    "en": (
+        "Token efficiency principle: the current session's active context is "
+        "carried into every provider request. When continuing, summarize consumed "
+        "tool results whose raw text is no longer needed; at completed task "
+        "boundaries, after reporting and durable stores are tended, molt rather "
+        "than dragging finished work forward. Use daemons to keep bulky or noisy "
+        "work out of the main context."
+    ),
+    "zh": (
+        "Token efficiency 原则：当前会话的活跃上下文会随每次 provider 请求一起发送。"
+        "继续同一任务时，已消化且不再需要原文的工具结果要摘要；任务完成并完成必要汇报与"
+        "durable stores 后要凝蜕，不要拖着已完成片段前行。嘈杂或大批量工作应先用 daemon 隔离。"
+    ),
+    "wen": (
+        "省筹之则：当会话之活跃上下文随每次 provider 请求而行。续作时，凡工具结果已消化且"
+        "无需原文者，当摘要；事毕、已报且诸藏已理，则凝蜕，毋拖已竟之事而前行。繁重嘈杂之工，"
+        "先遣 daemon 以隔主上下文。"
+    ),
+}
+
+
+def _progressive_disclosure_principle(language: str) -> str:
+    """Return the resident-vs-reference layering principle for `language`."""
+    return _PROGRESSIVE_DISCLOSURE_PRINCIPLES.get(language) or _PROGRESSIVE_DISCLOSURE_PRINCIPLES["en"]
+
+
+def _token_efficiency_principle(language: str) -> str:
+    """Return the token-efficiency action principle for `language`."""
+    return _TOKEN_EFFICIENCY_PRINCIPLES.get(language) or _TOKEN_EFFICIENCY_PRINCIPLES["en"]
+
 
 
 def _activeness_principle(activeness: str | None, language: str) -> str:
@@ -310,9 +370,9 @@ def build_system_prompt(
 ) -> str:
     """Build the full system prompt from components.
 
-    Order: language principle → activeness principle → base prompt → section
-    batches. Runtime principles are kernel-injected from `language` and
-    `activeness` (default: balanced) and always come first. base_prompt is
+    Order: language → activeness → progressive disclosure → token efficiency
+    principles → base prompt → section batches. Runtime principles are
+    kernel-injected and always come first. base_prompt is
     framework-level guidance injected by the wrapper package (lingtai).
 
     This delegates to build_system_prompt_batches() and joins non-empty
@@ -345,8 +405,9 @@ def build_system_prompt_batches(
     that want a string can do ``"\\n\\n".join(filter(None, batches))``
     — and build_system_prompt() does exactly that composition.
 
-    The runtime principle prefix (language, activeness, and ``base_prompt`` if
-    any) is prepended to Batch 1, the cache-stable prefix batch, using the same
+    The runtime principle prefix (language, activeness, progressive disclosure,
+    token efficiency, and ``base_prompt`` if any) is prepended to Batch 1, the
+    cache-stable prefix batch, using the same
     ``\\n\\n---\\n\\n`` prefix separator that the historical single-string
     builder used between framework-level guidance and sections. Empty
     non-prefix batches stay empty so caller indexing remains stable.
@@ -357,6 +418,8 @@ def build_system_prompt_batches(
     activeness_principle = _activeness_principle(activeness, language)
     if activeness_principle:
         prefix_parts.append(activeness_principle)
+    prefix_parts.append(_progressive_disclosure_principle(language))
+    prefix_parts.append(_token_efficiency_principle(language))
     prefix = "\n\n".join(prefix_parts)
     if base_prompt:
         prefix = f"{prefix}\n\n---\n\n{base_prompt}"

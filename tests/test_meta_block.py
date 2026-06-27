@@ -343,7 +343,8 @@ def test_build_meta_guidance_renders_guidance_meta_readme_and_adapter():
     assert "progressive disclosure" in section
     assert "Delayed summarization reconstruction threshold" in section
     assert "0.75" in section
-    assert "do not call `refresh` just to apply a summarize" in section
+    assert "Do not call `refresh` just to apply a summarize" in section
+    assert "does not mean the provider-side context has been rebuilt yet" in section
     # meta_readme content (the _meta envelope explanation) is present.
     assert "_meta envelope" in section or "_meta` envelope" in section
     assert "tool_meta" in section
@@ -1433,15 +1434,17 @@ def test_packaged_guidance_resource_is_valid():
     assert "summarize_reconstruction_threshold" in ids
     assert "Delayed summarization reconstruction threshold" in titles
     body = "\n".join(section["body"] for section in guidance["sections"])
-    assert "regardless of length" in body
-    assert "token per API call" in body
-    assert "cache/continuation efficiency" in body
+    assert "summarize completed tool results" in body
+    assert "raw text no longer needs inspection" in body
+    assert "carrying more into each provider request" in body
+    assert "Apply the token-efficiency principle" in body
     assert "When the current task is complete" in body
-    assert "mini molt for a consumed tool result" in body
-    assert "stronger whole-conversation summarize boundary" in body
-    assert "do not pay a separate summarize call" in body
+    assert "mini molt for consumed tool results" in body
+    assert "stronger whole-conversation boundary" in body
+    assert "skip pre-molt summarize" in body
     assert "0.75" in body
-    assert "do not call `refresh` just to apply a summarize" in body
+    assert "Do not call `refresh` just to apply a summarize" in body
+    assert "does not mean the provider-side context has been rebuilt yet" in body
     assert "0.6 * context_window" in body
     assert "token_efficiency" in body
     assert "current_session" in body

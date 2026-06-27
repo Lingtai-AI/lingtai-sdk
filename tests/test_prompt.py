@@ -144,7 +144,11 @@ def test_activeness_principle_en_renders_between_language_and_base_prompt():
     assert "Agent activeness: quiet." in prompt
     assert "Be swift in action and sparing in words" in prompt
     assert prompt.index("Agent language: English.") < prompt.index("Agent activeness: quiet.")
-    assert prompt.index("Agent activeness: quiet.") < prompt.index("Framework guidance.")
+    assert "Progressive disclosure principle:" in prompt
+    assert "Token efficiency principle:" in prompt
+    assert prompt.index("Agent activeness: quiet.") < prompt.index("Progressive disclosure principle:")
+    assert prompt.index("Progressive disclosure principle:") < prompt.index("Token efficiency principle:")
+    assert prompt.index("Token efficiency principle:") < prompt.index("Framework guidance.")
     assert prompt.index("Framework guidance.") < prompt.index("Be good.")
 
 
@@ -158,6 +162,32 @@ def test_activeness_principle_localized_levels():
         mgr = SystemPromptManager()
         prompt = build_system_prompt(mgr, language=language, activeness=activeness)
         assert expected in prompt
+
+
+def test_progressive_disclosure_and_token_efficiency_principles_localize():
+    cases = [
+        ("en", "Progressive disclosure principle:", "Token efficiency principle:"),
+        ("zh", "渐进式披露原则：", "Token efficiency 原则："),
+        ("wen", "渐披之则：", "省筹之则："),
+        ("fr", "Progressive disclosure principle:", "Token efficiency principle:"),
+    ]
+    for language, disclosure, token_efficiency in cases:
+        mgr = SystemPromptManager()
+        prompt = build_system_prompt(mgr, language=language)
+        assert disclosure in prompt
+        assert token_efficiency in prompt
+        assert prompt.index(disclosure) < prompt.index(token_efficiency)
+
+
+def test_progressive_disclosure_principle_states_resident_vs_reference_rule():
+    mgr = SystemPromptManager()
+    prompt = build_system_prompt(mgr, language="en")
+    assert "resident system-prompt layers carry the operating rules" in prompt
+    assert "what happens, when to act" in prompt
+    assert "Reference/manual layers carry why the design works" in prompt
+    assert "the current session's active context is carried into every provider request" in prompt
+    assert "summarize consumed tool results" in prompt
+    assert "molt rather than dragging finished work forward" in prompt
 
 
 def test_activeness_principle_aliases_and_unknowns():
@@ -210,7 +240,7 @@ def test_batches_byte_identical_to_string():
 
 def test_batches_byte_identical_when_empty():
     """Even with no sections and no base_prompt, the joined batches equal
-    the string form (the language principle is the only content)."""
+    the string form (the kernel-injected principles are the only content)."""
     mgr = SystemPromptManager()
     full = build_system_prompt(mgr, language="zh")
     batches = build_system_prompt_batches(mgr, language="zh")

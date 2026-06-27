@@ -7,8 +7,8 @@ of relying on resident memory. The unified runtime/procedure router is
 `reference/procedures-manual/SKILL.md`.
 
 High-attention tool-result summarization guidance lives in the runtime
-`guidance.json` prompt resource as resident `meta_guidance`; the detailed
-procedure lives in `system-manual` → `reference/summarize-manual/SKILL.md`.
+`guidance.json` prompt resource as resident `meta_guidance`; reference/manual
+layers explain the rationale, edge cases, examples, and troubleshooting.
 
 **Summarize cadence.** After digesting a completed tool result whose raw text no
 longer needs inspection, summarize it with enough key facts, evidence, paths,
@@ -16,13 +16,15 @@ IDs, validation, risks, and next steps for future-you. Batch already-digested
 results when practical, and keep noisy/bulky work out of main context by using
 daemons before it lands here.
 
-**Delayed summarization reconstruction.** A successful summarize replaces the
-visible result locally at once, but provider-side context reconstruction is
-intentionally delayed. Below `0.75` of the context window, keep working: pending
-summarized history may remain pending at the provider layer, and this is normal.
-When pending summarized history exists and context reaches `0.75`, the runtime
-automatically reconstructs with the compacted history on the next request. Do
-not use `refresh` to force this; refresh is only for broken/stale context.
+**Delayed summarization reconstruction.** Treat summarize as a two-step
+mechanism: local compaction now, provider-context reconstruction later. A
+successful summarize immediately replaces the visible result in this session.
+It does not necessarily rebuild the provider-side context immediately. Below
+`0.75` of the context window, pending summarized history is normal; keep working
+and do not use `refresh` to force it. When pending summarized history exists and
+context reaches `0.75`, the runtime automatically reconstructs with the
+compacted history on the next request. If no summarize has been recorded, there
+is nothing to reconstruct.
 
 **Molt boundary.** At task completion, after necessary reporting and durable
 stores are tended, if no concrete next action remains, molt regardless of

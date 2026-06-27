@@ -53,7 +53,8 @@ def test_agent_prompt_builder_refreshes_meta_guidance_adapter_rules(tmp_path):
 
     assert "## meta_guidance" in prompt
     assert "Delayed summarization reconstruction threshold" in prompt
-    assert "do not call `refresh` just to apply a summarize" in prompt
+    assert "Do not call `refresh` just to apply a summarize" in prompt
+    assert "does not mean the provider-side context has been rebuilt yet" in prompt
     assert "### codex runtime rules" in prompt
     assert "responses_rest_epoch_reset" in prompt
     assert "Summarize normally when useful" in prompt
@@ -85,7 +86,8 @@ def test_agent_batched_prompt_builder_refreshes_meta_guidance_adapter_rules(tmp_
 
     assert "## meta_guidance" in prompt
     assert "Delayed summarization reconstruction threshold" in prompt
-    assert "do not call `refresh` just to apply a summarize" in prompt
+    assert "Do not call `refresh` just to apply a summarize" in prompt
+    assert "does not mean the provider-side context has been rebuilt yet" in prompt
     assert "### codex runtime rules" in prompt
     assert "responses_rest_epoch_reset" in prompt
     assert "Codex Responses sessions may keep" in prompt
