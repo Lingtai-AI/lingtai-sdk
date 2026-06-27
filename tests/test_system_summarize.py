@@ -179,8 +179,10 @@ def test_summarize_single_item_success():
     assert result["items"][0]["status"] == "ok"
     assert result["items"][0]["tool_call_id"] == "tc-001"
     # A successful summarize carries a short, generic reassurance that the
-    # local effect happened now and provider reconstruction is delayed.
+    # summary bookkeeping is recorded now and provider reconstruction is delayed.
     assert "reconstruction" in result
+    assert "runtime history" in result["reconstruction"]
+    assert "active provider context may still contain the old result" in result["reconstruction"]
     assert "delayed" in result["reconstruction"]
     assert "keep working" in result["reconstruction"]
     assert "summarized history" in result["reconstruction"]

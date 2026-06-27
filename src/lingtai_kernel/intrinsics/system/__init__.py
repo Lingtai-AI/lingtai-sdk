@@ -10,8 +10,8 @@ Actions (voluntary, agent-callable):
     clear     — force a full molt on another agent (requires karma)
     nirvana   — permanently destroy an agent's working directory (requires nirvana)
     presets   — list available presets in the agent's library
-    summarize — replace a prior tool-result block's context-visible copy with
-                an agent-authored summary; a successful summarize of a
+    summarize — record an agent-authored compact replacement for a prior
+                tool-result block in runtime history; a successful summarize of a
                 ``large_tool_result`` tool_call_id auto-clears its reminder.
 
 Notification verbs (``check``/``dismiss_channel``/``dismiss_event``/

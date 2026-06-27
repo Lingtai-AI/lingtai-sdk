@@ -134,10 +134,10 @@ exceeds the large-result threshold and is consuming context budget. The
 system(action="summarize", items=[{"tool_call_id": "toolu_...", "summary": "..."}])
 ```
 
-A successful summarize of that `tool_call_id` auto-clears the matching
-`large_tool_result:<tool_call_id>` reminder and replaces the context-visible
-payload with your own summary. A failed summarize item leaves its reminder in
-place.
+A successful summarize of that `tool_call_id` records a compact runtime-history
+replacement and auto-clears the matching `large_tool_result:<tool_call_id>`
+reminder. Provider-context replacement waits for delayed reconstruction; a failed
+summarize item leaves its reminder in place.
 
 **Dismissal as an escape hatch.** When summarization is not possible — e.g.
 for stale or pre-molt `tool_call_id`s that can no longer be found in the current

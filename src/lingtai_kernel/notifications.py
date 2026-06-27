@@ -82,9 +82,10 @@ _LARGE_RESULT_ACK_FILE = ".notification/large_result_acks.json"
 _LARGE_RESULT_DISMISS_NOTE = (
     "large_tool_result reminder acknowledged and removed. "
     "Summarization via system(action='summarize') remains the preferred way to "
-    "discharge a large result — it replaces the context-visible payload with your "
-    "own summary and auto-clears the reminder. Dismissal only clears the reminder "
-    "surface; the original large result remains in chat history and events.jsonl."
+    "discharge a large result — it records an agent-authored compact replacement "
+    "in runtime history and auto-clears the reminder. Dismissal only clears the "
+    "reminder surface; the original large result remains in chat history and "
+    "events.jsonl."
 )
 
 
@@ -328,8 +329,8 @@ def clear_large_result_reminders(agent, tool_call_ids) -> list[str]:
 
     This is the preferred discharge path: a *successful*
     system(action="summarize") of a tool_call_id clears its matching
-    ``large_tool_result`` reminder automatically and replaces the
-    context-visible payload with the agent's own summary.
+    ``large_tool_result`` reminder automatically after recording an
+    agent-authored compact replacement in runtime history.
 
     Generic notification dismiss (``dismiss_channel``/``dismiss_ref``) can also
     acknowledge and clear large-result reminder mirrors as an escape hatch —

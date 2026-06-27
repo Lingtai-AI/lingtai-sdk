@@ -295,19 +295,22 @@ def _summarize(agent, args: dict) -> dict:
         "notification_threshold_chars": current_threshold,
     }
 
-    # Reassure the agent that the local effect already happened and that
+    # Reassure the agent that runtime-history bookkeeping happened while
     # provider-side context reconstruction is intentionally delayed.  The
-    # visible result blocks were replaced and the large-result reminders
-    # cleared immediately above; only the provider request still rides the
-    # existing append/continuation prefix until summarized history is pending and context reaches the runtime
-    # reconstruction threshold (0.75 of the window).  This is a short,
-    # generic status, not a per-provider policy object — runtimes that
-    # reconstruct on every request simply observe no delay.
+    # chat-history block was updated and large-result reminders were cleared
+    # immediately above; the active provider request may still ride the existing
+    # append/continuation prefix with the old raw block until summarized history
+    # is pending and context reaches the runtime reconstruction threshold (0.75
+    # of the window).  This is a short, generic status, not a per-provider policy
+    # object — runtimes that reconstruct on every request simply observe no
+    # delay.
     if summarized_count > 0:
         result["reconstruction"] = (
-            "Summary recorded and applied locally now. Provider-side context "
-            "reconstruction for this summarized history is delayed until context reaches 0.75 of the window; "
-            "this is normal — keep working. See meta_guidance and substrate for details."
+            "Summary recorded in runtime history. The active provider context may still "
+            "contain the old result until delayed reconstruction; when summarized history "
+            "is pending, reconstruction happens automatically once context reaches 0.75 "
+            "of the window. This is normal — keep working. See meta_guidance and "
+            "substrate for details."
         )
 
     return result

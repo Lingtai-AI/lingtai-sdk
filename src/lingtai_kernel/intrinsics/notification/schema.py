@@ -13,8 +13,8 @@ from __future__ import annotations
 LARGE_RESULT_DISMISS_ACTION_NOTE = (
     "large_tool_result reminders can be dismissed as an escape hatch "
     "(for example, stale pre-molt refs). Prefer system(action=summarize) "
-    "when the result is still accessible: summarize replaces the "
-    "context-visible payload and auto-clears the reminder. Dismissal only "
+    "when the result is still accessible: summarize records a compact "
+    "runtime-history replacement and auto-clears the reminder. Dismissal only "
     "clears the notification surface; the original result stays in chat "
     "history and events.jsonl. See notification-manual."
 )

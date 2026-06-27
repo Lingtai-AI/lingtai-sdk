@@ -126,7 +126,7 @@ semantics, and the undismissable large-result reminders, read
 
 `summarize` is the system action for tool-result context hygiene: after you have
 consumed a completed prior tool result and no longer need the raw text visible,
-replace its context-visible raw payload with a summary regardless of length. The
+record a compact summary replacement for its raw payload regardless of length. The
 summary preserves the conclusion, evidence, anchors, validation, risks, and next
 steps while lowering active context. Runtime high-attention guidance for this
 behavior is carried in `_meta.guidance`, including the resident 0.75
@@ -138,8 +138,8 @@ section inside `sections[]`, alongside the packaged sections from
 `src/lingtai/prompts/guidance.json`; follow that latest guidance first when it
 appears.
 
-Summarize has an immediate local effect and a delayed provider effect. Locally,
-the visible result is replaced and any large-result reminder is cleared at once.
+Summarize records a compact replacement in runtime history and may clear large-result
+reminders, but active provider-side reconstruction is delayed.
 At the provider layer, runtimes serve requests by *appending* onto a stable
 cache/continuation prefix rather than *reconstructing* it each turn; rebuilding
 that prefix on every summarize would discard the cache benefit. So below 0.75 of

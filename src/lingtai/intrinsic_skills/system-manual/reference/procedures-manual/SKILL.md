@@ -69,8 +69,8 @@ methodology.
 
 ### Delayed summarization reconstruction threshold
 
-Summarize takes effect locally at once (visible results replaced, large-result
-reminders cleared), but provider-side reconstruction is delayed and that delay is
+Summarize records compact replacements in runtime history and may clear large-result
+reminders, but active provider-side reconstruction is delayed and that delay is
 expected. Runtimes append onto a stable cache prefix instead of rebuilding it
 every turn, so below 0.75 of the context window you simply keep working — do not
 treat the "pending"/delayed status as a failure or reach for `refresh` to force a

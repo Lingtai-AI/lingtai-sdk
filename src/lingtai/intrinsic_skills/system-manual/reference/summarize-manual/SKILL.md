@@ -6,9 +6,11 @@ description: Detailed operational guide for system(action="summarize"): what too
 # Summarize Manual
 
 `system(action="summarize")` is context hygiene for completed tool results. It
-replaces the context-visible copy of one or more prior tool-result blocks with
-your own summary. It does **not** delete the original event; the raw result
-remains in logs for fallback.
+records an agent-authored compact replacement for one or more prior tool-result
+blocks in runtime history. It does **not** delete the original event; the raw
+result remains in logs for fallback, and the active provider continuation may
+still carry the old raw block until delayed reconstruction applies the compacted
+history.
 
 Use this manual when runtime guidance tells you to summarize, when a
 `large_tool_result` reminder appears, when tool output has served its immediate
@@ -88,20 +90,24 @@ Operational rules:
 
 - `tool_call_id` is the producer call ID shown on the original result, not the
   visible `_tool_call_id` event ref.
-- A successful summarize replaces only the active-context copy; it does not
-  mutate the original event log.
+- A successful summarize updates the runtime-history/chat-history copy and
+  persists that compact replacement; it does not mutate the original event log
+  and does not by itself prove the active provider continuation has dropped the
+  old raw block.
 - If a large-result notification points at that result, successful summarize
   clears the reminder.
 - If the result is still ambiguous, reopen or inspect it before summarizing.
 
-## 3a · Delayed summarization: local effect now, reconstruction delayed
+## 3a · Delayed summarization: summary recorded now, provider reconstruction delayed
 
 Summarize has two layers of effect, and they are deliberately decoupled.
 
-**Local effect — immediate.** The moment the call succeeds, the visible
-tool-result blocks are replaced with your summary and any matching large-result
-reminders are cleared. The successful result carries a short reassurance to that
-effect. You see the compacted context right away.
+**Runtime-history effect — immediate.** The moment the call succeeds, LingTai
+updates the live/persisted chat-history entry for the target tool result to your
+summary, records the summarize bookkeeping, and clears any matching large-result
+reminders. This is not a guarantee that the current provider continuation already
+contains that compacted view; from the agent's current provider-context
+perspective, the old raw block may still be present until reconstruction.
 
 **Provider-side reconstruction — delayed.** Runtimes serve most requests by
 *appending* new turns onto a stable cache/continuation prefix, not by

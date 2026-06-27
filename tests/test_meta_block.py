@@ -344,7 +344,7 @@ def test_build_meta_guidance_renders_guidance_meta_readme_and_adapter():
     assert "Delayed summarization reconstruction threshold" in section
     assert "0.75" in section
     assert "Do not call `refresh` just to apply a summarize" in section
-    assert "does not mean the provider-side context has been rebuilt yet" in section
+    assert "does not mean the active provider-side context" in section
     # meta_readme content (the _meta envelope explanation) is present.
     assert "_meta envelope" in section or "_meta` envelope" in section
     assert "tool_meta" in section
@@ -1444,7 +1444,7 @@ def test_packaged_guidance_resource_is_valid():
     assert "skip pre-molt summarize" in body
     assert "0.75" in body
     assert "Do not call `refresh` just to apply a summarize" in body
-    assert "does not mean the provider-side context has been rebuilt yet" in body
+    assert "does not mean the active provider-side context" in body
     assert "0.6 * context_window" in body
     assert "token_efficiency" in body
     assert "current_session" in body

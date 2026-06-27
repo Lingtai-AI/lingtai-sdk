@@ -65,15 +65,17 @@ agent-authored summary; the original remains recoverable from durable logs by
 `tool_call_id`.
 
 **Delayed summarization reconstruction:** summarize has two mechanisms. It
-replaces the context-visible tool result locally at once, but it does not
-necessarily rebuild provider-side context immediately. Below `0.75` of the
-context window, summarized history may remain pending at the provider layer
-while the session keeps appending; this is normal, and you should not call
+records a compact replacement in runtime history and may clear reminders, but it
+does not necessarily rebuild the active provider-side context immediately. Below
+`0.75` of the context window, summarized history may remain pending at the
+provider layer while the session keeps appending; from the agent's perspective,
+the old raw block may still be in the current continuation. Do not call
 `refresh` just to apply summarize. When pending summarized history exists and
 context reaches `0.75`, the runtime automatically reconstructs with the
-compacted history on the next request. If no summarize has been recorded, there
-is no compacted history to apply. Reference manuals explain why this threshold
-exists; this resident section states what to do.
+compacted history on the next request; that is when provider-context replacement
+becomes real for the agent. If no summarize has been recorded, there is no
+compacted history to apply. Reference manuals explain why this threshold exists;
+this resident section states what to do.
 
 Summarize is a mini molt for consumed tool results. Molt is the stronger
 whole-conversation boundary: if you have already decided to molt, do not pay a

@@ -17,11 +17,12 @@ results when practical, and keep noisy/bulky work out of main context by using
 daemons before it lands here.
 
 **Delayed summarization reconstruction.** Treat summarize as a two-step
-mechanism: local compaction now, provider-context reconstruction later. A
-successful summarize immediately replaces the visible result in this session.
-It does not necessarily rebuild the provider-side context immediately. Below
-`0.75` of the context window, pending summarized history is normal; keep working
-and do not use `refresh` to force it. When pending summarized history exists and
+mechanism: summary bookkeeping now, provider-context reconstruction later. A
+successful summarize records the compacted replacement in runtime history, but
+it does not necessarily rebuild the active provider-side context immediately.
+Below `0.75` of the context window, pending summarized history is normal; keep
+working, do not assume the old raw block has left the current continuation, and
+do not use `refresh` to force it. When pending summarized history exists and
 context reaches `0.75`, the runtime automatically reconstructs with the
 compacted history on the next request. If no summarize has been recorded, there
 is nothing to reconstruct.
