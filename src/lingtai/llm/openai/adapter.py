@@ -2217,6 +2217,11 @@ _CODEX_SUMMARIZE_ECONOMY_NOTE = (
     "summarize pass still leaves the main context above roughly 150k tokens, "
     "consider molting instead of repeatedly paying summarize misses."
 )
+_CODEX_PRE_MOLT_SUMMARIZE_NOTE = (
+    "If you are already planning to molt, do not summarize first unless "
+    "context overflow is imminent; molt is the higher-level replacement for "
+    "summarize, so pre-molt summarize is wasted work."
+)
 _CODEX_LONG_CONTEXT_STRATEGY = (
     "For long logs, diffs, repo scans, papers, issue sweeps, runtime traces, "
     "or other noisy high-context reads, prefer daemon/file-based exploration "
@@ -2265,7 +2270,8 @@ def _codex_static_adapter_comment(
             "summarize_note": (
                 "Summarize still rewrites visible history and can change the "
                 "next full request. Notification dismiss is only notification "
-                "cleanup and does not compact context."
+                "cleanup and does not compact context. "
+                + _CODEX_PRE_MOLT_SUMMARIZE_NOTE
             ),
             "context_budget_note": _CODEX_CONTEXT_BUDGET_NOTE,
             "summarize_economy_note": _CODEX_SUMMARIZE_ECONOMY_NOTE,
@@ -2305,7 +2311,9 @@ def _codex_static_adapter_comment(
             "fulls are too frequent. Under high context pressure or after a "
             "very noisy result, the investment is worth it immediately — "
             "summarize regardless of ratio; if context pressure stays high "
-            "after summarize, consider molt. Notification dismiss is only "
+            "after summarize, consider molt. "
+            + _CODEX_PRE_MOLT_SUMMARIZE_NOTE
+            + " Notification dismiss is only "
             "notification cleanup: it does not compact context, delete local "
             "history, or reset the epoch."
         ),

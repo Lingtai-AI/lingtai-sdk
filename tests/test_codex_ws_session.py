@@ -1097,6 +1097,8 @@ def test_codex_adapter_comment_explains_epoch_reset_and_cache_ledger():
     assert "investment" in note
     assert "buy future context" in note
     assert "consider molt" in note
+    assert "do not summarize first unless context overflow is imminent" in note
+    assert "molt is the higher-level replacement for summarize" in note
 
     static = session.static_adapter_comment()
     assert static["adapter"] == "codex"
@@ -1104,6 +1106,7 @@ def test_codex_adapter_comment_explains_epoch_reset_and_cache_ledger():
     assert ">=20 API calls" not in static["summarize_note"]
     assert "1:10" in static["summarize_note"]
     assert "reduce_summarize_frequency" in static["summarize_note"]
+    assert "do not summarize first unless context overflow is imminent" in static["summarize_note"]
     assert "roughly 200k token context" in static["context_budget_note"]
     assert "above roughly 150k" in static["context_budget_note"]
     assert "investment, not a fixed countdown" in static["summarize_economy_note"]
@@ -1165,6 +1168,7 @@ def test_codex_adapter_static_comment_available_before_chat_creation():
     assert ">=20 API calls" not in comment["summarize_note"]
     assert "1:10" in comment["summarize_note"]
     assert "reduce_summarize_frequency" in comment["summarize_note"]
+    assert "do not summarize first unless context overflow is imminent" in comment["summarize_note"]
     assert "roughly 200k token context" in comment["context_budget_note"]
     assert "above roughly 150k" in comment["context_budget_note"]
     assert "investment, not a fixed countdown" in comment["summarize_economy_note"]
@@ -1373,6 +1377,7 @@ def test_codex_adapter_comment_stateless_only_when_continuation_off():
     assert "stateless" in comment["summary"]
     assert "Summarize" in note
     assert "Notification dismiss" in note
+    assert "do not summarize first unless context overflow is imminent" in note
 
 
 def test_history_summarized_forces_next_ws_full_epoch_reset():
