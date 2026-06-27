@@ -314,6 +314,61 @@ def _handle_log_command(args) -> None:
         sys.exit(1)
 
 
+def _positive_int(raw: str) -> int:
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer") from exc
+    if value < 1:
+        raise argparse.ArgumentTypeError("must be >= 1")
+    return value
+
+
+def _handle_maintenance_command(args) -> None:
+    if args.maintenance_command != "cleanup":
+        print("error: missing maintenance subcommand", file=sys.stderr)
+        sys.exit(1)
+
+    from lingtai_kernel.maintenance import (
+        RetentionOptions,
+        TargetError,
+        report_to_dict,
+        scan_retention,
+    )
+
+    options = RetentionOptions(
+        older_than_days=args.older_than_days,
+        include_archive=args.include_archive,
+    )
+    try:
+        report = scan_retention(args.target, options)
+    except (TargetError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    data = report_to_dict(report)
+    if args.json:
+        print(json.dumps(data, ensure_ascii=False, sort_keys=True))
+        return
+
+    totals = data["totals"]
+    print("Retention cleanup dry-run")
+    print(f"target: {data['target']}")
+    print(f"cutoff: older than {data['cutoff']['older_than_days']} days "
+          f"(before {data['cutoff']['before']})")
+    print(f"candidates: {totals['candidates']} "
+          f"({totals['candidate_bytes']} bytes)")
+    print(f"protected: {totals['protected']}; skipped: {totals['skipped']}")
+    for name, info in data["classes"].items():
+        if info["candidates"] or info["protected"] or info["skipped"]:
+            print(
+                f"- {name}: {info['candidates']} candidates, "
+                f"{info['protected']} protected, {info['skipped']} skipped, "
+                f"{info['bytes']} bytes"
+            )
+    print("No files were changed. Use --json for full candidate paths.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="lingtai-agent",
@@ -339,6 +394,40 @@ def main() -> None:
     log_query.add_argument("agent_dir", type=Path, help="Agent working directory")
     log_query.add_argument("sql", help="SQL query to execute")
 
+    maintenance_parser = sub.add_parser(
+        "maintenance",
+        help="Inspect kernel-owned maintenance surfaces",
+    )
+    maintenance_sub = maintenance_parser.add_subparsers(
+        dest="maintenance_command",
+        required=True,
+    )
+    cleanup = maintenance_sub.add_parser(
+        "cleanup",
+        help="Report stale retention candidates without deleting anything",
+    )
+    cleanup.add_argument(
+        "target",
+        type=Path,
+        help="Agent working directory or direct .lingtai root",
+    )
+    cleanup.add_argument(
+        "--older-than-days",
+        type=_positive_int,
+        default=30,
+        help="Report candidates older than this many days (default: 30)",
+    )
+    cleanup.add_argument(
+        "--include-archive",
+        action="store_true",
+        help="Include mailbox/archive entries as report candidates",
+    )
+    cleanup.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit stable JSON instead of a human summary",
+    )
+
     args = parser.parse_args()
 
     if args.command == "run":
@@ -352,6 +441,8 @@ def main() -> None:
         print(json.dumps(get_all_providers()))
     elif args.command == "log":
         _handle_log_command(args)
+    elif args.command == "maintenance":
+        _handle_maintenance_command(args)
     else:
         parser.print_help()
         sys.exit(1)

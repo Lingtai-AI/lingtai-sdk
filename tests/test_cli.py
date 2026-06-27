@@ -2,7 +2,7 @@ import json
 import os
 import pytest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 
 def _write_init(tmp_path: Path, overrides: dict | None = None) -> Path:
@@ -369,6 +369,86 @@ def test_log_query_missing_sqlite_requires_rebuild_cli(tmp_path, capsys):
         assert not (logs / "log.sqlite").exists()
     finally:
         sys.argv = old_argv
+
+
+def test_maintenance_cleanup_json_cli_reports_candidates(tmp_path, capsys):
+    from lingtai.cli import main
+    import sys
+
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    (agent / ".agent.json").write_text(
+        json.dumps({"agent_name": "agent", "admin": {"karma": True}}),
+        encoding="utf-8",
+    )
+    sent = agent / "mailbox" / "sent" / "20260401T010101-abcd"
+    sent.mkdir(parents=True)
+    (sent / "message.json").write_text("{}", encoding="utf-8")
+
+    old_argv = sys.argv
+    try:
+        sys.argv = [
+            "lingtai-agent",
+            "maintenance",
+            "cleanup",
+            str(agent),
+            "--older-than-days",
+            "30",
+            "--json",
+        ]
+        main()
+    finally:
+        sys.argv = old_argv
+
+    data = json.loads(capsys.readouterr().out)
+    assert data["mode"] == "dry_run"
+    assert data["classes"]["sent_mail"]["candidates"] == 1
+    assert sent.exists()
+
+
+def test_maintenance_cleanup_human_cli_says_no_files_changed(tmp_path, capsys):
+    from lingtai.cli import main
+    import sys
+
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    (agent / ".agent.json").write_text(
+        json.dumps({"agent_name": "agent", "admin": {"karma": True}}),
+        encoding="utf-8",
+    )
+
+    old_argv = sys.argv
+    try:
+        sys.argv = ["lingtai-agent", "maintenance", "cleanup", str(agent)]
+        main()
+    finally:
+        sys.argv = old_argv
+
+    out = capsys.readouterr().out
+    assert "Retention cleanup dry-run" in out
+    assert "No files were changed" in out
+
+
+def test_maintenance_cleanup_rejects_invalid_days(tmp_path):
+    from lingtai.cli import main
+    import sys
+
+    old_argv = sys.argv
+    try:
+        sys.argv = [
+            "lingtai-agent",
+            "maintenance",
+            "cleanup",
+            str(tmp_path),
+            "--older-than-days",
+            "0",
+        ]
+        with pytest.raises(SystemExit) as exc:
+            main()
+    finally:
+        sys.argv = old_argv
+
+    assert exc.value.code == 2
 
 
 def test_load_init_runs_agent_migrations_before_validation(tmp_path):

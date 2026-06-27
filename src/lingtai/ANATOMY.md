@@ -11,7 +11,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 | `__init__.py` | Public API facade — re-exports `Agent`, `BaseAgent`, `Message`, services from kernel+wrapper |
 | `__main__.py` | `python -m lingtai` → `cli.main()` |
 | `agent.py` | **THE key file.** `Agent(BaseAgent)` — layer-2 agent with capability composition, preset swap, MCP, init.json refresh |
-| `cli.py` | `lingtai-agent run <dir>` / `lingtai-agent check-caps` entry points |
+| `cli.py` | `lingtai-agent run <dir>` / `lingtai-agent check-caps` / `lingtai-agent log ...` / `lingtai-agent maintenance cleanup <target>` entry points |
 | `network.py` | Read-only network topology crawler — avatar/contact/mail edge discovery |
 | `presets.py` | Compatibility shim re-exporting the kernel preset library (`lingtai_kernel.presets`) |
 | `init_schema.py` | `validate_init()` plus `strip_deprecated()` — strict schema for active init.json fields, simple deprecated-field cleanup, and known-but-inactive legacy fields migrated by `lingtai_kernel.migrate` |
@@ -23,7 +23,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 
 **`agent.py`** — `Agent(BaseAgent)`: `__init__` :33 (accept `capabilities=` + `disable=`, expand groups, `apply_core_defaults`, decompress addons, setup caps, install manuals, load MCP) · `_setup_capability` :152 · `_persist_llm_config` :127 · `_install_intrinsic_manuals` :174 · `_load_mcp_from_workdir` :376 (also tracks specs in `_mcp_init_specs`) · `_retry_failed_mcps` :524 (re-spawn dead MCPs on `system(refresh)` — issue #34) · `_read_init` :833 (runs `lingtai_kernel.migrate.run_agent_migrations()` before reading `init.json`, then materializes preset, strips plain deprecated fields, validates, resolves paths, and publishes the resolved manifest to `system/manifest.resolved.json` via `lingtai_kernel.workdir.write_resolved_manifest` — issue #259) · `_setup_from_init` :989 (**full reconstruct** — shared by boot and live refresh; reads `manifest.disable` and re-applies `apply_core_defaults`) · `_activate_preset` :915 (runtime swap, atomic write) · `_reload_prompt_sections` :1229 (writes `covenant`/`substrate`/`rules`/`principle`/`procedures` plus `guidance.json`, then `brief`/`comment`; delegates `character` to `_lingtai_load` and `pad` to `_pad_load` — the canonical composers — so boot/refresh/molt are consistent and hook-order-independent) · `connect_mcp` :704 / `connect_mcp_http` :756 · `start` :697 / `stop` :802
 
-**`cli.py`**: `load_init` :21 · `build_agent` :77 · `run` :202 · `main` :287
+**`cli.py`**: `load_init` :21 · `build_agent` :77 · `run` :232 · `_handle_log_command` :282 · `_handle_maintenance_command` :327 · `main` :372
 
 **`presets.py`**: compatibility re-export shim (`presets.py:1-21`); implementation lives in `lingtai_kernel.presets` (`load_preset` :174 · `materialize_active_preset` :289 · `expand_inherit` :503 · `discover_presets_in_dirs` :121).
 
