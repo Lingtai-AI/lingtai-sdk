@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ...i18n import t
+from ...services.nokv import is_nokv_uri
 
 if TYPE_CHECKING:
     from lingtai_kernel.base_agent import BaseAgent
@@ -38,7 +39,7 @@ def setup(agent: "BaseAgent") -> None:
         content = args.get("content", "")
         if not path:
             return {"status": "error", "message": "file_path is required"}
-        if not Path(path).is_absolute():
+        if not is_nokv_uri(path) and not Path(path).is_absolute():
             path = str(agent._working_dir / path)
         try:
             agent._file_io.write(path, content)

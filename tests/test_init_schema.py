@@ -116,6 +116,30 @@ def test_wrong_type_capabilities():
         validate_init(data)
 
 
+def test_nokv_manifest_config_shape_valid():
+    data = _valid_init()
+    data["manifest"]["nokv"] = {
+        "enabled": False,
+        "endpoint": "http://127.0.0.1:7373",
+        "default_namespace": "/lingtai/projects/project-hash",
+        "uri_prefixes": ["nokv://"],
+        "selected_subtrees": ["artifacts", "reports", "checkpoints", "knowledge"],
+    }
+
+    validate_init(data)
+
+
+def test_nokv_manifest_config_rejects_bad_uri_prefixes():
+    data = _valid_init()
+    data["manifest"]["nokv"] = {
+        "enabled": True,
+        "uri_prefixes": "nokv://",
+    }
+
+    with pytest.raises(ValueError, match=r"manifest\.nokv\.uri_prefixes.*list\[str\]"):
+        validate_init(data)
+
+
 def test_wrong_type_streaming():
     data = _valid_init()
     data["manifest"]["streaming"] = "yes"

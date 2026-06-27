@@ -19,7 +19,16 @@ from .core.avatar import AvatarManager
 from lingtai_kernel.intrinsics.email import EmailManager
 
 # Services
-from .services.file_io import FileIOBackend, FileIOService, GrepMatch, LocalFileIOBackend, LocalFileIOService
+from .services.file_io import (
+    FileIOBackend,
+    FileIOService,
+    GrepMatch,
+    HybridFileIOBackend,
+    LocalFileIOBackend,
+    LocalFileIOService,
+    NoKVFileIOBackend,
+)
+from .services.nokv import NoKVConfig, NoKVUnsupportedError
 from .services.file_io_sidecar import (
     BACKEND_ENV_VAR,
     RustFileIOBackend,
@@ -52,8 +61,12 @@ __all__ = [
     # Services
     "FileIOService",
     "FileIOBackend",
+    "HybridFileIOBackend",
     "LocalFileIOBackend",
     "LocalFileIOService",
+    "NoKVConfig",
+    "NoKVFileIOBackend",
+    "NoKVUnsupportedError",
     "RustFileIOBackend",
     "SidecarAdapter",
     "SidecarError",

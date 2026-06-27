@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ...i18n import t
+from ...services.nokv import is_nokv_uri
 
 if TYPE_CHECKING:
     from lingtai_kernel.base_agent import BaseAgent
@@ -41,7 +42,7 @@ def setup(agent: "BaseAgent") -> None:
         if not pattern:
             return {"status": "error", "message": "pattern is required"}
         search_path = args.get("path", str(agent._working_dir))
-        if not Path(search_path).is_absolute():
+        if not is_nokv_uri(search_path) and not Path(search_path).is_absolute():
             search_path = str(agent._working_dir / search_path)
         max_matches = args.get("max_matches", 200)
         glob_filter = args.get("glob", "*")

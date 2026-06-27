@@ -32,6 +32,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
+from .nokv import (
+    DEFAULT_NOKV_URI_PREFIXES,
+    NoKVUnsupportedError,
+    format_nokv_uri,
+    is_nokv_uri,
+    normalize_nokv_path,
+)
+
 
 @dataclass
 class GrepMatch:
@@ -389,6 +397,293 @@ class LocalFileIOBackend(FileIOBackend):
                         )
                         return results
         return results
+
+
+class NoKVFileIOBackend(FileIOBackend):
+    """NoKV backend for explicit ``nokv://`` object paths.
+
+    The backend intentionally accepts an injected client instead of importing a
+    NoKV SDK at module import time. That keeps LingTai runnable when NoKV is
+    not installed and lets hosts wire the concrete client they own.
+    """
+
+    def __init__(
+        self,
+        client: Any | None = None,
+        *,
+        uri_prefixes: tuple[str, ...] = DEFAULT_NOKV_URI_PREFIXES,
+    ):
+        self._client = client
+        self._uri_prefixes = tuple(uri_prefixes)
+        self.last_traversal: TraversalStats = TraversalStats()
+
+    def _require_client(self) -> Any:
+        if self._client is None:
+            raise NoKVUnsupportedError(
+                "NoKV is not configured; pass a NoKV client before using nokv:// paths"
+            )
+        return self._client
+
+    def _object_path(self, path: str) -> str:
+        return normalize_nokv_path(path, self._uri_prefixes)
+
+    def _uri(self, path: str) -> str:
+        return format_nokv_uri(path, self._uri_prefixes[0])
+
+    def _call(self, method_names: tuple[str, ...], *args: Any, **kwargs: Any) -> Any:
+        client = self._require_client()
+        for name in method_names:
+            method = getattr(client, name, None)
+            if not callable(method):
+                continue
+            if kwargs:
+                try:
+                    return method(*args, **kwargs)
+                except TypeError:
+                    return method(*args)
+            return method(*args)
+        raise NoKVUnsupportedError(
+            "NoKV client does not support any of: " + ", ".join(method_names)
+        )
+
+    @staticmethod
+    def _content_from_result(result: Any) -> str:
+        if isinstance(result, bytes):
+            return result.decode("utf-8")
+        if isinstance(result, str):
+            return result
+        if isinstance(result, dict):
+            for key in ("content", "text", "body"):
+                value = result.get(key)
+                if isinstance(value, bytes):
+                    return value.decode("utf-8")
+                if isinstance(value, str):
+                    return value
+        return str(result)
+
+    def _entry_from_result(self, result: Any) -> dict:
+        if isinstance(result, dict):
+            path = result.get("path") or result.get("key") or result.get("name")
+            if path is None:
+                path = ""
+            return {
+                "path": normalize_nokv_path(str(path), self._uri_prefixes),
+                "generation": result.get("generation") or result.get("snapshot"),
+                "metadata": result.get("metadata") or {},
+            }
+        return {
+            "path": normalize_nokv_path(str(result), self._uri_prefixes),
+            "generation": None,
+            "metadata": {},
+        }
+
+    def _entries_from_result(self, result: Any) -> list[dict]:
+        if isinstance(result, dict):
+            for key in ("entries", "items", "objects", "results"):
+                entries = result.get(key)
+                if isinstance(entries, list):
+                    return [self._entry_from_result(entry) for entry in entries]
+            if "path" in result or "key" in result:
+                return [self._entry_from_result(result)]
+        if isinstance(result, list):
+            return [self._entry_from_result(entry) for entry in result]
+        return []
+
+    def read(self, path: str) -> str:
+        object_path = self._object_path(path)
+        result = self._call(("read", "cat", "get"), object_path)
+        return self._content_from_result(result)
+
+    def write(self, path: str, content: str) -> None:
+        object_path = self._object_path(path)
+        self._call(
+            ("write", "put", "put_file", "put_artifact", "pipe_file"),
+            object_path,
+            content,
+            metadata=None,
+        )
+
+    def edit(self, path: str, old_string: str, new_string: str) -> str:
+        content = self.read(path)
+        if old_string not in content:
+            raise ValueError(f"old_string not found in {path}")
+        count = content.count(old_string)
+        if count > 1:
+            raise ValueError(
+                f"old_string appears {count} times in {path} — must be unique. "
+                "Provide more context to make it unique."
+            )
+        content = content.replace(old_string, new_string, 1)
+        self.write(path, content)
+        return content
+
+    def list(self, path: str) -> list[dict]:
+        object_path = self._object_path(path)
+        result = self._call(("list", "ls", "find"), object_path)
+        return self._entries_from_result(result)
+
+    def stat(self, path: str) -> dict:
+        object_path = self._object_path(path)
+        result = self._call(("stat", "metadata", "info"), object_path)
+        entry = self._entry_from_result(result)
+        entry["path"] = object_path
+        return entry
+
+    def snapshot(self, path: str) -> dict:
+        object_path = self._object_path(path)
+        result = self._call(("snapshot", "pin", "stat"), object_path)
+        if isinstance(result, dict):
+            out = dict(result)
+            out["path"] = object_path
+            return out
+        return {"path": object_path, "generation": result}
+
+    def glob(
+        self,
+        pattern: str,
+        root: str | None = None,
+        *,
+        exclude_dirs: frozenset[str] | set[str] | None = None,
+        walltime_s: float | None = DEFAULT_WALLTIME_S,
+        max_visited: int | None = DEFAULT_MAX_VISITED,
+        max_results: int | None = 2000,
+    ) -> list[str]:
+        import fnmatch
+        import os
+
+        self.last_traversal = TraversalStats()
+        root_path = self._object_path(root or "/")
+        results: list[str] = []
+        for entry in self.list(root_path):
+            self.last_traversal.visited += 1
+            rel = os.path.relpath(entry["path"], root_path)
+            if fnmatch.fnmatch(rel, pattern):
+                results.append(self._uri(entry["path"]))
+                if max_results is not None and len(results) >= max_results:
+                    self.last_traversal.truncated_reason = "max_results"
+                    break
+        results.sort()
+        return results
+
+    def grep(
+        self,
+        pattern: str,
+        path: str | None = None,
+        max_results: int = 50,
+        *,
+        exclude_dirs: frozenset[str] | set[str] | None = None,
+        walltime_s: float | None = DEFAULT_WALLTIME_S,
+        max_visited: int | None = DEFAULT_MAX_VISITED,
+        max_file_bytes: int | None = DEFAULT_MAX_FILE_BYTES,
+    ) -> list[GrepMatch]:
+        import re
+
+        regex = re.compile(pattern)
+        self.last_traversal = TraversalStats()
+        root_path = self._object_path(path or "/")
+        results: list[GrepMatch] = []
+        for entry in self.list(root_path):
+            self.last_traversal.visited += 1
+            content = self.read(entry["path"])
+            for i, line in enumerate(content.splitlines(), 1):
+                if regex.search(line):
+                    results.append(GrepMatch(self._uri(entry["path"]), i, line))
+                    if len(results) >= max_results:
+                        self.last_traversal.truncated_reason = "max_results"
+                        return results
+        return results
+
+
+class HybridFileIOBackend(FileIOBackend):
+    """Route ordinary paths to local storage and ``nokv://`` paths to NoKV."""
+
+    def __init__(
+        self,
+        *,
+        local_backend: FileIOBackend | None = None,
+        nokv_backend: NoKVFileIOBackend | None = None,
+        uri_prefixes: tuple[str, ...] = DEFAULT_NOKV_URI_PREFIXES,
+    ):
+        self._local_backend = local_backend or LocalFileIOBackend()
+        self._nokv_backend = nokv_backend
+        self._uri_prefixes = tuple(uri_prefixes)
+        self._last_backend: FileIOBackend = self._local_backend
+
+    @property
+    def last_traversal(self) -> TraversalStats:
+        return self._last_backend.last_traversal
+
+    @last_traversal.setter
+    def last_traversal(self, value: TraversalStats) -> None:
+        self._last_backend.last_traversal = value
+
+    def _nokv(self) -> NoKVFileIOBackend:
+        if self._nokv_backend is None:
+            raise NoKVUnsupportedError(
+                "NoKV is not configured; nokv:// paths require a NoKV backend"
+            )
+        self._last_backend = self._nokv_backend
+        return self._nokv_backend
+
+    def _backend_for_path(self, path: str) -> FileIOBackend:
+        if is_nokv_uri(path, self._uri_prefixes):
+            return self._nokv()
+        self._last_backend = self._local_backend
+        return self._local_backend
+
+    def read(self, path: str) -> str:
+        return self._backend_for_path(path).read(path)
+
+    def write(self, path: str, content: str) -> None:
+        self._backend_for_path(path).write(path, content)
+
+    def edit(self, path: str, old_string: str, new_string: str) -> str:
+        return self._backend_for_path(path).edit(path, old_string, new_string)
+
+    def glob(
+        self,
+        pattern: str,
+        root: str | None = None,
+        *,
+        exclude_dirs: frozenset[str] | set[str] | None = None,
+        walltime_s: float | None = DEFAULT_WALLTIME_S,
+        max_visited: int | None = DEFAULT_MAX_VISITED,
+        max_results: int | None = 2000,
+    ) -> list[str]:
+        backend = self._nokv() if root and is_nokv_uri(root, self._uri_prefixes) else self._local_backend
+        self._last_backend = backend
+        return backend.glob(
+            pattern,
+            root=root,
+            exclude_dirs=exclude_dirs,
+            walltime_s=walltime_s,
+            max_visited=max_visited,
+            max_results=max_results,
+        )
+
+    def grep(
+        self,
+        pattern: str,
+        path: str | None = None,
+        max_results: int = 50,
+        *,
+        exclude_dirs: frozenset[str] | set[str] | None = None,
+        walltime_s: float | None = DEFAULT_WALLTIME_S,
+        max_visited: int | None = DEFAULT_MAX_VISITED,
+        max_file_bytes: int | None = DEFAULT_MAX_FILE_BYTES,
+    ) -> list[GrepMatch]:
+        backend = self._nokv() if path and is_nokv_uri(path, self._uri_prefixes) else self._local_backend
+        self._last_backend = backend
+        return backend.grep(
+            pattern,
+            path=path,
+            max_results=max_results,
+            exclude_dirs=exclude_dirs,
+            walltime_s=walltime_s,
+            max_visited=max_visited,
+            max_file_bytes=max_file_bytes,
+        )
+
 
 class LocalFileIOService(FileIOService):
     """Tool-facing file I/O service facade using a pluggable backend.

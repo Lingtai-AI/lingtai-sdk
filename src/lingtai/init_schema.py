@@ -75,6 +75,7 @@ MANIFEST_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     "timezone_awareness": bool,
     "pseudo_agent_subscriptions": list,
     "preset": dict,
+    "nokv": dict,
     # Large-result notification threshold.  When a tool result's serialized
     # length exceeds this value it becomes a pending large-result case; the
     # system-channel notification fires only once the combined length of all
@@ -237,6 +238,30 @@ def validate_init(data: dict) -> list[str]:
         for key in preset:
             if key not in {"active", "default", "allowed"}:
                 warnings.append(f"unknown field in manifest.preset: {key}")
+
+    nokv = manifest.get("nokv")
+    if nokv is not None:
+        if not isinstance(nokv, dict):
+            raise ValueError(f"manifest.nokv: expected object, got {type(nokv).__name__}")
+        _optional_keys(nokv, {
+            "enabled": bool,
+            "endpoint": (str, type(None)),
+            "default_namespace": (str, type(None)),
+        }, prefix="manifest.nokv")
+        for list_key in ("uri_prefixes", "selected_subtrees"):
+            values = nokv.get(list_key)
+            if values is not None:
+                if not isinstance(values, list) or not all(isinstance(v, str) and v for v in values):
+                    raise ValueError(f"manifest.nokv.{list_key}: expected list[str]")
+        for key in nokv:
+            if key not in {
+                "enabled",
+                "endpoint",
+                "default_namespace",
+                "uri_prefixes",
+                "selected_subtrees",
+            }:
+                warnings.append(f"unknown field in manifest.nokv: {key}")
 
     for key in manifest:
         if key not in MANIFEST_KNOWN:

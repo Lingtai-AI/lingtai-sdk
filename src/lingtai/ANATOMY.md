@@ -14,7 +14,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 | `cli.py` | `lingtai-agent run <dir>` / `lingtai-agent check-caps` entry points |
 | `network.py` | Read-only network topology crawler — avatar/contact/mail edge discovery |
 | `presets.py` | Compatibility shim re-exporting the kernel preset library (`lingtai_kernel.presets`) |
-| `init_schema.py` | `validate_init()` plus `strip_deprecated()` — strict schema for active init.json fields, simple deprecated-field cleanup, and known-but-inactive legacy fields migrated by `lingtai_kernel.migrate` |
+| `init_schema.py` | `validate_init()` plus `strip_deprecated()` — strict schema for active init.json fields, simple deprecated-field cleanup, `manifest.nokv`, and known-but-inactive legacy fields migrated by `lingtai_kernel.migrate` |
 | `venv_resolve.py` | Python venv resolution — init.json → global runtime → auto-create |
 | `intrinsic_skills/__init__.py` | Standalone skill bundles (docs-only) copied into `.library/intrinsic/` |
 | `mcp_servers/` | Curated MCP server implementations shipped in the `lingtai` distribution and launched by `mcp_catalog.json` via `python -m lingtai.mcp_servers.<name>`; historical top-level `lingtai_*` packages remain thin wrappers |
@@ -27,7 +27,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 
 **`presets.py`**: compatibility re-export shim (`presets.py:1-21`); implementation lives in `lingtai_kernel.presets` (`load_preset` :174 · `materialize_active_preset` :289 · `expand_inherit` :503 · `discover_presets_in_dirs` :121).
 
-**`init_schema.py`**: `DEPRECATED_TOP_FIELDS` :28 (plain deprecated top-level fields stripped by `strip_deprecated`), `LEGACY_MIGRATED_TOP_FIELDS` :38 (legacy fields removed by version-controlled agent migrations and known only as inactive schema), `validate_init` :94, `TOP_OPTIONAL` :13, `MANIFEST_OPTIONAL` :55; `manifest.llm.compact_threshold` is validated as positive int or null in the LLM block.
+**`init_schema.py`**: `DEPRECATED_TOP_FIELDS` :32 (plain deprecated top-level fields stripped by `strip_deprecated`), `LEGACY_MIGRATED_TOP_FIELDS` :42 (legacy fields removed by version-controlled agent migrations and known only as inactive schema), `validate_init` :120, `TOP_OPTIONAL` :15, `MANIFEST_OPTIONAL` :57; `manifest.nokv` is shape-validated at :242 and `manifest.llm.compact_threshold` is validated as positive int or null in the LLM block.
 
 **`network.py`**: `build_network` :306 · `_discover_agents` :143 · `_build_avatar_edges` :168
 
@@ -45,7 +45,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 
 **Agent → BaseAgent:** Three-layer hierarchy: `BaseAgent` (kernel) → `Agent` (capabilities) → `CustomAgent` (domain). Agent adds capability registration, MCP auto-loading, preset swap, full init.json reconstruct.
 
-**Capability registration:** `setup_capability()` in `capabilities/__init__.py`; the registry is `_BUILTIN` (per-capability module paths) plus `CORE_DEFAULTS` (which boot automatically). Agent calls `apply_core_defaults` + `_setup_capability` (agent.py:152) during `__init__` and `_setup_from_init`. Hosts disable defaults via the `disable=[...]` kwarg or `manifest.disable` in init.json.
+**Capability registration:** `setup_capability()` in `capabilities/__init__.py`; the registry is `_BUILTIN` (per-capability module paths, including explicit opt-in `nokv` at `capabilities/__init__.py:15-31`) plus `CORE_DEFAULTS` (which boot automatically). Agent calls `apply_core_defaults` + `_setup_capability` (agent.py:152) during `__init__` and `_setup_from_init`. Hosts disable defaults via the `disable=[...]` kwarg or `manifest.disable` in init.json.
 
 **Agent init migration + preset materialization:** `run_agent_migrations` (`lingtai_kernel/migrate/migrate.py:285`) is called by `cli.load_init` (boot) and `Agent._read_init` (refresh) before `init.json` is read/validated. Then `materialize_active_preset` (`lingtai_kernel/presets.py:289`) reads `manifest.preset.active`, loads preset, substitutes `llm`+`capabilities` into manifest before validation. The preset owns explicit opt-in capabilities, but per-agent init.json kwargs survive in two ways: (1) for capabilities the preset *also* enables, init.json wins key-by-key; (2) for always-on `CORE_DEFAULTS` capabilities the preset *omits* (daemon, bash, knowledge, …), init.json kwargs are carried forward so `apply_core_defaults` doesn't re-add an empty entry and lose e.g. `daemon.max_emanations`. Non-core optional caps the preset omits are dropped (the swap). `CORE_DEFAULTS` lives in `lingtai.capabilities` and is injected via the `core_defaults=` arg by both callers (`agent._read_init` :866, `cli.load_init` :49) — the kernel does not import the wrapper. `skills.paths` additionally append-merges (preset defaults first).
 

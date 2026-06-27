@@ -25,6 +25,7 @@ _BUILTIN: dict[str, str] = {
     "edit": "lingtai.core.edit",
     "glob": "lingtai.core.glob",
     "grep": "lingtai.core.grep",
+    "nokv": "lingtai.core.nokv",
     # Optional/multimodal capabilities (this package)
     "vision": ".vision",
     "web_search": ".web_search",
@@ -176,6 +177,7 @@ def get_all_providers() -> dict[str, dict]:
     """
     _USER_FACING: dict[str, str] = {
         "file": "lingtai.core.read",
+        "nokv": "lingtai.core.nokv",
         "bash": "lingtai.core.bash",
         "web_search": ".web_search",
         "knowledge": "lingtai.core.knowledge",
