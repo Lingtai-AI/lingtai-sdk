@@ -524,11 +524,22 @@ class RustFileIOBackend(FileIOBackend):
         path: str | None = None,
         max_results: int = 50,
         *,
+        glob_filter: str | None = None,
         exclude_dirs: frozenset[str] | set[str] | None = None,
         walltime_s: float | None = DEFAULT_WALLTIME_S,
         max_visited: int | None = DEFAULT_MAX_VISITED,
         max_file_bytes: int | None = DEFAULT_MAX_FILE_BYTES,
     ) -> list[GrepMatch]:
+        # ``glob_filter`` is honored here as a basename post-filter on the
+        # sidecar's results. The wire protocol (``SidecarRequest`` /
+        # ``to_payload``) and the Rust crate do not yet carry a glob field,
+        # so we cannot push the prune below the native scan without a
+        # protocol change — that native pushdown is a deliberate follow-up.
+        # Post-filtering here keeps observable behavior identical to the
+        # pure-Python backend (and to the old tool-wrapper post-filter):
+        # ``grep(..., glob_filter="*.py")`` returns only matches whose
+        # basename matches the glob, with ``None`` / ``"*"`` meaning
+        # "no filter".
         search_path, sandbox_root = self._sandbox_paths(path)
         envelope = self._adapter.call(
             SidecarRequest(
@@ -544,7 +555,14 @@ class RustFileIOBackend(FileIOBackend):
             )
         )
         self.last_traversal = _stats_from_envelope(envelope)
-        return _matches_from_envelope(envelope, str(sandbox_root))
+        matches = _matches_from_envelope(envelope, str(sandbox_root))
+        if glob_filter and glob_filter != "*":
+            import fnmatch
+            import re
+
+            compiled_glob = re.compile(fnmatch.translate(glob_filter))
+            matches = [m for m in matches if compiled_glob.match(Path(m.path).name)]
+        return matches
 
     # ------------------------------------------------------------------
     # Path resolution

@@ -117,8 +117,23 @@ class FileIOService(ABC):
         ...
 
     @abstractmethod
-    def grep(self, pattern: str, path: str | None = None, max_results: int = 50) -> list[GrepMatch]:
-        """Search file contents by regex pattern."""
+    def grep(
+        self,
+        pattern: str,
+        path: str | None = None,
+        max_results: int = 50,
+        *,
+        glob_filter: str | None = None,
+    ) -> list[GrepMatch]:
+        """Search file contents by regex pattern.
+
+        ``glob_filter`` is an optional fnmatch-style pattern matched
+        against each file's basename. Implementations should use it to
+        prune the candidate set *before* opening / reading, so callers
+        that narrow by basename (e.g. the ``grep`` tool's ``glob``
+        argument) pay no I/O for excluded files. ``None`` (or ``"*"``)
+        means "no filter".
+        """
         ...
 
 
@@ -170,6 +185,7 @@ class FileIOBackend(ABC):
         path: str | None = None,
         max_results: int = 50,
         *,
+        glob_filter: str | None = None,
         exclude_dirs: frozenset[str] | set[str] | None = None,
         walltime_s: float | None = DEFAULT_WALLTIME_S,
         max_visited: int | None = DEFAULT_MAX_VISITED,
@@ -340,6 +356,7 @@ class LocalFileIOBackend(FileIOBackend):
         path: str | None = None,
         max_results: int = 50,
         *,
+        glob_filter: str | None = None,
         exclude_dirs: frozenset[str] | set[str] | None = None,
         walltime_s: float | None = DEFAULT_WALLTIME_S,
         max_visited: int | None = DEFAULT_MAX_VISITED,
@@ -347,15 +364,30 @@ class LocalFileIOBackend(FileIOBackend):
     ) -> list[GrepMatch]:
         """Search file contents by regex.
 
+        ``glob_filter`` (optional) — fnmatch-style pattern matched
+        against the file's *basename*. When supplied, non-matching files
+        are skipped before ``stat`` / ``read_text``, so callers (e.g. the
+        ``grep`` tool's ``glob`` argument) prune the candidate set
+        cheaply instead of post-filtering full match results. The pattern
+        ``"*"`` (or ``None``) is treated as "no filter".
+
         Per-file: skipped (counted) when larger than ``max_file_bytes``
         or when ``read_text(utf-8)`` raises ``UnicodeDecodeError`` /
         ``PermissionError`` / ``OSError`` (binary, unreadable). Across
         files: bounded by ``walltime_s`` and ``max_visited``. See module
         docstring for default values.
         """
+        import fnmatch
         import re
 
         regex = re.compile(pattern)
+        # Pre-translate the basename glob to a regex once instead of
+        # letting fnmatch translate-and-cache per file. Translating
+        # ourselves also lets us cheaply detect the no-op "*" filter.
+        compiled_glob: re.Pattern[str] | None = None
+        if glob_filter and glob_filter != "*":
+            compiled_glob = re.compile(fnmatch.translate(glob_filter))
+
         self.last_traversal = TraversalStats()
         search_path = Path(path) if path else (self._root or Path("."))
         results: list[GrepMatch] = []
@@ -366,6 +398,11 @@ class LocalFileIOBackend(FileIOBackend):
             walltime_s=walltime_s,
             max_visited=max_visited,
         ):
+            # Cheapest filter first: basename glob match. This runs
+            # before stat / read_text so excluded files contribute zero
+            # file I/O.
+            if compiled_glob is not None and not compiled_glob.match(f.name):
+                continue
             if not f.is_file():
                 continue
             try:
@@ -475,6 +512,7 @@ class LocalFileIOService(FileIOService):
         path: str | None = None,
         max_results: int = 50,
         *,
+        glob_filter: str | None = None,
         exclude_dirs: frozenset[str] | set[str] | None = None,
         walltime_s: float | None = DEFAULT_WALLTIME_S,
         max_visited: int | None = DEFAULT_MAX_VISITED,
@@ -484,6 +522,7 @@ class LocalFileIOService(FileIOService):
             pattern,
             path=path,
             max_results=max_results,
+            glob_filter=glob_filter,
             exclude_dirs=exclude_dirs,
             walltime_s=walltime_s,
             max_visited=max_visited,

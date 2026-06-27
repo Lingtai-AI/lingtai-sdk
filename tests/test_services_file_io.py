@@ -214,6 +214,113 @@ class TestTraversalBudgets:
         assert any(".git" in r for r in results)
 
 
+class TestGrepGlobFilter:
+    """``glob_filter`` prunes the candidate set *before* stat / read.
+
+    Before this, the ``grep`` tool wrapper post-filtered full
+    ``GrepMatch`` results: every file under the search root was opened
+    and scanned even when the caller narrowed by ``glob`` (e.g.
+    ``glob="*.py"`` over a repo full of logs / json / bundles). The
+    contract these tests pin:
+
+    1. Non-matching files are not read (no ``read_text`` on them).
+    2. Matching files still yield the same results as an unfiltered run.
+    3. ``glob_filter=None`` / ``"*"`` is a no-op (back-compat).
+    """
+
+    def test_glob_filter_skips_non_matching_files_before_read(
+        self, svc, tmp_dir, monkeypatch
+    ):
+        # One .py file that matches the regex, one .log file that would
+        # also match — the glob filter should hide (and never read) the
+        # .log.
+        svc.write("good.py", "needle here\n")
+        svc.write("noisy.log", "needle here\n")
+
+        read_paths: list[str] = []
+        original = Path.read_text
+
+        def spy(self, *a, **kw):
+            read_paths.append(str(self))
+            return original(self, *a, **kw)
+
+        monkeypatch.setattr(Path, "read_text", spy)
+
+        results = svc.grep("needle", glob_filter="*.py")
+
+        # Only the .py file's match comes back.
+        assert len(results) == 1
+        assert results[0].path.endswith("/good.py")
+        # And the .log was never read — the pre-filter pruned it before
+        # any file I/O.
+        read_logs = [p for p in read_paths if p.endswith(".log")]
+        assert read_logs == [], f"unexpected reads of excluded files: {read_logs}"
+
+    def test_glob_filter_none_matches_all(self, svc, tmp_dir):
+        svc.write("a.py", "needle\n")
+        svc.write("b.txt", "needle\n")
+        results = svc.grep("needle", glob_filter=None)
+        files = {r.path for r in results}
+        assert any(p.endswith("/a.py") for p in files)
+        assert any(p.endswith("/b.txt") for p in files)
+
+    def test_glob_filter_star_matches_all(self, svc, tmp_dir):
+        # "*" is the schema default for the grep tool; treat it as no-op.
+        svc.write("a.py", "needle\n")
+        svc.write("b.txt", "needle\n")
+        results = svc.grep("needle", glob_filter="*")
+        assert len(results) == 2
+
+    def test_glob_filter_works_with_nested_layout(self, svc, tmp_dir):
+        svc.write("src/main.py", "needle\n")
+        svc.write("src/data.json", "needle\n")
+        svc.write("tests/test_main.py", "needle\n")
+        results = svc.grep("needle", glob_filter="*.py")
+        files = {r.path for r in results}
+        assert any(p.endswith("/src/main.py") for p in files)
+        assert any(p.endswith("/tests/test_main.py") for p in files)
+        assert not any(p.endswith(".json") for p in files)
+
+    def test_glob_filter_via_tool_wrapper_prunes_before_read(self, tmp_path, monkeypatch):
+        # End-to-end through the grep capability: the tool's ``glob`` arg
+        # must reach the service as ``glob_filter`` and prune before read.
+        captured: dict = {}
+        svc = LocalFileIOService(root=tmp_path)
+        original_grep = svc.grep
+
+        def spy_grep(pattern, path=None, max_results=50, **kwargs):
+            captured["glob_filter"] = kwargs.get("glob_filter")
+            return original_grep(pattern, path=path, max_results=max_results, **kwargs)
+
+        monkeypatch.setattr(svc, "grep", spy_grep)
+        svc.write("good.py", "needle\n")
+        svc.write("noisy.log", "needle\n")
+
+        from lingtai.core.grep import setup as grep_setup
+
+        class _StubConfig:
+            language = "en"
+
+        class _StubAgent:
+            _config = _StubConfig()
+            _working_dir = tmp_path
+            _file_io = svc
+
+            def __init__(self):
+                self.handlers = {}
+
+            def add_tool(self, name, *, schema, handler, description):
+                self.handlers[name] = handler
+
+        agent = _StubAgent()
+        grep_setup(agent)
+        result = agent.handlers["grep"]({"pattern": "needle", "glob": "*.py"})
+
+        assert captured["glob_filter"] == "*.py"
+        files = {m["file"] for m in result["matches"]}
+        assert any(p.endswith("/good.py") for p in files)
+        assert not any(p.endswith(".log") for p in files)
+
 
 class RecordingBackend:
     """Small backend double proving LocalFileIOService is now a facade."""
@@ -271,6 +378,7 @@ def test_local_file_io_service_delegates_all_operations_to_backend():
             "max_results": 2000,
         }),
         ("grep", "needle", "src", 3, {
+            "glob_filter": None,
             "exclude_dirs": None,
             "walltime_s": DEFAULT_WALLTIME_S,
             "max_visited": DEFAULT_MAX_VISITED,

@@ -4,7 +4,6 @@ Usage: Agent(capabilities=["grep"]) or capabilities=["file"]
 """
 from __future__ import annotations
 
-import fnmatch
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -46,22 +45,22 @@ def setup(agent: "BaseAgent") -> None:
         max_matches = args.get("max_matches", 200)
         glob_filter = args.get("glob", "*")
         try:
-            raw_results = agent._file_io.grep(pattern, path=search_path, max_results=max_matches)
-            raw_truncated = len(raw_results) >= max_matches
-            if glob_filter == "*":
-                matches = [{"file": r.path, "line": r.line_number, "text": r.line} for r in raw_results]
-            else:
-                matches = [
-                    {"file": r.path, "line": r.line_number, "text": r.line}
-                    for r in raw_results
-                    if fnmatch.fnmatch(Path(r.path).name, glob_filter)
-                ]
-            # truncated: true when the raw scan hit its cap (there may be
-            # more matching files beyond what was scanned), OR when glob
-            # filtering was active and we got fewer results than the cap
-            # (meaning the glob may have discarded results that masked
-            # additional matches).
-            truncated = raw_truncated
+            # Push the glob filter into the service so excluded files are
+            # pruned *before* stat / read, instead of scanning every file
+            # under the search root and post-filtering the matches. ``"*"``
+            # is the schema default and means "no filter".
+            service_glob = None if glob_filter in (None, "", "*") else glob_filter
+            raw_results = agent._file_io.grep(
+                pattern,
+                path=search_path,
+                max_results=max_matches,
+                glob_filter=service_glob,
+            )
+            matches = [{"file": r.path, "line": r.line_number, "text": r.line} for r in raw_results]
+            # truncated: true when the (already glob-pruned) scan hit its
+            # cap — there may be more matching files beyond what was
+            # scanned.
+            truncated = len(raw_results) >= max_matches
             result: dict[str, Any] = {
                 "matches": matches,
                 "count": len(matches),

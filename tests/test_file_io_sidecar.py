@@ -131,6 +131,39 @@ def _glob_sidecar(tmp_path: Path) -> Path:
     )
 
 
+def _multi_grep_sidecar(tmp_path: Path) -> Path:
+    """Fake sidecar that returns two grep matches: one .py and one .log.
+
+    Lets us prove the ``glob_filter`` basename post-filter on the Rust
+    path — the sidecar itself is glob-agnostic, so the backend must drop
+    the non-matching basename after the call.
+    """
+    return _write_fake_sidecar(
+        tmp_path,
+        "multi-grep.py",
+        """
+        env = {
+            "ok": True,
+            "backend": "fake-multi",
+            "op": payload.get("op"),
+            "matches": [
+                {"path": "good.py", "line_number": 1, "line": "needle py"},
+                {"path": "noisy.log", "line_number": 2, "line": "needle log"},
+            ],
+            "paths": [],
+            "visited": 2,
+            "files_skipped_size": 0,
+            "files_skipped_binary": 0,
+            "dirs_pruned": 0,
+            "elapsed_ms": 1,
+            "truncated_reason": None,
+            "error": None,
+        }
+        sys.stdout.write(json.dumps(env))
+        """,
+    )
+
+
 def _failing_sidecar(tmp_path: Path) -> Path:
     """Fake sidecar that returns a structured error envelope and exits 2."""
     return _write_fake_sidecar(
@@ -393,6 +426,23 @@ class TestRustFileIOBackend:
         assert echoed["max_visited"] == 11
         assert echoed["max_file_bytes"] == 99
         assert echoed["max_results"] == 3
+
+    def test_grep_glob_filter_post_filters_basenames(self, tmp_path: Path) -> None:
+        # The sidecar is glob-agnostic and returns both a .py and a .log
+        # match; the backend must drop the .log when glob_filter="*.py".
+        sidecar = _multi_grep_sidecar(tmp_path)
+        backend = RustFileIOBackend(root=tmp_path, binary_path=str(sidecar))
+
+        matches = backend.grep("needle", glob_filter="*.py")
+        names = [Path(m.path).name for m in matches]
+        assert names == ["good.py"]
+
+    def test_grep_glob_filter_star_is_noop(self, tmp_path: Path) -> None:
+        sidecar = _multi_grep_sidecar(tmp_path)
+        backend = RustFileIOBackend(root=tmp_path, binary_path=str(sidecar))
+
+        assert len(backend.grep("needle", glob_filter="*")) == 2
+        assert len(backend.grep("needle", glob_filter=None)) == 2
 
     def test_grep_populates_last_traversal_from_envelope(self, tmp_path: Path) -> None:
         sidecar = _write_fake_sidecar(
