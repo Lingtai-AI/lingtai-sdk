@@ -349,7 +349,8 @@ class WechatManager:
                         path = await media_mod.download_media(
                             item.image_item.media, self._media_dir, fname,
                         )
-                        body_parts.append(f"[Image: {path}]")
+                        suffix = media_mod.validate_image_bytes(path).render_suffix()
+                        body_parts.append(f"[Image: {path}]{suffix}")
                     except Exception as e:
                         body_parts.append(f"[Image: download failed — {e}]")
 
@@ -383,7 +384,8 @@ class WechatManager:
                         path = await media_mod.download_media(
                             item.file_item.media, self._media_dir, fname,
                         )
-                        body_parts.append(f"[File: {fname} ({path})]")
+                        suffix = media_mod.validate_media_bytes(path).render_suffix()
+                        body_parts.append(f"[File: {fname} ({path})]{suffix}")
                     except Exception as e:
                         body_parts.append(f"[File: download failed — {e}]")
 

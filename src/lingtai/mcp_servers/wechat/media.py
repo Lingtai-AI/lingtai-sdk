@@ -40,6 +40,165 @@ class UploadedMediaInfo:
 
 log = logging.getLogger(__name__)
 
+
+# ── Magic-byte validation ──────────────────────────────────────────────────
+#
+# WeChat attachments sometimes arrive under a normal-looking name/extension
+# (".pdf", ".zip", ".jpg") while the bytes saved under wechat/media/ are
+# encrypted / cache / private-container data rather than the real exported
+# file. Downstream agents then fail late in PDF/ZIP/vision tooling with
+# confusing errors. We validate the saved bytes against the declared
+# extension's magic bytes right after download and surface a structured
+# warning so the agent can ask the user to re-export ("Save As") instead of
+# repeatedly running parsers on unusable bytes. The raw bytes are always
+# preserved on disk for inspection — we only annotate, never delete.
+
+# Declared extension → list of acceptable leading-byte signatures.
+# Signatures are matched at the start of the file (RIFF/WEBP needs a windowed
+# check, handled below).
+_MAGIC_SIGNATURES: dict[str, list[bytes]] = {
+    ".pdf": [b"%PDF-"],
+    ".zip": [
+        b"PK\x03\x04",  # normal local file header
+        b"PK\x05\x06",  # empty archive (end-of-central-directory only)
+        b"PK\x07\x08",  # spanned archive marker
+    ],
+    ".png": [b"\x89PNG\r\n\x1a\n"],
+    ".jpg": [b"\xff\xd8\xff"],
+    ".jpeg": [b"\xff\xd8\xff"],
+    ".gif": [b"GIF87a", b"GIF89a"],
+    ".bmp": [b"BM"],
+    # .webp is a RIFF container: "RIFF" .... "WEBP"; checked specially.
+    ".webp": [b"RIFF"],
+}
+
+# How many bytes we need to read to cover the longest signature + WEBP window.
+_MAGIC_READ_LEN = 32
+
+_RECOVERY_HINT = (
+    "This attachment's bytes do not match its '{ext}' extension — it is "
+    "likely WeChat/QQ cache, encrypted, or private-container data rather "
+    "than the real exported file. Do not run PDF/ZIP/image parsers on it. "
+    "Ask the sender to open WeChat and use right-click / long-press → "
+    "\"Save As\" to export the original file, or send it via a cloud-drive "
+    "link / original file upload."
+)
+
+
+@dataclass
+class MediaValidation:
+    """Result of validating saved attachment bytes against the declared
+    extension's magic bytes.
+
+    status:
+      - "ok":       bytes match the declared type's signature.
+      - "mismatch": a signature is known for the extension but the bytes
+                    don't match it — likely cache/encrypted/private data.
+      - "unknown":  no signature is known for this extension (or no
+                    extension), so no judgement is made. Never a warning.
+    """
+
+    status: str
+    declared_ext: str
+    path: str
+    warning: str | None = None
+    hint: str | None = None
+
+    def render_suffix(self) -> str:
+        """Compact inline annotation for the conversation body. Empty unless
+        this is a mismatch the agent should be warned about."""
+        if self.status != "mismatch":
+            return ""
+        return f" ⚠ WARNING: {self.warning} {self.hint}"
+
+
+_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp")
+
+
+def _matches_signature(head: bytes, ext: str) -> bool:
+    sigs = _MAGIC_SIGNATURES.get(ext, [])
+    if ext == ".webp":
+        # RIFF container with a "WEBP" form type at offset 8.
+        return head[:4] == b"RIFF" and head[8:12] == b"WEBP"
+    return any(head.startswith(sig) for sig in sigs)
+
+
+def _matches_any_image_signature(head: bytes) -> bool:
+    return any(_matches_signature(head, ext) for ext in _IMAGE_EXTS)
+
+
+def _read_magic_head(path: Path) -> bytes | None:
+    try:
+        with path.open("rb") as fh:
+            return fh.read(_MAGIC_READ_LEN)
+    except OSError as e:
+        log.warning("validate_media_bytes: cannot read %s: %s", path, e)
+        return None
+
+
+def validate_image_bytes(file_path: str | Path) -> MediaValidation:
+    """Validate an inbound WeChat IMAGE download as any known image type.
+
+    WeChat IMAGE payloads are saved under generated ``.jpg`` names because the
+    protocol item does not reliably carry the original extension. Valid PNG,
+    WebP, GIF, or BMP bytes must therefore not be rejected merely because the
+    fabricated filename ends with ``.jpg``. This generic image check still flags
+    cache/encrypted/private-container bytes that are not any recognized image.
+    """
+    path = Path(file_path)
+    head = _read_magic_head(path)
+    if head is None:
+        return MediaValidation(status="unknown", declared_ext="image", path=str(path))
+    if _matches_any_image_signature(head):
+        return MediaValidation(status="ok", declared_ext="image", path=str(path))
+
+    warning = (
+        f"saved '{path.name}' is not a recognized image file "
+        "(magic bytes do not match known image signatures)"
+    )
+    return MediaValidation(
+        status="mismatch",
+        declared_ext="image",
+        path=str(path),
+        warning=warning,
+        hint=_RECOVERY_HINT.format(ext="image"),
+    )
+
+
+def validate_media_bytes(file_path: str | Path) -> MediaValidation:
+    """Validate a saved media file's bytes against its declared extension.
+
+    Returns a MediaValidation. Never raises for content reasons — a missing
+    or unreadable file is reported as "unknown" so validation can never break
+    the download path itself.
+    """
+    path = Path(file_path)
+    ext = path.suffix.lower()
+
+    if ext not in _MAGIC_SIGNATURES:
+        return MediaValidation(status="unknown", declared_ext=ext, path=str(path))
+
+    head = _read_magic_head(path)
+    if head is None:
+        return MediaValidation(status="unknown", declared_ext=ext, path=str(path))
+
+    if _matches_signature(head, ext):
+        return MediaValidation(status="ok", declared_ext=ext, path=str(path))
+
+    kind = ext.lstrip(".")
+    warning = (
+        f"saved '{path.name}' is not a valid {kind} file "
+        f"(magic bytes do not match {ext})"
+    )
+    return MediaValidation(
+        status="mismatch",
+        declared_ext=ext,
+        path=str(path),
+        warning=warning,
+        hint=_RECOVERY_HINT.format(ext=ext),
+    )
+
+
 # Extension → UploadMediaType mapping
 _UPLOAD_TYPE_MAP = {
     ".jpg": UploadMediaType.IMAGE,
