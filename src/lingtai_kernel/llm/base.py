@@ -188,6 +188,20 @@ class ChatSession(ABC):
 
         return None
 
+    def take_pending_reconstruction_event(self) -> dict | None:
+        """Pop the one-shot delayed-summarize reconstruction event, if any.
+
+        Adapters that perform an automatic provider-context rebuild when
+        summarized history is pending and context crosses the reconstruction
+        threshold (codex's ``_reset_ws_epoch("summarize_delayed")``) record a
+        compact before-context (A) event here. The kernel consumes it exactly
+        once and attaches it to the next visible tool result's
+        ``_meta.tool_meta`` (permanent evidence). Default: no reconstruction
+        machinery, so no event. One-shot semantics: returns the event and clears
+        it, so a second call returns ``None``.
+        """
+        return None
+
     def on_notification_dismissed(self, channel: str | None = None) -> None:
         """Hook called after a notification dismiss/cleanup mutates the surface.
 

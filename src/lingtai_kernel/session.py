@@ -10,7 +10,12 @@ import time
 import uuid
 from typing import Any, Callable, TYPE_CHECKING
 
-from .config import AgentConfig
+from .config import (
+    AgentConfig,
+    CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,
+    CONTEXT_PRESSURE_WARN_AFTER_ROUNDS,
+    CONTEXT_PRESSURE_RECOVERY_TARGET,
+)
 from .llm import (
     ChatSession,
     FunctionSchema,
@@ -26,6 +31,11 @@ from .logging import get_logger
 from .token_counter import count_tokens, count_tool_tokens
 
 logger = get_logger()
+
+# Sustained context-pressure (channel B) constants are kernel-fixed and live in
+# config.py alongside the molt thresholds (imported above), giving one source of
+# truth shared by SessionManager (the streak) and meta_block (the warning). See
+# config.py for the full rationale.
 
 if TYPE_CHECKING:
     from .llm.interface import ChatInterface
@@ -113,6 +123,16 @@ class SessionManager:
         self._token_decomp_dirty = True
         self._token_fallback_warned = False
         self._latest_input_tokens = 0
+
+        # Sustained context-pressure streak (channel B). Transient runtime
+        # state — not persisted, since a fresh/restored session has fresh
+        # pressure. ``_context_pressure_streak`` counts consecutive fresh
+        # provider rounds at/above CONTEXT_PRESSURE_RECONSTRUCTION_RATIO;
+        # ``_context_pressure_last_round_id`` dedups multiple observations of
+        # the same provider round (one provider response can be re-read by many
+        # build_meta / tool-result stamps in a single batch).
+        self._context_pressure_streak = 0
+        self._context_pressure_last_round_id: int | None = None
 
         # Streaming state
         self._text_already_streamed = False
@@ -367,6 +387,56 @@ class SessionManager:
         return tokens / ctx_window if tokens > 0 else 0.0
 
     # ------------------------------------------------------------------
+    # Sustained context-pressure streak (channel B)
+    # ------------------------------------------------------------------
+
+    @property
+    def context_pressure_streak(self) -> int:
+        """Consecutive fresh provider rounds at/above the reconstruction ratio."""
+        return self._context_pressure_streak
+
+    @property
+    def context_pressure_warning_active(self) -> bool:
+        """True once context has been high for >= WARN_AFTER_ROUNDS fresh rounds.
+
+        This drives the resident ``_meta.agent_meta.context.molt`` warning. It
+        is *current state*, not a one-shot event: it stays True as long as the
+        streak remains at/above the warn count and drops the moment context
+        relaxes below the threshold (which resets the streak).
+        """
+        return self._context_pressure_streak >= CONTEXT_PRESSURE_WARN_AFTER_ROUNDS
+
+    def note_context_pressure_round(self, usage: float, *, round_id: int) -> None:
+        """Record one *fresh provider round*'s context usage for the streak.
+
+        ``round_id`` identifies the provider round (the kernel passes the
+        ``_api_calls`` counter, which increments exactly once per real provider
+        response).  Re-observing the same ``round_id`` is a no-op so duplicate
+        ``build_meta`` / tool-result stamps in a single batch cannot advance the
+        streak — only genuinely new provider rounds do.
+
+        ``usage`` is the fraction of the context window in use:
+          * ``>= CONTEXT_PRESSURE_RECONSTRUCTION_RATIO`` → high round, advance.
+          * ``0 <= usage < ratio``                       → relieved, reset to 0.
+          * ``< 0`` (sentinel, decomposition not ready)  → leave streak untouched.
+        """
+        if round_id == self._context_pressure_last_round_id:
+            return
+        try:
+            pressure = float(usage)
+        except (TypeError, ValueError):
+            return
+        if pressure < 0:
+            # Unknown/sentinel usage: neither a high round nor a real relief.
+            # Don't advance and don't spuriously reset an existing streak.
+            return
+        self._context_pressure_last_round_id = round_id
+        if pressure >= CONTEXT_PRESSURE_RECONSTRUCTION_RATIO:
+            self._context_pressure_streak += 1
+        else:
+            self._context_pressure_streak = 0
+
+    # ------------------------------------------------------------------
     # Token tracking
     # ------------------------------------------------------------------
 
@@ -452,6 +522,31 @@ class SessionManager:
         self._api_calls = token_state["api_calls"]
         if response.usage:
             self._latest_input_tokens = response.usage.input_tokens
+            # Record this fresh provider round's context pressure for the
+            # sustained-warning streak (channel B). Keyed by _api_calls so it is
+            # counted exactly once per real provider response, not once per
+            # build_meta / tool-result stamp.
+            #
+            # Use the PROVIDER-reported input tokens (input_tokens / window), not
+            # get_context_pressure()'s local-estimate-primary value: the delayed
+            # reconstruction threshold (0.75) is itself provider-input based, so
+            # the streak must observe the same ruler. This keeps channel A
+            # (reconstruction event) and channel B (sustained warning) consistent
+            # and avoids a low/stale local estimate masking real provider
+            # pressure (PR #535 showed the local estimate can lag the wire).
+            try:
+                ctx_window = self._config.context_limit or (
+                    self._chat.context_window() if self._chat is not None else 0
+                )
+                if ctx_window and ctx_window > 0:
+                    provider_usage = self._latest_input_tokens / ctx_window
+                else:
+                    provider_usage = -1.0  # window unknown -> sentinel (no change)
+                self.note_context_pressure_round(
+                    provider_usage, round_id=self._api_calls
+                )
+            except Exception:
+                pass
             usage_track_ms = _elapsed_ms(usage_start)
             telemetry_fields = dict(timing_fields or {})
             telemetry_fields["usage_track_ms"] = usage_track_ms

@@ -74,6 +74,7 @@ class ToolExecutor:
         max_result_chars: int = _DEFAULT_MAX_RESULT_CHARS,
         tool_call_guard: ToolCallGuard | None = None,
         summarize_notification_threshold: int | None = None,
+        reconstruction_event_fn: Callable[[], dict | None] | None = None,
     ) -> None:
         self._dispatch_fn = dispatch_fn
         self._make_tool_result_fn = make_tool_result_fn
@@ -90,6 +91,11 @@ class ToolExecutor:
         self._summarize_notification_threshold = _resolve_hint_threshold(
             summarize_notification_threshold
         )
+        # One-shot delayed-summarize reconstruction event source (channel A).
+        # When set, ``_attach_tool_block`` pops a pending event and attaches it
+        # to the first dict result it stamps; the source is one-shot, so only
+        # one result per reconstruction carries the event.
+        self._reconstruction_event_fn = reconstruction_event_fn
 
     def _tool_trace_id(self, tc: ToolCall) -> str:
         """Return the stable trace id for one top-level tool-call execution.
@@ -417,6 +423,18 @@ class ToolExecutor:
             meta = {}
             result["_meta"] = meta
         meta["tool_meta"] = tool_block
+
+        # Channel A: attach the one-shot delayed-summarize reconstruction event
+        # (permanent per-result evidence) to the first stamped result. The
+        # source is one-shot — once it returns an event it returns None — so
+        # exactly one tool result per reconstruction carries it.
+        if self._reconstruction_event_fn is not None:
+            try:
+                event = self._reconstruction_event_fn()
+            except Exception:
+                event = None
+            if event:
+                tool_block["reconstruction"] = event
         return result
 
     def _overflow_comment_applies(

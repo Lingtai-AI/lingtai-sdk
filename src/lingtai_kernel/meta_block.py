@@ -46,6 +46,8 @@ from importlib import resources as _resources
 
 from .config import (
     MOLT_NOTICE_THRESHOLD,
+    CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,
+    CONTEXT_PRESSURE_RECOVERY_TARGET,
 )
 from .i18n import t as _t
 from .time_veil import now_iso
@@ -394,12 +396,23 @@ def build_meta_readme() -> dict:
     return {
         TOOL_META_KEY: (
             "Per-result tool/call metadata (id, timestamp, char_count, "
-            "elapsed_ms). Present on every tool result; permanent."
+            "elapsed_ms). Present on every tool result; permanent. May also "
+            "carry a one-shot 'reconstruction' event when the runtime just "
+            "performed a delayed-summarize context reconstruction: it records "
+            "the before (A) and after (B) context tokens/usage, context_window, "
+            "trigger_threshold (0.75) and recovery_target (0.6); if B is still "
+            "at/above the recovery target it includes a molt warning to consider "
+            "molting. This is permanent evidence of a past event, not current "
+            "state — distinct from agent_meta.context.molt."
         ),
         AGENT_META_KEY: (
             "Agent/current-state snapshot (time, context usage, stamina, "
             "token_efficiency, active_turn_tool_calls, "
-            "current_tool_result_chars, optional adapter_comment). Latest "
+            "current_tool_result_chars, optional adapter_comment). context may "
+            "carry a 'molt' sub-block: a SUSTAINED-pressure warning that appears "
+            "only after context has been high (>= 0.75) for several consecutive "
+            "fresh provider rounds and clears when pressure drops — current "
+            "state, not a permanent event (cf. tool_meta.reconstruction). Latest "
             "tool result only; older copies are stripped as newer results "
             "arrive. token_efficiency is a compact current_session token "
             "economy snapshot with api_calls, input/cached tokens, cache "
@@ -675,30 +688,166 @@ def build_runtime_guidance() -> dict:
 
 
 def build_molt_context(agent, usage: float) -> dict | None:
-    """Return compact `_meta.agent_meta.context.molt` pressure guidance.
+    """Return compact `_meta.agent_meta.context.molt` SUSTAINED-pressure warning.
 
-    The field name is kept for compatibility, but the runtime now emits a
-    compact context-pressure prompt at 60% rather than staged early molt
-    nudges. Summarize is the first action; molt becomes mandatory when
-    summarizing/reconstruction cannot lower context below 0.6 * context_window.
+    This is current-state guidance (latest tool result only), not a permanent
+    event — it belongs in ``agent_meta``.  The corrected contract (channel B)
+    replaces the old immediate ``usage >= 0.60`` trip-wire with a
+    *sustained-pressure* signal: the warning appears only once context has been
+    high (>= the 0.75 reconstruction ratio) for
+    ``CONTEXT_PRESSURE_WARN_AFTER_ROUNDS`` consecutive *fresh provider rounds*,
+    tracked by ``SessionManager.note_context_pressure_round``.  The first two
+    high rounds are the window in which the automatic delayed-summarize
+    reconstruction (and any agent summarize) is expected to relieve pressure; a
+    drop below the threshold resets the streak and clears the warning.
+
+    Action wording is unchanged: summarize first; if summarize/reconstruction
+    cannot bring context below the ``0.6 * context_window`` recovery target,
+    consider/perform molt.
     """
     if "psyche" not in getattr(agent, "_intrinsics", set()):
         return None
+
+    session = getattr(agent, "_session", None)
+    if session is None:
+        return None
+    if not getattr(session, "context_pressure_warning_active", False):
+        return None
+
     try:
         pressure = float(usage)
     except Exception:
-        return None
-    if pressure < MOLT_NOTICE_THRESHOLD:
-        return None
+        pressure = -1.0
 
     return {
         "usage": round(pressure, 5),
         "level": "warning",
         "stage": "consider",
-        "threshold": MOLT_NOTICE_THRESHOLD,
+        "threshold": CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,
+        "recovery_target": CONTEXT_PRESSURE_RECOVERY_TARGET,
+        "streak": int(getattr(session, "context_pressure_streak", 0)),
         "action": "summarize_then_molt_if_still_above_0_6_context_window",
         "manual": "psyche-manual",
     }
+
+
+def build_reconstruction_tool_meta(agent) -> dict | None:
+    """Build the one-shot delayed-summarize reconstruction event (channel A).
+
+    Permanent per-result evidence, destined for ``_meta.tool_meta.reconstruction``.
+    Distinct from :func:`build_molt_context` (channel B, latest-only current
+    state): this records a *historical event* — the runtime actually rebuilt the
+    provider context around the compacted history when context crossed the 0.75
+    reconstruction threshold.
+
+    The adapter supplies the before-context (A) and fixed trigger/recovery
+    metadata via ``session.chat.take_pending_reconstruction_event()`` (one-shot:
+    the adapter clears it on read). This function fills the after-context (B).
+
+    Call order makes B honest: ``SessionManager.send`` runs ``_track_usage``
+    (which sets ``_latest_input_tokens`` from the post-reconstruction provider
+    request's reported input) BEFORE the resulting tool calls reach the
+    ToolExecutor that stamps this event. So at attach time ``_latest_input_tokens``
+    already holds the provider-reported size of the rebuilt context. B therefore
+    **prefers** ``_latest_input_tokens / context_window`` (``source:
+    provider_input_tokens``) and only falls back to the local compacted-history
+    estimate (``source: local_estimate``) when the provider input is unavailable
+    (0, e.g. a provider that returned no usage). The delayed-reconstruction
+    threshold is itself provider-input based, so this keeps B on the same ruler.
+
+    If B is still at/above the 0.6 recovery target, a molt warning/action is
+    attached saying summarize/reconstruction was attempted and pressure remains
+    above the recovery target, so consider molt. If B < 0.6, the A->B event is
+    returned without a warning.
+
+    Returns ``None`` when no reconstruction is pending (the common case).
+    """
+    session = getattr(agent, "_session", None)
+    if session is None:
+        return None
+    chat = getattr(session, "chat", None)
+    take = getattr(chat, "take_pending_reconstruction_event", None)
+    if not callable(take):
+        # Fall back to a session-level hook if the adapter exposes it there.
+        take = getattr(session, "take_pending_reconstruction_event", None)
+    if not callable(take):
+        return None
+    raw = take()
+    if not raw:
+        return None
+
+    # Context window: prefer the value the adapter captured at reconstruction
+    # time; fall back to the configured/live window so B can be computed even if
+    # the event omitted it.
+    ctx_window = 0
+    try:
+        ctx_window = int(raw.get("context_window") or 0)
+    except Exception:
+        ctx_window = 0
+    if ctx_window <= 0:
+        ctx_window = _fallback_context_window(agent)
+        if ctx_window <= 0:
+            ctx_window = 0
+
+    # After-context (B): prefer the provider-reported input from the
+    # post-reconstruction request; fall back to the local compacted-history
+    # estimate only when that is unavailable.
+    after_tokens = None
+    after_usage = -1.0
+    after_source = None
+    try:
+        provider_input = int(getattr(session, "_latest_input_tokens", 0) or 0)
+    except Exception:
+        provider_input = 0
+    if provider_input > 0 and ctx_window > 0:
+        after_tokens = provider_input
+        after_usage = provider_input / ctx_window
+        after_source = "provider_input_tokens"
+    else:
+        # Local fallback: build_meta owns the (system + history) / window math
+        # and the sentinel handling; its usage uses the interface estimate when
+        # _latest_input_tokens is 0.
+        try:
+            local_usage = float(build_meta(agent).get("context", {}).get("usage", -1.0))
+        except Exception:
+            local_usage = -1.0
+        if local_usage >= 0:
+            after_usage = local_usage
+            after_source = "local_estimate"
+            if ctx_window > 0:
+                after_tokens = int(round(local_usage * ctx_window))
+
+    event = {
+        "type": raw.get("type", "delayed_summarize_reconstruction"),
+        "reason": raw.get("reason", "delayed_summarize_reconstruction"),
+        "trigger_threshold": raw.get(
+            "trigger_threshold", CONTEXT_PRESSURE_RECONSTRUCTION_RATIO
+        ),
+        "recovery_target": raw.get("recovery_target", CONTEXT_PRESSURE_RECOVERY_TARGET),
+        "context_window": raw.get("context_window"),
+        "before": raw.get("before", {}),
+        "after": {
+            "context_tokens": after_tokens,
+            "usage": round(after_usage, 5) if after_usage >= 0 else after_usage,
+            "source": after_source,
+        },
+    }
+
+    recovery_target = event["recovery_target"]
+    try:
+        above_recovery = after_usage >= float(recovery_target)
+    except Exception:
+        above_recovery = False
+    if above_recovery:
+        event["molt"] = {
+            "level": "warning",
+            "stage": "consider",
+            "recovery_target": recovery_target,
+            "action": "summarize_reconstruction_attempted_still_above_0_6_consider_molt",
+            "manual": "psyche-manual",
+        }
+    return event
+
 
 def build_meta(agent) -> dict:
     """Return the current meta-data snapshot for the agent.

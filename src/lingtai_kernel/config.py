@@ -15,7 +15,30 @@ THINKING_LEVELS = ("low", "medium", "high", "xhigh")
 # but are ignored — they no longer override these values. See
 # ``lingtai/agent.py`` (config reload) and ``lingtai/init_schema.py``
 # (MANIFEST_LEGACY_IGNORED).
-MOLT_NOTICE_THRESHOLD = 0.60  # >= this fraction -> summarize/molt consideration prompt
+MOLT_NOTICE_THRESHOLD = 0.60  # legacy name; now the molt RECOVERY TARGET (see below)
+
+# Sustained context-pressure / molt-warning constants (kernel-fixed).
+#
+# The molt warning surfaced in ``_meta.agent_meta.context.molt`` is no longer an
+# immediate ``usage >= 0.60`` trip-wire.  It is a *sustained-pressure* signal:
+#
+#   * CONTEXT_PRESSURE_RECONSTRUCTION_RATIO (0.75) — a fresh provider round whose
+#     context usage is at/above this fraction counts as a "high" round.  This is
+#     the same ratio at which the codex adapter's delayed-summarize
+#     reconstruction fires (``_CODEX_SUMMARIZE_DELAY_THRESHOLD_RATIO``).
+#     Interpretation is INCLUSIVE (``usage >= 0.75``), matching the adapter's
+#     release check (``usage >= ratio``).
+#   * CONTEXT_PRESSURE_WARN_AFTER_ROUNDS (3) — the resident warning begins on the
+#     THIRD consecutive high round; the first two are the window in which
+#     summarize/reconstruction is expected to relieve pressure.
+#   * CONTEXT_PRESSURE_RECOVERY_TARGET (0.60) — if summarize/reconstruction
+#     cannot bring context below this fraction of the window, molt becomes the
+#     recommended action.  This is the new meaning of the legacy 0.60 constant:
+#     a recovery target, not an immediate trip-wire.
+CONTEXT_PRESSURE_RECONSTRUCTION_RATIO = 0.75
+CONTEXT_PRESSURE_WARN_AFTER_ROUNDS = 3
+CONTEXT_PRESSURE_RECOVERY_TARGET = MOLT_NOTICE_THRESHOLD  # 0.60
+
 MOLT_PRESSURE_THRESHOLD = MOLT_NOTICE_THRESHOLD  # legacy alias; not a separate stage
 MOLT_URGENCY_THRESHOLD = MOLT_NOTICE_THRESHOLD  # legacy alias; not a separate stage
 DEFAULT_SOUL_DELAY_SECONDS = 999999999.0
@@ -47,15 +70,18 @@ class AgentConfig:
     time_awareness: bool = True  # experimental: False strips LLM-visible timestamps (perception nerf)
     timezone_awareness: bool = True  # when True, now_iso emits OS local time; when False, UTC
     context_limit: int | None = None  # max context tokens; None = use model default
-    # Molt thresholds are kernel-fixed (see MOLT_*_THRESHOLD above); they are
-    # NOT agent-configurable. These fields remain on AgentConfig so internal
-    # readers (meta_block.build_molt_context, tests) have a single source of
-    # truth, but the host MUST construct them from the kernel constants, never
-    # from init.json. Legacy init.json molt_notice/molt_pressure/molt_urgency
-    # values are ignored, not honored. Only one prompt threshold is active.
-    molt_notice: float = MOLT_NOTICE_THRESHOLD  # >= this fraction -> summarize/molt consideration
-    molt_pressure: float = MOLT_PRESSURE_THRESHOLD  # legacy alias; not a separate stage
-    molt_urgency: float = MOLT_URGENCY_THRESHOLD  # legacy alias; not a separate stage
+    # Legacy molt-threshold fields, retained ONLY for backward compatibility
+    # (old AgentConfig constructions / serialized state still set them). They are
+    # NOT the active warning threshold and are no longer read by the warning
+    # path: the sustained-pressure warning (meta_block.build_molt_context) is
+    # driven by the SessionManager streak and the kernel constants
+    # CONTEXT_PRESSURE_* (see top of this module), not by these fields. Legacy
+    # init.json molt_notice/molt_pressure/molt_urgency values remain ignored.
+    # The 0.60 default here now corresponds to the molt RECOVERY TARGET
+    # (CONTEXT_PRESSURE_RECOVERY_TARGET), not an immediate trip-wire.
+    molt_notice: float = MOLT_NOTICE_THRESHOLD  # legacy/compat only; == recovery target (0.60), not a trip-wire
+    molt_pressure: float = MOLT_PRESSURE_THRESHOLD  # legacy alias; unused by the warning path
+    molt_urgency: float = MOLT_URGENCY_THRESHOLD  # legacy alias; unused by the warning path
     ensure_ascii: bool = False  # JSON output: False = readable unicode, True = \uXXXX escapes
     insights_interval: int = 0  # turns between auto-insights; 0 = off
     consultation_past_count: int = 0  # K random past-snapshot consultations per fire; default 0 = current-context soul flow only

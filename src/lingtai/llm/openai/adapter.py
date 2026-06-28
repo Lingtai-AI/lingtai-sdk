@@ -24,7 +24,10 @@ import httpx
 import openai
 
 from lingtai_kernel.logging import get_logger
-from lingtai_kernel.config import THINKING_LEVELS
+from lingtai_kernel.config import (
+    THINKING_LEVELS,
+    CONTEXT_PRESSURE_RECOVERY_TARGET,
+)
 
 from lingtai_kernel.llm.base import (
     ChatSession,
@@ -2324,6 +2327,14 @@ class CodexResponsesSession(OpenAIResponsesSession):
         self._summarize_effect_delayed_pending_ids: set[str] = set()
         self._summarize_effect_delayed_last_context: dict[str, Any] = {}
         self._summarize_effect_delayed_last_release_reason: str | None = None
+        # One-shot pending reconstruction event (channel A). Set when an actual
+        # delayed-summarize reconstruction fires (_reset_ws_epoch with reason
+        # "summarize_delayed"); captures the before-context (A) plus fixed
+        # trigger/recovery metadata. The kernel pops it via
+        # take_pending_reconstruction_event() and attaches it once to the next
+        # visible tool result's _meta.tool_meta (permanent evidence), filling the
+        # after-context (B) and any molt warning at attach time.
+        self._pending_reconstruction_event: dict[str, Any] | None = None
         # Last real provider request size.  Codex delayed summarize release must
         # be keyed to the previous request's input tokens, not ChatInterface's
         # local estimate, because the latter can omit provider-visible prompt and
@@ -2830,6 +2841,14 @@ class CodexResponsesSession(OpenAIResponsesSession):
         runtime no longer schedules a periodic turn-count reset by default.
         """
 
+        # Capture the before-context (A) for the reconstruction event BEFORE the
+        # epoch state is torn down, but only for an actual delayed-summarize
+        # reconstruction (not a turn_count reset, which carries no summarized
+        # history to apply). This is the one moment the provider context is
+        # genuinely rebuilt around the compacted history.
+        if reason == "summarize_delayed":
+            self._record_reconstruction_event()
+
         self._close_ws_transport()
         self._ws_session = _CodexWebsocketSession()
         self._ws_pending_baseline_input = None
@@ -2839,6 +2858,38 @@ class CodexResponsesSession(OpenAIResponsesSession):
         if self._summarize_effect_delayed_pending_ids:
             self._summarize_effect_delayed_pending_ids.clear()
             self._summarize_effect_delayed_last_release_reason = reason
+
+    def _record_reconstruction_event(self) -> None:
+        """Record the one-shot delayed-summarize reconstruction event (channel A).
+
+        Captures the before-context (A) from the last real provider request and
+        the fixed trigger/recovery metadata. The after-context (B) and any molt
+        warning are filled by the kernel when it attaches the event to the next
+        tool result's ``_meta.tool_meta``. If a prior event is still pending
+        (rare back-to-back reconstructions before a tool result was emitted), the
+        newer reconstruction supersedes it — the latest A→ is the relevant one.
+        """
+        ctx = self._summarize_delay_context()
+        before_tokens = ctx.get("current_context_tokens")
+        before_usage = ctx.get("current_context_usage")
+        context_window = ctx.get("context_window")
+        self._pending_reconstruction_event = {
+            "type": "delayed_summarize_reconstruction",
+            "reason": "delayed_summarize_reconstruction",
+            "trigger_threshold": self._summarize_delay_threshold_ratio,
+            "recovery_target": CONTEXT_PRESSURE_RECOVERY_TARGET,
+            "context_window": context_window,
+            "before": {
+                "context_tokens": before_tokens,
+                "usage": before_usage,
+            },
+        }
+
+    def take_pending_reconstruction_event(self) -> dict | None:
+        """Pop the one-shot reconstruction event (channel A). See base class."""
+        event = self._pending_reconstruction_event
+        self._pending_reconstruction_event = None
+        return event
 
     def _summarize_delay_context(self) -> dict[str, Any]:
         current_tokens: int | None = None

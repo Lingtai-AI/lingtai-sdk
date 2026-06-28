@@ -848,6 +848,170 @@ def test_build_meta_usage_matches_get_context_pressure_after_restore():
 
 
 # ---------------------------------------------------------------------------
+# build_reconstruction_tool_meta — one-shot delayed-summarize reconstruction
+# event (channel A), permanent evidence on _meta.tool_meta.
+#
+# The adapter records the before-context (A) when an actual reconstruction
+# fires; the kernel pops it once, fills the after-context (B) from the live
+# context decomposition, and attaches the A->B event to the next visible tool
+# result. If B is still >= the 0.6 recovery target, a molt warning/action is
+# included; otherwise the A->B event is attached without a warning.
+# ---------------------------------------------------------------------------
+
+
+def _recon_agent(
+    *,
+    raw_event,
+    after_usage,
+    context_limit=100000,
+    local_usage=None,
+):
+    """Agent stand-in whose session yields a pending reconstruction event.
+
+    ``after_usage`` drives the PROVIDER-reported after-context (B): it is set as
+    ``_latest_input_tokens`` (the post-reconstruction provider request input).
+    ``local_usage`` (defaults to ``after_usage``) drives the local
+    compacted-history estimate via ``interface.estimate_context_tokens()``. When
+    the two differ, tests can prove which source B prefers; setting
+    ``after_usage`` semantics:
+      * ``>= 0``  -> _latest_input_tokens reflects that provider usage.
+      * ``None``  -> _latest_input_tokens = 0 (provider input unavailable),
+                     forcing the local-estimate fallback.
+    """
+    if local_usage is None:
+        local_usage = after_usage if after_usage is not None else 0.0
+    local_history = int(round(local_usage * context_limit))
+    provider_input = (
+        0 if after_usage is None else int(round(after_usage * context_limit))
+    )
+    fake_iface = SimpleNamespace(estimate_context_tokens=lambda: local_history)
+
+    class _Chat:
+        interface = fake_iface
+
+        def context_window(self_):
+            return context_limit
+
+    taken = {"count": 0}
+
+    def _take():
+        taken["count"] += 1
+        return raw_event if taken["count"] == 1 else None
+
+    chat = _Chat()
+    chat.take_pending_reconstruction_event = _take
+
+    session = SimpleNamespace(
+        _token_decomp_dirty=False,
+        _system_prompt_tokens=0,
+        _tools_tokens=0,
+        _latest_input_tokens=provider_input,
+        chat=chat,
+        context_pressure_warning_active=False,
+        context_pressure_streak=0,
+    )
+    agent = SimpleNamespace(
+        _intrinsics={"psyche": object()},
+        _config=SimpleNamespace(
+            context_limit=context_limit, time_awareness=True, timezone_awareness=True
+        ),
+        _session=session,
+        _uptime_anchor=None,
+    )
+    return agent
+
+
+_RAW_EVENT = {
+    "type": "delayed_summarize_reconstruction",
+    "reason": "delayed_summarize_reconstruction",
+    "trigger_threshold": 0.75,
+    "recovery_target": 0.60,
+    "context_window": 100000,
+    "before": {"context_tokens": 85000, "usage": 0.85},
+}
+
+
+def test_reconstruction_tool_meta_none_when_no_pending_event():
+    agent = _recon_agent(raw_event=None, after_usage=0.40)
+    assert meta_block.build_reconstruction_tool_meta(agent) is None
+
+
+def test_reconstruction_tool_meta_below_recovery_target_no_warning():
+    # B usage 0.40 < 0.60 recovery target -> A->B event, NO molt warning.
+    agent = _recon_agent(raw_event=dict(_RAW_EVENT), after_usage=0.40)
+    event = meta_block.build_reconstruction_tool_meta(agent)
+    assert event is not None
+    assert event["type"] == "delayed_summarize_reconstruction"
+    assert event["trigger_threshold"] == 0.75
+    assert event["recovery_target"] == 0.60
+    assert event["context_window"] == 100000
+    assert event["before"]["usage"] == 0.85
+    assert event["after"]["usage"] == pytest.approx(0.40)
+    assert event["after"]["context_tokens"] == 40000
+    assert event["after"]["source"] == "provider_input_tokens"
+    assert "molt" not in event
+
+
+def test_reconstruction_tool_meta_after_prefers_provider_input_tokens():
+    """B must be the PROVIDER-reported post-reconstruction input
+    (_latest_input_tokens / window), not the local compacted-history estimate.
+    Here provider says 0.70 while the local estimate says 0.30; B must be 0.70."""
+    agent = _recon_agent(
+        raw_event=dict(_RAW_EVENT), after_usage=0.70, local_usage=0.30
+    )
+    event = meta_block.build_reconstruction_tool_meta(agent)
+    assert event["after"]["usage"] == pytest.approx(0.70)
+    assert event["after"]["context_tokens"] == 70000
+    assert event["after"]["source"] == "provider_input_tokens"
+    # 0.70 >= 0.60 recovery target -> warning, proving provider value (not the
+    # local 0.30) decides the molt warning.
+    assert "molt" in event
+
+
+def test_reconstruction_tool_meta_after_falls_back_to_local_estimate():
+    """When the provider input is unavailable (_latest_input_tokens == 0), B
+    falls back to the local compacted-history estimate and records that source."""
+    agent = _recon_agent(
+        raw_event=dict(_RAW_EVENT), after_usage=None, local_usage=0.55
+    )
+    event = meta_block.build_reconstruction_tool_meta(agent)
+    assert event["after"]["usage"] == pytest.approx(0.55)
+    assert event["after"]["context_tokens"] == 55000
+    assert event["after"]["source"] == "local_estimate"
+    assert "molt" not in event  # 0.55 < 0.60
+
+
+def test_reconstruction_tool_meta_at_or_above_recovery_target_warns():
+    # B usage 0.70 >= 0.60 recovery target -> A->B event WITH molt warning.
+    agent = _recon_agent(raw_event=dict(_RAW_EVENT), after_usage=0.70)
+    event = meta_block.build_reconstruction_tool_meta(agent)
+    assert event["after"]["usage"] == pytest.approx(0.70)
+    assert "molt" in event
+    molt = event["molt"]
+    assert molt["level"] == "warning"
+    # Wording: reconstruction/summarize was attempted; pressure still above the
+    # recovery target; consider molt.
+    assert "summarize" in molt["action"] or "reconstruction" in molt["action"]
+    assert "molt" in molt["action"]
+    assert molt["recovery_target"] == 0.60
+
+
+def test_reconstruction_tool_meta_exactly_at_recovery_target_warns():
+    agent = _recon_agent(raw_event=dict(_RAW_EVENT), after_usage=0.60)
+    event = meta_block.build_reconstruction_tool_meta(agent)
+    assert "molt" in event  # >= recovery target is inclusive
+
+
+def test_reconstruction_tool_meta_is_one_shot():
+    agent = _recon_agent(raw_event=dict(_RAW_EVENT), after_usage=0.40)
+    first = meta_block.build_reconstruction_tool_meta(agent)
+    assert first is not None
+    # The session's take_pending_reconstruction_event already returned None on
+    # the second call, so the kernel must not re-emit.
+    assert meta_block.build_reconstruction_tool_meta(agent) is None
+
+
+# ---------------------------------------------------------------------------
 # notifications field removed 2026-05-02 (Task 11 of system-notification-as-
 # tool-call redesign). System-source notifications are now delivered as
 # synthetic notification(action="check") tool-call pairs spliced by
@@ -1525,103 +1689,118 @@ def test_attach_active_runtime_is_wired_into_turn_boundary():
 
 
 # ---------------------------------------------------------------------------
-# build_molt_context / context.molt — context pressure surfaced under
-# _meta.agent_meta.context.molt (not a dismissible notification). Verifies the
-# psyche gate, threshold stages, short message + procedure pointer, and that
-# no full procedure text is inlined.
+# build_molt_context / context.molt — SUSTAINED context-pressure warning
+# surfaced under _meta.agent_meta.context.molt (latest-only, current state, not
+# a dismissible notification).
+#
+# Corrected contract (channel B): the warning is NOT the old immediate
+# ``usage >= 0.60`` trip-wire.  It is driven by the SessionManager
+# sustained-pressure streak — context must be high (>= 0.75) for
+# CONTEXT_PRESSURE_WARN_AFTER_ROUNDS (3) consecutive *fresh provider rounds*
+# before the warning appears, giving summarize/reconstruction time to relieve
+# pressure first.  A drop below 0.75 resets the streak and clears the warning.
+# Wording directs: summarize first; if context cannot be brought below the 0.6
+# recovery target, consider/perform molt.
 # ---------------------------------------------------------------------------
 
 
-def _molt_agent(*, notice=0.75, strong=0.75, immediate=0.75, psyche=True):
-    """Minimal agent stand-in for build_molt_context: reads _intrinsics + _config."""
+def _molt_agent(*, warning_active=False, streak=0, psyche=True):
+    """Minimal agent stand-in for build_molt_context.
+
+    build_molt_context reads agent._intrinsics (must contain 'psyche') and the
+    session's sustained-pressure streak state (set by SessionManager).
+    """
     return SimpleNamespace(
         _intrinsics={"psyche": object()} if psyche else {},
         _config=SimpleNamespace(
-            molt_notice=notice,
-            molt_pressure=strong,
-            molt_urgency=immediate,
             context_limit=None,
             time_awareness=True,
             timezone_awareness=True,
         ),
+        _session=SimpleNamespace(
+            context_pressure_warning_active=warning_active,
+            context_pressure_streak=streak,
+        ),
     )
 
 
-def test_build_molt_context_absent_below_notice_threshold():
-    agent = _molt_agent()
-    # 0.599 < default notice 0.60 -> no context-pressure prompt emitted.
-    assert build_molt_context(agent, 0.599) is None
-
-
 def test_build_molt_context_absent_without_psyche():
-    agent = _molt_agent(psyche=False)
-    # Even at 0.95 usage, no molt context when psyche is absent.
+    agent = _molt_agent(warning_active=True, streak=5, psyche=False)
+    # Even with a fully-armed streak, no molt context when psyche is absent.
     assert build_molt_context(agent, 0.95) is None
 
 
-def test_build_molt_context_single_prompt_at_60_and_above(monkeypatch):
-    monkeypatch.setattr(meta_block, "MOLT_NOTICE_THRESHOLD", 0.6)
-    for usage in (0.6, 0.8, 0.95, 1.0):
-        molt = build_molt_context(_molt_agent(), usage)
-        assert molt["stage"] == "consider"
-        assert molt["level"] == "warning"
-        assert molt["usage"] == round(usage, 5)
-        assert molt["manual"] == "psyche-manual"
-        assert molt["threshold"] == 0.6
-        assert molt["action"] == "summarize_then_molt_if_still_above_0_6_context_window"
-        assert "summarize" in molt["action"]
-        assert "molt" in molt["action"]
-        assert "message" not in molt
-        assert "thresholds" not in molt
+def test_build_molt_context_absent_for_first_two_high_rounds():
+    # Streak below the warn threshold (3) -> no warning yet, even at high usage.
+    assert build_molt_context(_molt_agent(warning_active=False, streak=1), 0.90) is None
+    assert build_molt_context(_molt_agent(warning_active=False, streak=2), 0.92) is None
 
 
-def test_build_molt_context_shape_is_short_with_pointer_not_full_procedure(monkeypatch):
-    monkeypatch.setattr(meta_block, "MOLT_NOTICE_THRESHOLD", 0.6)
-    molt = build_molt_context(_molt_agent(), 0.6)
+def test_build_molt_context_old_immediate_0_60_no_longer_trips():
+    """Regression: 0.61 (above the retired 0.60 trip-wire) with no sustained
+    streak must NOT produce a warning anymore."""
+    assert build_molt_context(_molt_agent(warning_active=False, streak=1), 0.61) is None
 
-    assert set(molt) == {"usage", "level", "stage", "threshold", "action", "manual"}
+
+def test_build_molt_context_warns_from_third_high_round():
+    agent = _molt_agent(warning_active=True, streak=3)
+    molt = build_molt_context(agent, 0.90)
+    assert molt["stage"] == "consider"
+    assert molt["level"] == "warning"
+    assert molt["usage"] == round(0.90, 5)
     assert molt["manual"] == "psyche-manual"
-    assert molt["threshold"] == 0.6
+    assert molt["streak"] == 3
+    # Threshold is the reconstruction ratio (>= 0.75), recovery target 0.6.
+    assert molt["threshold"] == 0.75
+    assert molt["recovery_target"] == 0.60
+    # Action wording: summarize first; molt if still above the 0.6 recovery target.
+    assert molt["action"] == "summarize_then_molt_if_still_above_0_6_context_window"
+    assert "summarize" in molt["action"]
+    assert "molt" in molt["action"]
+    assert "0_6" in molt["action"]
+    assert "message" not in molt
+
+
+def test_build_molt_context_keeps_warning_while_streak_sustained():
+    for streak in (3, 4, 7):
+        molt = build_molt_context(_molt_agent(warning_active=True, streak=streak), 0.95)
+        assert molt is not None
+        assert molt["streak"] == streak
+        assert molt["stage"] == "consider"
+
+
+def test_build_molt_context_shape_is_short_with_pointer_not_full_procedure():
+    molt = build_molt_context(_molt_agent(warning_active=True, streak=3), 0.90)
+
+    assert set(molt) == {
+        "usage",
+        "level",
+        "stage",
+        "threshold",
+        "recovery_target",
+        "streak",
+        "action",
+        "manual",
+    }
+    assert molt["manual"] == "psyche-manual"
     assert "pressure" not in molt
     assert "message" not in molt
     assert "procedure_ref" not in molt
-    assert "thresholds" not in molt
     serialized = json.dumps(molt)
-    assert len(serialized) < 200
+    assert len(serialized) < 250
     assert "procedures.md#performing-a-molt" not in serialized
 
 
-def test_build_molt_context_ignores_legacy_molt_prompt(monkeypatch):
-    monkeypatch.setattr(meta_block, "MOLT_NOTICE_THRESHOLD", 0.6)
-    molt = build_molt_context(_molt_agent(), 0.6)
-
-    assert "Now is the time" not in molt["action"]
-    assert "summarize" in molt["action"]
-    assert "molt" in molt["action"]
-    assert "message" not in molt
+def test_build_molt_context_handles_missing_session_gracefully():
+    agent = SimpleNamespace(_intrinsics={"psyche": object()})
+    # No _session attribute at all -> no warning, no crash.
+    assert build_molt_context(agent, 0.90) is None
 
 
-def test_build_molt_context_uses_single_threshold(monkeypatch):
-    monkeypatch.setattr(meta_block, "MOLT_NOTICE_THRESHOLD", 0.6)
-    # Legacy pressure/urgency values no longer introduce separate stages.
-
-    assert build_molt_context(_molt_agent(), 0.599) is None
-    assert build_molt_context(_molt_agent(), 0.6)["stage"] == "consider"
-    assert build_molt_context(_molt_agent(), 0.8)["stage"] == "consider"
-    assert build_molt_context(_molt_agent(), 0.95)["stage"] == "consider"
-    assert "thresholds" not in build_molt_context(_molt_agent(), 0.95)
-
-
-def test_build_meta_attaches_context_molt_only_above_threshold():
-    """build_meta integrates build_molt_context: context.molt is absent below
-    the single pressure threshold and present (as a sub-key of context) above it."""
-    agent = _molt_agent()
-    # No session -> usage sentinel -1.0 -> below threshold -> no molt key.
-    meta = build_meta(agent)
-    assert "molt" not in meta["context"]
-
-    # Inject a fake session whose token decomposition yields usage = 0.9
-    # (system 10 + history 80 over a 100-token window) -> single 0.75 prompt.
+def test_build_meta_attaches_context_molt_only_when_streak_armed():
+    """build_meta integrates build_molt_context: context.molt is absent while the
+    streak is below the warn threshold and present once the streak is armed,
+    independent of the instantaneous usage on this particular build_meta call."""
     fake_iface = SimpleNamespace(estimate_context_tokens=lambda: 90)
     fake_session = SimpleNamespace(
         _token_decomp_dirty=False,
@@ -1629,10 +1808,22 @@ def test_build_meta_attaches_context_molt_only_above_threshold():
         _tools_tokens=0,
         _latest_input_tokens=0,
         chat=SimpleNamespace(interface=fake_iface, context_window=lambda: 100),
+        context_pressure_warning_active=False,
+        context_pressure_streak=2,
     )
+    agent = _molt_agent(warning_active=False, streak=2)
     agent._session = fake_session
     agent._uptime_anchor = None
+
     meta = build_meta(agent)
     assert meta["context"]["usage"] == pytest.approx(0.9)
+    # Streak not yet armed -> no molt warning even though usage is 0.9.
+    assert "molt" not in meta["context"]
+
+    # Arm the streak; same high usage now surfaces the warning.
+    fake_session.context_pressure_warning_active = True
+    fake_session.context_pressure_streak = 3
+    meta = build_meta(agent)
     assert "molt" in meta["context"]
     assert meta["context"]["molt"]["stage"] == "consider"
+    assert meta["context"]["molt"]["streak"] == 3

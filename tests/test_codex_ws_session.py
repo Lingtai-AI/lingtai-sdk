@@ -788,6 +788,71 @@ def test_rest_summarize_delays_epoch_reset_below_context_threshold(monkeypatch):
     assert third.usage.extra["codex_ws_delta_reason"] == "ok"
 
 
+def test_reconstruction_event_recorded_on_immediate_release(monkeypatch):
+    """When summarize is recorded while context is already >= 0.75, the delayed
+    reconstruction fires immediately (epoch reset reason 'summarize_delayed').
+    That actual reconstruction must record a one-shot pending event capturing the
+    before-context (A) and the fixed trigger/recovery metadata."""
+    client = RealisticRestClient(input_tokens=850)
+    session = _make_rest_session(client)
+    monkeypatch.setattr(session, "context_window", lambda: 1000)
+
+    session.send("one")
+    session.send("two")
+    # No event before reconstruction.
+    assert session.take_pending_reconstruction_event() is None
+
+    session.on_history_summarized(["call_old"])  # immediate release at 0.85
+
+    event = session.take_pending_reconstruction_event()
+    assert event is not None
+    assert event["type"] == "delayed_summarize_reconstruction"
+    assert event["trigger_threshold"] == 0.75
+    assert event["recovery_target"] == 0.60
+    assert event["context_window"] == 1000
+    # Before-context (A): the provider input that crossed the threshold.
+    assert event["before"]["context_tokens"] == 850
+    assert event["before"]["usage"] == pytest.approx(0.85)
+
+    # One-shot: a second take returns None.
+    assert session.take_pending_reconstruction_event() is None
+
+
+def test_reconstruction_event_recorded_on_delayed_release(monkeypatch):
+    """Below threshold the summarize stays pending; the reconstruction fires on a
+    later send once context crosses 0.75. That release must also record the
+    one-shot event."""
+    client = RealisticRestClient(input_tokens=850)
+    session = _make_rest_session(client)
+    monkeypatch.setattr(session, "context_window", lambda: 1000)
+
+    # First two sends are below threshold (last_provider_input starts low), so
+    # record summarize while pending, then let a high-usage send release it.
+    session.send("one")
+    session.on_history_summarized(["call_old"])
+    # Force the pending state (simulate below-threshold-at-summarize-time).
+    session._summarize_effect_delayed_pending_ids.add("call_old")
+    session.take_pending_reconstruction_event()  # clear any immediate event
+
+    # Next send is at 0.85 -> delayed release fires.
+    session.send("three")
+    event = session.take_pending_reconstruction_event()
+    assert event is not None
+    assert event["type"] == "delayed_summarize_reconstruction"
+    assert event["before"]["usage"] == pytest.approx(0.85)
+
+
+def test_reconstruction_event_not_recorded_for_turn_count_reset(monkeypatch):
+    """A turn_count epoch reset is NOT a summarize reconstruction; it must not
+    record a reconstruction event."""
+    client = RealisticRestClient(input_tokens=100)
+    session = _make_rest_session(client)
+    monkeypatch.setattr(session, "context_window", lambda: 1000)
+    session.send("one")
+    session._reset_ws_epoch("turn_count")
+    assert session.take_pending_reconstruction_event() is None
+
+
 def test_rest_summarize_releases_delayed_epoch_reset_at_context_threshold(monkeypatch):
     client = RealisticRestClient(input_tokens=850)
     session = _make_rest_session(client)

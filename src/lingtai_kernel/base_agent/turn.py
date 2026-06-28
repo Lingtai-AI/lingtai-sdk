@@ -21,6 +21,7 @@ from ..meta_block import (
     attach_active_notifications,
     attach_active_runtime,
     build_meta,
+    build_reconstruction_tool_meta,
     render_meta,
 )
 from ..sent_message_tracker import SEND_TOOLS, SEND_ACTIONS, CHECK_ACTIONS
@@ -1271,6 +1272,7 @@ def _make_tool_executor(agent, guard: LoopGuard) -> ToolExecutor:
         summarize_notification_threshold=getattr(
             agent, "_summarize_notification_threshold", None
         ),
+        reconstruction_event_fn=lambda: build_reconstruction_tool_meta(agent),
     )
 
 
