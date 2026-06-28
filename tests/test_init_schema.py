@@ -597,3 +597,27 @@ def test_preset_block_unmigrated_init_points_at_m029():
     with pytest.raises(ValueError, match="m029") as exc_info:
         validate_init(data)
     assert "lingtai-tui" in str(exc_info.value)
+
+def test_lingtai_seed_is_optional() -> None:
+    data = _valid_init()
+    data.pop("lingtai")
+
+    assert validate_init(data) == []
+
+
+def test_lingtai_seed_type_checked_when_present() -> None:
+    data = _valid_init()
+    data["lingtai"] = 123
+
+    with pytest.raises(ValueError, match="lingtai: expected str"):
+        validate_init(data)
+
+
+def test_legacy_prompt_is_not_reintroduced_as_lingtai_alias() -> None:
+    data = _valid_init()
+    data.pop("lingtai")
+    data["prompt"] = "legacy seed"
+
+    warnings = validate_init(data)
+
+    assert "unknown top-level field: prompt" in warnings

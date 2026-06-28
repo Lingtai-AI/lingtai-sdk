@@ -150,21 +150,20 @@ def validate_init(data: dict) -> list[str]:
         "manifest": dict,
     }, prefix="")
 
-    # Text fields: inline value OR _file path (at least one required).
+    # Required text fields: inline value OR _file path (at least one required).
     #
-    # `lingtai` is the agent's initial 灵台 — the seed character / self-authored
-    # identity that is written to system/lingtai.md and rendered as the
-    # `character` prompt section (via psyche._lingtai_load). It is the agent's
-    # OWN voice, NOT to be confused with `base_prompt`, the third-party
-    # (application / recipe / preset) injection point (see TOP_OPTIONAL). The
-    # field was renamed from `prompt` / `prompt_file`; there is NO legacy alias —
-    # an init.json carrying `prompt` instead of `lingtai` fails the required
-    # check (missing `lingtai`) and `prompt` surfaces as an unknown-field warning.
+    # `lingtai` is intentionally NOT required: it is only the initial seed
+    # character / self-authored identity written to system/lingtai.md and rendered
+    # as the `character` prompt section (via psyche._lingtai_load). If omitted,
+    # runtime setup already treats it as an empty seed and the agent controls its
+    # own character thereafter. The field was renamed from `prompt` /
+    # `prompt_file`; there is still NO legacy alias — a stale `prompt` remains an
+    # unknown-field warning rather than being reintroduced.
     #
     # Note: "soul" / "soul_file" was removed in v0.7.6 — the soul-flow
     # voice lives at manifest.soul.{voice,voice_prompt} now. The legacy
     # fields are kept in TOP_KNOWN for silent ignore (no warning).
-    for key in ("covenant", "pad", "lingtai"):
+    for key in ("covenant", "pad"):
         file_key = f"{key}_file"
         has_inline = key in data
         has_file = file_key in data
@@ -185,7 +184,7 @@ def validate_init(data: dict) -> list[str]:
     #                     Batch 1 (lingtai_kernel.prompt.build_system_prompt_batches).
     # `substrate` and `brief` were retired as external overrides (kernel-owned /
     # secretary-disk-only respectively) — see LEGACY_MIGRATED_TOP_FIELDS.
-    for key in ("comment", "base_prompt"):
+    for key in ("lingtai", "comment", "base_prompt"):
         file_key = f"{key}_file"
         if key in data and not isinstance(data[key], str):
             raise ValueError(f"{key}: expected str, got {type(data[key]).__name__}")
