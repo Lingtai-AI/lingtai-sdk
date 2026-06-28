@@ -5,11 +5,11 @@ Sections are rendered in a configurable order. The default order groups
 sections by mutation frequency so cache breakpoints can be placed between
 batches:
 
-    Batch 1 — immovable after init (ideal cache-read prefix):
-        principle (no header) → covenant → tools → substrate → procedures → comment
+    Batch 1 — resident prefix:
+        principle (no header) → covenant → tools → substrate → procedures →
+        meta_guidance → comment
     Batch 2 — rarely mutated (most stable first):
-        rules → brief → skills → knowledge → identity → character → pad →
-        meta_guidance (always the final, resident kernel-runtime-guidance section)
+        rules → brief → skills → knowledge → identity → character → pad
 
 `substrate` sits **right after tools** so it functions as the long-form
 companion to the schemas above it: tool schemas carry mechanical
@@ -47,7 +47,7 @@ class SystemPromptManager:
     # the adapter can cover the whole stable prefix. Within each batch,
     # sections are ordered most-stable-first so later mutations invalidate
     # as little prior content as possible.
-    #   Batch 1 (immovable):         principle, covenant, tools, substrate, procedures, comment
+    #   Batch 1 (resident prefix):  principle, covenant, tools, substrate, procedures, meta_guidance, comment
     #   Batch 2 (rarely-mutated):    rules, brief, skills, knowledge, identity, character, pad
     # First entry (principle) is rendered without ## header (raw text).
     # `identity` is the mechanical section (name/nickname/manifest, written by
@@ -60,6 +60,9 @@ class SystemPromptManager:
         "tools",
         "substrate",
         "procedures",
+        # Resident kernel runtime guidance sits before operator/project comment
+        # so comment can remain the final stable prefix-layer instruction.
+        "meta_guidance",
         "comment",
         # Batch 2 — rarely mutated (most stable first)
         "rules",
@@ -69,9 +72,6 @@ class SystemPromptManager:
         "identity",
         "character",
         "pad",
-        # Resident kernel runtime guidance — always last so it is the final
-        # system-prompt section (see meta_block.build_meta_guidance).
-        "meta_guidance",
     ]
 
     def __init__(self) -> None:
@@ -113,10 +113,13 @@ class SystemPromptManager:
     # place cache_control markers. Sections not listed here fall into the
     # "unordered" bucket rendered just before the tail batch.
     _BATCHES: tuple[tuple[str, ...], ...] = (
-        ("principle", "covenant", "tools", "substrate", "procedures", "comment"),
+        (
+            "principle", "covenant", "tools", "substrate", "procedures",
+            "meta_guidance", "comment",
+        ),
         (
             "rules", "brief", "skills", "knowledge", "identity", "character",
-            "pad", "meta_guidance",
+            "pad",
         ),
     )
 

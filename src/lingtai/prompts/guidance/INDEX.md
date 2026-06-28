@@ -9,7 +9,7 @@ summary: >
   payload fields (schema_version, guidance_version, priority, render_mode) that used to live at
   the root of guidance.json. Each sibling `<id>.md` is one guidance section; the code-owned
   `GUIDANCE_SECTION_ORDER` controls order, and the kernel assembles them (plus the generated
-  `_meta` readme and the active adapter's static rules) into the final `meta_guidance`
+  `_meta` readme and the active adapter's static rules) into the resident `meta_guidance`
   system-prompt section.
 why: >
   guidance.json became a skill-style Markdown catalog so every guidance rule is a self-explaining

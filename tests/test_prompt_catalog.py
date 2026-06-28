@@ -180,6 +180,7 @@ def test_principle_body_starts_with_system_prompt_map_and_lingtai_principles():
         "tools",
         "substrate",
         "procedures",
+        "meta_guidance",
         "comment",
         "rules",
         "brief",
@@ -189,7 +190,6 @@ def test_principle_body_starts_with_system_prompt_map_and_lingtai_principles():
         "identity",
         "character",
         "pad",
-        "meta_guidance",
     ):
         assert f"| `{section}` |" in body
     assert "## LingTai operating principles" in body

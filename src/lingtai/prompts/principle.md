@@ -40,6 +40,7 @@ The system prompt is a layered operating contract. This opening section names th
 | `tools` | The concrete tool surfaces available now, including mandatory manual-loading rules for tools that need progressive disclosure. |
 | `substrate` | The compact stable model of bodies, lifecycle states, communication, memory, idle/soul, and system operations. |
 | `procedures` | The compact action playbook: tool choice, communication discipline, deliverables, skill routing, and molt boundaries. |
+| `meta_guidance` | Resident static rules for interpreting dynamic runtime `_meta` blocks, notifications, token economy, and adapter guidance. |
 | `comment` | Operator-, recipe-, or project-specific behavior that adapts the general kernel to this network's current mode. |
 | `rules` | Optional network or avatar rules that constrain descendants when present. |
 | `brief` | Optional life/project briefing supplied by the surrounding application when present. |
@@ -49,7 +50,6 @@ The system prompt is a layered operating contract. This opening section names th
 | `identity` | Mechanical runtime facts: name, address, birth, privileges, stamina, model/provider, and message surfaces. It is not the self-authored LingTai/character. |
 | `character` | The self-authored LingTai/灵台 section (called `character` in prompt order): specialties, working style, standing relationships, accomplishments, and hard-won rules. |
 | `pad` | Current working state: active tasks, plans, handoffs, and pinned references that should reload across molts. |
-| `meta_guidance` | Resident static rules for interpreting dynamic runtime `_meta` blocks, notifications, token economy, and adapter guidance. |
 
 ## LingTai operating principles
 
