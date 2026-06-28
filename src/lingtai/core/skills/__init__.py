@@ -27,12 +27,12 @@ Usage: ``Agent(capabilities={"skills": {"paths": [...]}})`` or via init.json.
 from __future__ import annotations
 
 import logging
-import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import yaml
+from lingtai_kernel.tool_dispatch import dispatch_action
 
+from .._catalog import build_catalog_yaml, scan_markdown_catalog
 from ...i18n import t
 
 if TYPE_CHECKING:
@@ -41,28 +41,6 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 PROVIDERS = {"providers": [], "default": "builtin"}
-
-
-# ---------------------------------------------------------------------------
-# Frontmatter parser
-# ---------------------------------------------------------------------------
-
-_FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?\n)---\s*\n", re.DOTALL)
-
-
-def _parse_frontmatter(text: str) -> dict[str, str]:
-    m = _FRONTMATTER_RE.match(text)
-    if not m:
-        return {}
-    try:
-        loaded = yaml.safe_load(m.group(1)) or {}
-    except yaml.YAMLError:
-        return {}
-    if not isinstance(loaded, dict):
-        return {}
-    # Coerce to str|str — YAML may produce ints/lists/None for unrelated keys
-    # (e.g. version: 2.0). Multi-line scalars (>, |) collapse to clean strings.
-    return {str(k): (" ".join(str(v).split()) if v is not None else "") for k, v in loaded.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -86,125 +64,8 @@ def _resolve_path(p: str, working_dir: Path) -> Path:
 # Skill scanner
 # ---------------------------------------------------------------------------
 
-def _parse_skill_file(skill_file: Path, label: str) -> tuple[dict | None, dict | None]:
-    try:
-        text = skill_file.read_text(encoding="utf-8")
-    except OSError as e:
-        return None, {"folder": label, "reason": f"cannot read SKILL.md: {e}"}
-
-    fm = _parse_frontmatter(text)
-    name = fm.get("name", "")
-    description = fm.get("description", "")
-    if not name:
-        return None, {"folder": label, "reason": "SKILL.md missing required frontmatter field: name"}
-    if not description:
-        return None, {"folder": label, "reason": "SKILL.md missing required frontmatter field: description"}
-
-    return {
-        "name": name,
-        "description": description,
-        "version": fm.get("version", ""),
-        "path": str(skill_file),
-    }, None
-
-
-def _scan_recursive(
-    directory: Path,
-    valid: list[dict],
-    problems: list[dict],
-    prefix: str = "",
-) -> None:
-    if not directory.is_dir():
-        return
-
-    try:
-        children = sorted(directory.iterdir())
-    except OSError:
-        return
-
-    for child in children:
-        if not child.is_dir():
-            continue
-        if child.name.startswith("."):
-            continue
-
-        label = f"{prefix}{child.name}" if prefix else child.name
-        skill_file = child / "SKILL.md"
-
-        if skill_file.is_file():
-            sk, prob = _parse_skill_file(skill_file, label)
-            if sk:
-                valid.append(sk)
-            if prob:
-                problems.append(prob)
-            continue
-
-        # No SKILL.md — classify.
-        try:
-            grandchildren = list(child.iterdir())
-        except OSError:
-            continue
-        has_loose_files = any(
-            not c.is_dir() and not c.name.startswith(".")
-            for c in grandchildren
-        )
-        if has_loose_files:
-            problems.append({
-                "folder": label,
-                "reason": "not a skill (no SKILL.md) and has loose files — corrupted",
-            })
-            continue
-
-        _scan_recursive(child, valid, problems, prefix=f"{label}/")
-
-
 def _scan(directory: Path) -> tuple[list[dict], list[dict]]:
-    valid: list[dict] = []
-    problems: list[dict] = []
-    _scan_recursive(directory, valid, problems)
-    return valid, problems
-
-
-# ---------------------------------------------------------------------------
-# YAML catalog builder
-# ---------------------------------------------------------------------------
-
-def _escape_xml(s: str) -> str:
-    """Escape only the characters XML actually requires in element text.
-
-    `"` and `'` only need escaping inside attribute values; escaping them in
-    element bodies just adds `&quot;`/`&apos;` noise to the rendered prompt
-    without making the catalog any more parseable.
-    """
-    return (
-        s.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-    )
-
-
-def _indent_block(text: str, indent: str) -> str:
-    """Indent every line of ``text`` by ``indent``. Empty input → empty string."""
-    if not text:
-        return ""
-    return "\n".join(indent + line for line in text.splitlines())
-
-
-def _build_catalog_yaml(skills: list[dict], lang: str) -> str:
-    if not skills:
-        return ""
-
-    lines: list[str] = [
-        t(lang, "skills.preamble"),
-        "",
-    ]
-    for sk in skills:
-        lines.append(f"- name: {sk['name']}")
-        lines.append(f"  location: {sk['path']}")
-        lines.append("  description: |")
-        for dl in sk["description"].splitlines():
-            lines.append(f"    {dl}" if dl else "    ")
-    return "\n".join(lines)
+    return scan_markdown_catalog(directory, filename="SKILL.md", kind="skill")
 
 
 # ---------------------------------------------------------------------------
@@ -263,7 +124,7 @@ def _reconcile(
 
     # Build and inject catalog.
     lang = agent._config.language
-    catalog_yaml = _build_catalog_yaml(all_skills, lang)
+    catalog_yaml = build_catalog_yaml(all_skills, t(lang, "skills.preamble"))
     if catalog_yaml:
         agent.update_system_prompt("skills", catalog_yaml, protected=True)
     else:
@@ -341,13 +202,14 @@ def setup(agent: "BaseAgent", paths: list[str] | None = None, **_ignored) -> Non
 
     # Register the `info` action. `info` re-runs _reconcile to get a fresh snapshot.
     def handle_skills(args: dict) -> dict:
-        action = args.get("action", "")
-        if action == "info":
-            return _reconcile(agent, path_list)
-        return {
-            "status": "error",
-            "message": f"unknown action: {action!r}, only 'info' is supported",
-        }
+        return dispatch_action(
+            args,
+            {"info": lambda _args: _reconcile(agent, path_list)},
+            unknown=lambda action: {
+                "status": "error",
+                "message": f"unknown action: {action!r}, only 'info' is supported",
+            },
+        )
 
     agent.add_tool(
         "skills",

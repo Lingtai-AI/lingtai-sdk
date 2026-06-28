@@ -139,6 +139,17 @@ def test_unknown_action_returns_error(tmp_path):
             result = agent._tool_handlers["knowledge"]({"action": action})
             assert result["status"] == "error", f"{action!r} should be rejected"
             assert "unknown action" in result["message"].lower()
+        # Exact model-visible envelope must survive the dispatch-helper
+        # migration (issue #513): wording, quoting, and key names verbatim.
+        assert agent._tool_handlers["knowledge"]({"action": "submit"}) == {
+            "status": "error",
+            "message": "unknown action: 'submit', only 'info' is supported",
+        }
+        # A missing action key renders the empty-string default, not None.
+        assert agent._tool_handlers["knowledge"]({}) == {
+            "status": "error",
+            "message": "unknown action: '', only 'info' is supported",
+        }
     finally:
         agent.stop(timeout=1.0)
 

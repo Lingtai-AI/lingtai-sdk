@@ -27,6 +27,8 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from lingtai_kernel.tool_dispatch import dispatch_action
+
 if TYPE_CHECKING:
     from lingtai_kernel.base_agent import BaseAgent
 
@@ -556,13 +558,14 @@ def setup(agent: "BaseAgent", **_ignored) -> None:
     _reconcile(agent)
 
     def handle_mcp(args: dict) -> dict:
-        action = args.get("action", "")
-        if action == "show":
-            return _reconcile(agent)
-        return {
-            "status": "error",
-            "message": f"unknown action: {action!r}, only 'show' is supported",
-        }
+        return dispatch_action(
+            args,
+            {"show": lambda _args: _reconcile(agent)},
+            unknown=lambda action: {
+                "status": "error",
+                "message": f"unknown action: {action!r}, only 'show' is supported",
+            },
+        )
 
     agent.add_tool(
         "mcp",

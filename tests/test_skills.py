@@ -34,6 +34,28 @@ def _write_skill(folder: Path, name: str, desc: str = "test skill"):
     )
 
 
+def test_unknown_action_returns_error(tmp_path):
+    """Only `info` is supported; the exact error envelope is model-visible.
+
+    Locks the unknown-action envelope through the issue #513 dispatch-helper
+    migration: wording, quoting, and key names must stay verbatim.
+    """
+    agent, _ = _mk_agent(tmp_path)
+    try:
+        handler = agent._tool_handlers["skills"]
+        assert handler({"action": "list"}) == {
+            "status": "error",
+            "message": "unknown action: 'list', only 'info' is supported",
+        }
+        # Missing action key renders the empty-string default, not None.
+        assert handler({}) == {
+            "status": "error",
+            "message": "unknown action: '', only 'info' is supported",
+        }
+    finally:
+        agent.stop(timeout=1.0)
+
+
 # ---------------------------------------------------------------------------
 # Structure & setup
 # ---------------------------------------------------------------------------

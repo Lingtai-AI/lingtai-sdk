@@ -32,8 +32,9 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import yaml
+from lingtai_kernel.tool_dispatch import dispatch_action
 
+from .._catalog import build_catalog_yaml, scan_markdown_catalog
 from ...i18n import t
 
 if TYPE_CHECKING:
@@ -42,110 +43,6 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 PROVIDERS = {"providers": [], "default": "builtin"}
-
-
-# ---------------------------------------------------------------------------
-# Frontmatter parser
-# ---------------------------------------------------------------------------
-
-_FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?\n)---\s*\n", re.DOTALL)
-
-
-def _parse_frontmatter(text: str) -> dict[str, str]:
-    m = _FRONTMATTER_RE.match(text)
-    if not m:
-        return {}
-    try:
-        loaded = yaml.safe_load(m.group(1)) or {}
-    except yaml.YAMLError:
-        return {}
-    if not isinstance(loaded, dict):
-        return {}
-    return {str(k): (" ".join(str(v).split()) if v is not None else "") for k, v in loaded.items()}
-
-
-# ---------------------------------------------------------------------------
-# Entry scanner
-# ---------------------------------------------------------------------------
-
-def _parse_entry_file(entry_file: Path, label: str) -> tuple[dict | None, dict | None]:
-    try:
-        text = entry_file.read_text(encoding="utf-8")
-    except OSError as e:
-        return None, {"folder": label, "reason": f"cannot read KNOWLEDGE.md: {e}"}
-
-    fm = _parse_frontmatter(text)
-    name = fm.get("name", "")
-    description = fm.get("description", "")
-    if not name:
-        return None, {"folder": label, "reason": "KNOWLEDGE.md missing required frontmatter field: name"}
-    if not description:
-        return None, {"folder": label, "reason": "KNOWLEDGE.md missing required frontmatter field: description"}
-
-    return {
-        "name": name,
-        "description": description,
-        "version": fm.get("version", ""),
-        "path": str(entry_file),
-    }, None
-
-
-def _scan_recursive(
-    directory: Path,
-    valid: list[dict],
-    problems: list[dict],
-    prefix: str = "",
-) -> None:
-    if not directory.is_dir():
-        return
-
-    try:
-        children = sorted(directory.iterdir())
-    except OSError:
-        return
-
-    for child in children:
-        if not child.is_dir():
-            continue
-        if child.name.startswith("."):
-            continue
-
-        label = f"{prefix}{child.name}" if prefix else child.name
-        entry_file = child / "KNOWLEDGE.md"
-
-        if entry_file.is_file():
-            entry, prob = _parse_entry_file(entry_file, label)
-            if entry:
-                valid.append(entry)
-            if prob:
-                problems.append(prob)
-            continue
-
-        # No KNOWLEDGE.md — classify.
-        try:
-            grandchildren = list(child.iterdir())
-        except OSError:
-            continue
-        has_loose_files = any(
-            not c.is_dir() and not c.name.startswith(".")
-            for c in grandchildren
-        )
-        if has_loose_files:
-            problems.append({
-                "folder": label,
-                "reason": "not a knowledge entry (no KNOWLEDGE.md) and has loose files — corrupted",
-            })
-            continue
-
-        _scan_recursive(child, valid, problems, prefix=f"{label}/")
-
-
-def _scan(directory: Path) -> tuple[list[dict], list[dict]]:
-    valid: list[dict] = []
-    problems: list[dict] = []
-    _scan_recursive(directory, valid, problems)
-    return valid, problems
-
 
 
 # ---------------------------------------------------------------------------
@@ -328,44 +225,6 @@ def _migrate_legacy_json(working_dir: Path, knowledge_dir: Path) -> list[dict]:
 # YAML catalog builder
 # ---------------------------------------------------------------------------
 
-def _escape_xml(s: str) -> str:
-    """Escape only the characters XML actually requires in element text.
-
-    `"` and `'` only need escaping inside attribute values; escaping them in
-    element bodies just adds `&quot;`/`&apos;` noise to the rendered prompt
-    without making the catalog any more parseable.
-    """
-    return (
-        s.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-    )
-
-
-def _indent_block(text: str, indent: str) -> str:
-    """Indent every line of ``text`` by ``indent``. Empty input → empty string."""
-    if not text:
-        return ""
-    return "\n".join(indent + line for line in text.splitlines())
-
-
-def _build_catalog_yaml(entries: list[dict], lang: str) -> str:
-    if not entries:
-        return ""
-
-    lines: list[str] = [
-        t(lang, "knowledge.preamble"),
-        "",
-    ]
-    for e in entries:
-        lines.append(f"- name: {e['name']}")
-        lines.append(f"  location: {e['path']}")
-        lines.append("  description: |")
-        for dl in e["description"].splitlines():
-            lines.append(f"    {dl}" if dl else "    ")
-    return "\n".join(lines)
-
-
 # ---------------------------------------------------------------------------
 # Core reconciliation (shared by setup and `info`)
 # ---------------------------------------------------------------------------
@@ -380,11 +239,13 @@ def _reconcile(agent: "BaseAgent") -> dict:
     knowledge_dir = working_dir / "knowledge"
 
     migration_problems = _migrate_legacy_json(working_dir, knowledge_dir)
-    entries, problems = _scan(knowledge_dir)
+    entries, problems = scan_markdown_catalog(
+        knowledge_dir, filename="KNOWLEDGE.md", kind="knowledge entry",
+    )
     problems = migration_problems + problems
 
     lang = agent._config.language
-    catalog_yaml = _build_catalog_yaml(entries, lang)
+    catalog_yaml = build_catalog_yaml(entries, t(lang, "knowledge.preamble"))
     if catalog_yaml:
         agent.update_system_prompt("knowledge", catalog_yaml, protected=True)
     else:
@@ -435,13 +296,14 @@ def setup(agent: "BaseAgent", **_ignored) -> None:
     _reconcile(agent)
 
     def handle_knowledge(args: dict) -> dict:
-        action = args.get("action", "")
-        if action == "info":
-            return _reconcile(agent)
-        return {
-            "status": "error",
-            "message": f"unknown action: {action!r}, only 'info' is supported",
-        }
+        return dispatch_action(
+            args,
+            {"info": lambda _args: _reconcile(agent)},
+            unknown=lambda action: {
+                "status": "error",
+                "message": f"unknown action: {action!r}, only 'info' is supported",
+            },
+        )
 
     agent.add_tool(
         "knowledge",
