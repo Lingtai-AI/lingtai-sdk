@@ -38,22 +38,32 @@ def test_rules_renders_after_covenant_and_tools():
     assert cov_pos < tools_pos < rules_pos
 
 
-def test_meta_guidance_renders_as_final_section():
-    """`meta_guidance` is the resident kernel-runtime-guidance section and must
-    render last — after every Batch-2 section (e.g. `pad`) — so it sits at the
-    very tail of the system prompt. Static guidance moved here off the per-turn
-    tail `_meta`."""
+def test_default_order_and_batches_cover_the_same_sections_once():
+    order = list(SystemPromptManager._DEFAULT_ORDER)
+    flat_batches = [section for batch in SystemPromptManager._BATCHES for section in batch]
+    assert set(flat_batches) == set(order)
+    assert len(flat_batches) == len(set(flat_batches)) == len(order)
+
+
+def test_meta_guidance_renders_between_procedures_and_comment():
+    """`meta_guidance` is resident kernel-runtime guidance and renders after
+    `procedures` but before `comment`, so operator/project comments can follow
+    the static runtime guidance instead of being separated from procedures."""
     mgr = SystemPromptManager()
-    mgr.write_section("pad", "Working notes.")
+    mgr.write_section("procedures", "How to act.", protected=True)
     mgr.write_section("meta_guidance", "Resident runtime guidance.", protected=True)
+    mgr.write_section("comment", "Project-specific adaptation.", protected=True)
+    mgr.write_section("pad", "Working notes.")
     prompt = mgr.render()
-    pad_pos = prompt.index("Working notes.")
+    procedures_pos = prompt.index("How to act.")
     mg_pos = prompt.index("Resident runtime guidance.")
-    assert pad_pos < mg_pos
+    comment_pos = prompt.index("Project-specific adaptation.")
+    pad_pos = prompt.index("Working notes.")
+    assert procedures_pos < mg_pos < comment_pos < pad_pos
     assert "## meta_guidance" in prompt
-    # It lands in the final batch, never in the unordered pre-tail bucket.
     batches = mgr.render_batches()
-    assert "Resident runtime guidance." in batches[-1]
+    assert "Resident runtime guidance." in batches[0]
+    assert "Resident runtime guidance." not in batches[-1]
 
 
 def test_rules_section_absent_when_empty():

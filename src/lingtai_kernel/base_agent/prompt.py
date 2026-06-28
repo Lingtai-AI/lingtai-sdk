@@ -11,7 +11,7 @@ def _refresh_meta_guidance_section(agent) -> None:
 
     Renders the static, rule-like runtime guidance (kernel guidance sections,
     the ``_meta`` envelope readme, and the active adapter's static runtime
-    rules) into the final system-prompt section.  This is the resident home for
+    rules) into the resident system-prompt section.  This is the resident home for
     content that used to ride on every tail ``_meta``; the tail now carries only
     a lightweight ref back to this section (see ``meta_block.build_meta_guidance``
     / ``build_meta_guidance_ref``).  Protected so the LLM cannot overwrite it.
