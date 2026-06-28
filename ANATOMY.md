@@ -34,8 +34,8 @@ while long-form references live under [`docs/`](docs/).
 ## Composition
 
 `pyproject.toml` declares the Python package metadata and delegates sidecar build
-hooks to `setup.py`. `MANIFEST.in` keeps the Rust sidecar sources in source
-distributions. The runtime code under `src/lingtai_kernel/` is the primary source
+hooks to `setup.py`. `MANIFEST.in` keeps the Rust sidecar sources and packaged
+prompt Markdown resources connected to source distributions. The runtime code under `src/lingtai_kernel/` is the primary source
 of truth for agent behavior; `src/lingtai/` contains public compatibility/service
 surfaces. Documentation that does not need root discovery is kept in `docs/` so
 the root remains an entry-point layer rather than an archive.

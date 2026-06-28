@@ -24,3 +24,8 @@ include MANIFEST.in
 include LICENSE
 include NOTICE
 include README.md
+
+# Include packaged prompt resources and the runtime guidance Markdown catalog in
+# sdists. pyproject.toml owns wheel package-data globs; keep this connected so
+# source releases carry the same prompt corpus.
+recursive-include src/lingtai/prompts *.md

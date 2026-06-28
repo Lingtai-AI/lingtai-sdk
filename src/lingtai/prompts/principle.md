@@ -2,17 +2,22 @@
 name: principle
 kind: prompt-section
 section: principle
-audience: developers, coding-agents
 summary: >
-  Kernel-owned top-level progressive-disclosure contract. The single source of
-  truth for how the resident prompt layers (meta_guidance / procedures /
-  substrate / reference manuals) divide responsibility, plus the token-efficiency
-  principle. Rendered raw (no `## ` header) as the first system-prompt section.
+  Kernel-owned top-level progressive-disclosure contract. The single source of truth for how the resident prompt layers (meta_guidance / procedures / substrate / reference manuals) divide responsibility, plus the token-efficiency principle. Rendered raw (no `## ` header) as the first system-prompt section.
 why: >
-  Self-explains why this fragment leads the system prompt: it tells the agent
-  where each canonical rule lives so layers point to one source instead of
-  restating it. This frontmatter is developer-facing metadata only — it is
-  stripped before the body is rendered into the LLM prompt or system.md.
+  Self-explains why this fragment leads the system prompt: it tells the agent where each canonical rule lives so layers point to one source instead of restating it. This frontmatter is developer-facing metadata only — it is stripped before the body is rendered into the LLM prompt or system.md.
+related_files:
+  - "src/lingtai_kernel/prompt.py"
+  - "src/lingtai/agent.py"
+  - "src/lingtai_kernel/base_agent/__init__.py"
+  - "tests/test_prompt_catalog.py"
+  - "tests/test_agent_meta_guidance.py"
+  - "tests/test_deep_refresh.py"
+  - "tests/test_prompt.py"
+  - "pyproject.toml"
+  - "MANIFEST.in"
+maintenance: >
+  When editing this file, update this related_files list and inspect the listed paths in the same change so source, runtime mirrors, tests, docs, and package metadata stay connected.
 ---
 Progressive disclosure principle: each resident prompt layer has one job and points to the next.
 

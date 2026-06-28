@@ -12,6 +12,7 @@ the same frontmatter+Markdown model as skills:
 """
 
 import re
+import tomllib
 from importlib.resources import files
 from pathlib import Path
 
@@ -77,6 +78,12 @@ def test_packaged_section_sources_carry_frontmatter(name):
     meta, body = split_frontmatter(text)
     assert meta.get("name") == name.removesuffix(".md")
     assert meta.get("kind") == "prompt-section"
+    assert "audience" not in meta
+    assert meta.get("summary")
+    assert meta.get("why")
+    assert meta.get("related_files"), f"{name} must list connected files"
+    assert "src/lingtai/agent.py" in meta["related_files"]
+    assert meta.get("maintenance") and "editing this file" in meta["maintenance"]
     assert body, "section body must be non-empty"
     # The body must not re-open a frontmatter fence.
     assert not body.startswith("---")
@@ -109,6 +116,18 @@ def test_guidance_catalog_preserves_code_owned_section_order():
     assert ids == list(GUIDANCE_SECTION_ORDER)
 
 
+def test_guidance_index_frontmatter_lists_connected_files():
+    root = files("lingtai.prompts.guidance")
+    meta, body = split_frontmatter(root.joinpath("INDEX.md").read_text(encoding="utf-8"))
+    assert meta.get("kind") == "meta-guidance-catalog"
+    assert "audience" not in meta
+    assert meta.get("related_files")
+    assert "src/lingtai_kernel/prompt_catalog.py" in meta["related_files"]
+    assert "src/lingtai/prompts/guidance/*.md" in meta["related_files"]
+    assert meta.get("maintenance") and "editing this file" in meta["maintenance"]
+    assert not body.strip()
+
+
 def test_guidance_section_frontmatter_is_documentary_not_behavior_config():
     """Guidance section frontmatter explains purpose but does not own ordering."""
     root = files("lingtai.prompts.guidance")
@@ -117,9 +136,12 @@ def test_guidance_section_frontmatter_is_documentary_not_behavior_config():
         meta, body = split_frontmatter(root.joinpath(f"{sid}.md").read_text(encoding="utf-8"))
         assert meta.get("id") == sid
         assert meta.get("kind") == "meta-guidance-section"
-        assert meta.get("audience") == "developers, coding-agents"
+        assert "audience" not in meta
         assert meta.get("summary"), f"{sid} must summarize why this fragment exists"
         assert meta.get("why"), f"{sid} must explain purpose/why"
+        assert meta.get("related_files"), f"{sid} must list connected files"
+        assert "src/lingtai_kernel/prompt_catalog.py" in meta["related_files"]
+        assert meta.get("maintenance") and "editing this file" in meta["maintenance"]
         assert not (forbidden & set(meta)), f"behavior config leaked into frontmatter for {sid}"
         assert body and not body.startswith("---")
 
@@ -189,3 +211,15 @@ def test_guidance_catalog_files_are_resources():
         text = root.joinpath(f"{sid}.md").read_text(encoding="utf-8")
         meta, _ = split_frontmatter(text)
         assert meta.get("id") == sid
+
+
+def test_prompt_resource_packaging_metadata_stays_connected():
+    """Wheel package-data and sdist manifest carry the prompt Markdown corpus."""
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    package_data = pyproject["tool"]["setuptools"]["package-data"]["lingtai"]
+    assert "prompts/*.md" in package_data
+    assert "prompts/guidance/*.md" in package_data
+    assert "prompts/*.json" not in package_data
+
+    manifest = Path("MANIFEST.in").read_text(encoding="utf-8")
+    assert "recursive-include src/lingtai/prompts *.md" in manifest

@@ -2,10 +2,19 @@
 id: summarize_best_practice
 title: Summarize and molt deliberately
 kind: meta-guidance-section
-audience: developers, coding-agents
 summary: >
   Resident guidance for when and how agents summarize consumed tool results and choose molt boundaries.
 why: >
   This fragment exists because tool-result summarization is a high-attention runtime behavior: it keeps the current session efficient without losing recoverability, and it tells agents when molt supersedes summarize.
+related_files:
+  - "src/lingtai/prompts/guidance/INDEX.md"
+  - "src/lingtai_kernel/prompt_catalog.py"
+  - "src/lingtai_kernel/meta_block.py"
+  - "tests/test_prompt_catalog.py"
+  - "tests/test_meta_block.py"
+  - "src/lingtai_kernel/ANATOMY.md"
+  - "src/lingtai_kernel/intrinsics/system/summarize.py"
+maintenance: >
+  When editing this file, update this related_files list and inspect the listed paths in the same change so source, runtime mirrors, tests, docs, and package metadata stay connected.
 ---
 Use progressive disclosure for tool results. Raw output is for inspection; summarize a result only after you have consumed or digested it. When continuing in the same session, summarize completed tool results whose raw text no longer needs inspection, preserving key facts, evidence, paths or IDs, validation, risks, and next steps. Batch already-digested results when practical. Keep noisy or bulky work out of main context by delegating it to daemons before raw bulk lands here; use summarize for the bulk that already landed. Urgent cadence: if a long or noisy result raises a large-result reminder, read it, keep the grain, then summarize the prior result once full inspection is no longer needed. Idle cleanup: when work quiets down, use `_meta.agent_meta.current_tool_result_chars` to find already-digested, irrelevant, or obsolete results worth summarizing. The original remains recoverable from logs by `tool_call_id`, so the summary should keep enough identifiers and evidence to recover it. Follow any adapter/provider static rules in resident `meta_guidance` in addition to these general rules. Summarize is a mini molt for consumed tool results; molt is the stronger whole-conversation boundary. If you have already decided to molt, skip pre-molt summarize and molt instead. When the current task is complete, necessary reporting and durable stores are tended, and no human reply or concrete next action remains, do not molt automatically. Default to proactive task-boundary molt only when `_meta.agent_meta.token_efficiency.api_calls > 100`; below that threshold, go idle unless context pressure is present, summarize/reconstruction cannot bring context below `0.6 * context_window`, the human explicitly asks for a reset, or conversation confusion makes the fresh briefing worth the molt cost.
