@@ -18,6 +18,7 @@ from lingtai_kernel.meta_block import (
     build_meta_guidance,
     build_meta_readme,
     build_molt_context,
+    build_tool_meta_token_usage,
     build_guidance_with_meta_readme,
     build_runtime_guidance,
     clear_active_notification_holder,
@@ -686,14 +687,22 @@ def test_build_meta_emits_context_fields_when_decomp_ran():
 
 
 def test_build_meta_carries_latest_token_usage_for_tool_meta_only():
+    # The full provider-round snapshot is the source; only the compact subset is
+    # placed into the transit key destined for _meta.tool_meta.token_usage.
     snapshot = {
         "scope": "provider_round",
         "api_call_index": 3,
         "input_tokens": 190_000,
         "cache_miss_tokens": 22_000,
         "output_tokens": 636,
+        "thinking_tokens": 40,
+        "cached_tokens": 168_000,
         "cache_rate": 0.882,
+        "context_tokens": 190_000,
+        "context_window": 250_000,
         "context_usage": 0.759,
+        "estimated": False,
+        "api_call_id": "call-abc",
     }
     agent = _fake_agent()
     agent._session = SimpleNamespace(
@@ -703,7 +712,106 @@ def test_build_meta_carries_latest_token_usage_for_tool_meta_only():
 
     meta = build_meta(agent)
 
-    assert meta[TOOL_META_TOKEN_USAGE_PENDING_KEY] == snapshot
+    assert meta[TOOL_META_TOKEN_USAGE_PENDING_KEY] == {
+        "input": 190_000,
+        "cache_miss": 22_000,
+        "cache_rate": 0.882,
+        "context_usage": 0.759,
+        "window": 250_000,
+        "output": 636,
+        "thinking": 40,
+    }
+
+
+# Jason-approved compact key set for the injected token_usage object.
+_COMPACT_TOKEN_USAGE_KEYS = {
+    "input",
+    "cache_miss",
+    "cache_rate",
+    "context_usage",
+    "window",
+    "output",
+    "thinking",
+}
+
+
+def test_build_tool_meta_token_usage_compacts_full_snapshot_to_exact_keys():
+    # A full provider-round snapshot (the internal-logging shape) must compact to
+    # exactly the seven Jason-approved keys, dropping scope/api_call_index/
+    # cached_tokens/context_tokens/estimated/api_call_id and the long names.
+    snapshot = {
+        "scope": "provider_round",
+        "api_call_index": 3,
+        "input_tokens": 190_000,
+        "cache_miss_tokens": 22_000,
+        "output_tokens": 636,
+        "thinking_tokens": 40,
+        "cached_tokens": 168_000,
+        "cache_rate": 0.882,
+        "context_tokens": 190_000,
+        "context_window": 250_000,
+        "context_usage": 0.759,
+        "estimated": False,
+        "api_call_id": "call-abc",
+    }
+    agent = SimpleNamespace(
+        _session=SimpleNamespace(latest_token_usage_snapshot=lambda: snapshot)
+    )
+
+    compact = build_tool_meta_token_usage(agent)
+
+    assert set(compact) == _COMPACT_TOKEN_USAGE_KEYS
+    assert compact == {
+        "input": 190_000,
+        "cache_miss": 22_000,
+        "cache_rate": 0.882,
+        "context_usage": 0.759,
+        "window": 250_000,
+        "output": 636,
+        "thinking": 40,
+    }
+
+
+def test_build_tool_meta_token_usage_preserves_zero_and_sentinel_values():
+    # Existing numeric zero / sentinel values are kept, not dropped or invented.
+    snapshot = {
+        "input_tokens": 0,
+        "cache_miss_tokens": 0,
+        "output_tokens": 0,
+        "thinking_tokens": 0,
+        "cache_rate": 0.0,
+        "context_window": 0,
+        "context_usage": -1.0,
+    }
+    agent = SimpleNamespace(
+        _session=SimpleNamespace(latest_token_usage_snapshot=lambda: snapshot)
+    )
+
+    compact = build_tool_meta_token_usage(agent)
+
+    assert compact == {
+        "input": 0,
+        "cache_miss": 0,
+        "cache_rate": 0.0,
+        "context_usage": -1.0,
+        "window": 0,
+        "output": 0,
+        "thinking": 0,
+    }
+
+
+def test_build_tool_meta_token_usage_robust_to_missing_fields():
+    # Partial snapshot: only present fields are emitted; absent ones are omitted
+    # rather than invented.
+    snapshot = {"input_tokens": 100, "cache_rate": 0.5}
+    agent = SimpleNamespace(
+        _session=SimpleNamespace(latest_token_usage_snapshot=lambda: snapshot)
+    )
+
+    compact = build_tool_meta_token_usage(agent)
+
+    assert compact == {"input": 100, "cache_rate": 0.5}
+
 
 def test_build_meta_token_efficiency_current_session_snapshot():
     agent = _fake_agent_with_session(

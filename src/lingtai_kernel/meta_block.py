@@ -398,10 +398,11 @@ def build_meta_readme() -> dict:
         TOOL_META_KEY: (
             "Per-result tool/call metadata (id, timestamp, char_count, "
             "elapsed_ms, optional token_usage). Present on every tool result; "
-            "permanent. token_usage is a provider-round token/cache snapshot "
-            "(input, cache miss, output, cache rate, context usage) copied here "
-            "so agents can inspect historical high-context summarize/rebuild "
-            "costs after the latest agent_meta snapshot has moved on. May also "
+            "permanent. token_usage is a compact provider-round token/cache "
+            "snapshot with keys input, cache_miss, cache_rate, context_usage, "
+            "window, output, thinking — copied here so agents can inspect "
+            "historical high-context summarize/rebuild costs after the latest "
+            "agent_meta snapshot has moved on. May also "
             "carry a one-shot 'reconstruction' event when the runtime just "
             "performed a delayed-summarize context reconstruction: it records "
             "the before (A) and after (B) context tokens/usage, context_window, "
@@ -893,7 +894,16 @@ def build_reconstruction_tool_meta(agent) -> dict | None:
 
 
 def build_tool_meta_token_usage(agent) -> dict | None:
-    """Return latest provider-round token/cache usage for permanent tool_meta."""
+    """Return a compact provider-round token/cache snapshot for permanent tool_meta.
+
+    ``SessionManager.latest_token_usage_snapshot()`` keeps the full provider-round
+    record (scope, api-call index/id, cached/context tokens, estimated flag, ...) for
+    internal logging. The object injected into ``_meta.tool_meta.token_usage`` is
+    deliberately compact: only the per-result evidence agents need —
+    ``input``/``cache_miss``/``cache_rate``/``context_usage``/``window``/``output``/
+    ``thinking`` — mapped from the snapshot's long field names. Missing fields are
+    dropped rather than invented; existing numeric zero/sentinel values are preserved.
+    """
     session = getattr(agent, "_session", None)
     snapshot_fn = getattr(session, "latest_token_usage_snapshot", None)
     if callable(snapshot_fn):
@@ -905,7 +915,24 @@ def build_tool_meta_token_usage(agent) -> dict | None:
         snapshot = getattr(session, "_latest_token_usage_snapshot", None)
     if not isinstance(snapshot, Mapping):
         return None
-    return dict(snapshot)
+    # Map full snapshot field names -> compact injected keys. Only emit a key
+    # when the source field is present, so the injected object stays robust to
+    # partial snapshots without inventing values.
+    field_map = (
+        ("input", "input_tokens"),
+        ("cache_miss", "cache_miss_tokens"),
+        ("cache_rate", "cache_rate"),
+        ("context_usage", "context_usage"),
+        ("window", "context_window"),
+        ("output", "output_tokens"),
+        ("thinking", "thinking_tokens"),
+    )
+    compact = {
+        out_key: snapshot[src_key]
+        for out_key, src_key in field_map
+        if src_key in snapshot
+    }
+    return compact or None
 
 def build_meta(agent) -> dict:
     """Return the current meta-data snapshot for the agent.
