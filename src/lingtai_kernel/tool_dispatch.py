@@ -29,9 +29,18 @@ def dispatch_action(
     handler matches, ``unknown(action)`` is returned verbatim — the caller owns
     the exact error envelope, so casing, quoting, and key names stay identical
     to the hand-written router each tool used before.
+
+    Invalid JSON can make ``action`` an unhashable value (e.g. ``[]`` or
+    ``{}``). The hand-written routers compared the action with ``==`` and so
+    fell through to the unknown-action envelope; mirror that here by treating
+    an unhashable action as simply not matching any handler instead of letting
+    ``dict.get`` raise ``TypeError``.
     """
     action = args.get(action_key, default)
-    handler = handlers.get(action)
+    try:
+        handler = handlers.get(action)
+    except TypeError:
+        handler = None
     if handler is None:
         return unknown(action)
     return handler(args)

@@ -56,6 +56,31 @@ def test_missing_action_with_no_matching_default_is_unknown():
     assert result == {"unknown": ""}
 
 
+def test_unhashable_action_falls_through_to_unknown():
+    # Invalid JSON can make `action` a list or dict. The hand-written routers
+    # compared with `==` and rendered the unknown-action envelope; the helper
+    # must not raise `TypeError` from `dict.get` on an unhashable key.
+    for bad_action in ([], {}, [1, 2], {"k": "v"}, set()):
+        result = dispatch_action(
+            {"action": bad_action},
+            {"info": lambda args: {"status": "ok"}},
+            unknown=lambda action: {"status": "error", "action": action},
+        )
+        assert result == {"status": "error", "action": bad_action}
+
+
+def test_non_string_hashable_action_falls_through_to_unknown():
+    # Hashable-but-non-string actions (numbers, booleans, None) already worked
+    # with `dict.get`; lock the behaviour so they keep rendering as unknown.
+    for bad_action in (5, 3.5, True, None):
+        result = dispatch_action(
+            {"action": bad_action},
+            {"info": lambda args: {"status": "ok"}},
+            unknown=lambda action: {"status": "error", "action": action},
+        )
+        assert result == {"status": "error", "action": bad_action}
+
+
 def test_custom_action_key_and_default():
     result = dispatch_action(
         {"verb": "go"},

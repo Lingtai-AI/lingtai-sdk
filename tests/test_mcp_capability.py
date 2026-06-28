@@ -263,6 +263,16 @@ def test_mcp_show_unknown_action_returns_error(tmp_path):
         "status": "error",
         "message": "unknown action: '', only 'show' is supported",
     }
+    # Invalid JSON can make `action` unhashable (issue #513 blocker): the router
+    # must render the unknown-action envelope, not raise TypeError.
+    assert handler({"action": []}) == {
+        "status": "error",
+        "message": "unknown action: [], only 'show' is supported",
+    }
+    assert handler({"action": {}}) == {
+        "status": "error",
+        "message": "unknown action: {}, only 'show' is supported",
+    }
 
 
 # ---------------------------------------------------------------------------
