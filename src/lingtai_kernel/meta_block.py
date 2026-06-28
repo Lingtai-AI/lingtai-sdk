@@ -398,11 +398,21 @@ def build_meta_readme() -> dict:
         TOOL_META_KEY: (
             "Per-result tool/call metadata (id, timestamp, char_count, "
             "elapsed_ms, optional token_usage). Present on every tool result; "
-            "permanent. token_usage is a compact provider-round token/cache "
-            "snapshot with keys input, cache_miss, cache_rate, context_usage, "
-            "window, output, thinking — copied here so agents can inspect "
-            "historical high-context summarize/rebuild costs after the latest "
-            "agent_meta snapshot has moved on. May also "
+            "permanent. token_usage is the single unified token-diagnostics block "
+            "(see meta_guidance.token_efficiency). It is one flat dict combining a "
+            "provider-round token/cache snapshot — keys input, cache_miss, cache_rate, "
+            "context_usage, window, output, thinking — with a current-session "
+            "aggregate half — keys session_cache_rate, api_calls, input_tokens, "
+            "cached_tokens, avg_input_tokens_per_api_call. The session-stat fields "
+            "are CURRENT runtime-session deltas (counted since this process "
+            "started/last refreshed), NOT restored lifetime/cumulative totals. The "
+            "block also carries a short ref sentence ('See "
+            "meta_guidance.token_efficiency for details.') hooking the guidance "
+            "subsection that explains how to act on it. Each "
+            "half appears only "
+            "when its source data is available; missing values are omitted, not "
+            "invented. Copied here so agents can inspect historical high-context "
+            "summarize/rebuild costs after newer results arrive. May also "
             "carry a one-shot 'reconstruction' event when the runtime just "
             "performed a delayed-summarize context reconstruction: it records "
             "the before (A) and after (B) context tokens/usage, context_window, "
@@ -413,18 +423,17 @@ def build_meta_readme() -> dict:
         ),
         AGENT_META_KEY: (
             "Agent/current-state snapshot (time, context usage, stamina, "
-            "current-session token_efficiency, active_turn_tool_calls, "
-            "current_tool_result_chars, optional adapter_comment). context may "
+            "active_turn_tool_calls, current_tool_result_chars, optional "
+            "adapter_comment). context may "
             "carry a 'molt' reminder string: a SUSTAINED-pressure warning that appears "
             "only after context has been high (>= 0.75) for several consecutive "
             "fresh provider rounds and clears when pressure drops — current "
             "state, not a permanent event (cf. tool_meta.reconstruction). Latest "
             "tool result only; older copies are stripped as newer results "
-            "arrive. token_efficiency is a compact latest-only current_session token "
-            "economy snapshot with api_calls, cumulative input/cached tokens, cache "
-            "rate, average input tokens per API call, context tokens/window, "
-            "and a guidance_ref back to meta_guidance.token_efficiency; per-round "
-            "token/cache facts live permanently in tool_meta.token_usage instead. "
+            "arrive. agent_meta carries NO token diagnostics: all token/cache "
+            "facts — both per-provider-round and current-session aggregate — live "
+            "permanently in tool_meta.token_usage instead (see "
+            "meta_guidance.token_efficiency). "
             "current_tool_result_chars is a compact dict with total_chars "
             "and top_results (id, tool_name, chars; no preview) for "
             "proactive summarization candidates. adapter_comment is a small "
@@ -547,6 +556,14 @@ def build_guidance_with_meta_readme(base_guidance: Dict[str, Any] | None = None)
 # ---------------------------------------------------------------------------
 
 META_GUIDANCE_SECTION_ID = "meta_guidance"
+
+# Short hook the unified ``tool_meta.token_usage`` block carries back to the
+# resident guidance subsection that explains how to read/act on it. A short
+# sentence (not a bare path) pointing at the ``token_efficiency`` subsection of
+# the ``meta_guidance`` system-prompt section.
+TOKEN_USAGE_GUIDANCE_REF = (
+    f"See {META_GUIDANCE_SECTION_ID}.token_efficiency for details."
+)
 
 
 def build_meta_guidance_ref() -> dict:
@@ -893,16 +910,18 @@ def build_reconstruction_tool_meta(agent) -> dict | None:
     return event
 
 
-def build_tool_meta_token_usage(agent) -> dict | None:
-    """Return a compact provider-round token/cache snapshot for permanent tool_meta.
+def _build_provider_round_token_usage(agent) -> dict:
+    """Return the provider-round half of the unified token_usage block.
 
-    ``SessionManager.latest_token_usage_snapshot()`` keeps the full provider-round
-    record (scope, api-call index/id, cached/context tokens, estimated flag, ...) for
-    internal logging. The object injected into ``_meta.tool_meta.token_usage`` is
-    deliberately compact: only the per-result evidence agents need —
-    ``input``/``cache_miss``/``cache_rate``/``context_usage``/``window``/``output``/
-    ``thinking`` — mapped from the snapshot's long field names. Missing fields are
-    dropped rather than invented; existing numeric zero/sentinel values are preserved.
+    Reads ``SessionManager.latest_token_usage_snapshot()`` — the full
+    provider-round record kept for internal logging (scope, api-call index/id,
+    cached/context tokens, estimated flag, ...) — and projects only the per-result
+    evidence agents need: ``input``/``cache_miss``/``cache_rate``/``context_usage``/
+    ``window``/``output``/``thinking``, mapped from the snapshot's long field names.
+    Noisy/invalid/duplicate fields (scope, api_call_id, context_tokens,
+    context_window-as-duplicate, estimated, the provider-round cached_tokens) are
+    dropped. Missing fields are omitted rather than invented; existing numeric
+    zero/sentinel values are preserved. Returns ``{}`` when no snapshot exists.
     """
     session = getattr(agent, "_session", None)
     snapshot_fn = getattr(session, "latest_token_usage_snapshot", None)
@@ -914,7 +933,7 @@ def build_tool_meta_token_usage(agent) -> dict | None:
     else:
         snapshot = getattr(session, "_latest_token_usage_snapshot", None)
     if not isinstance(snapshot, Mapping):
-        return None
+        return {}
     # Map full snapshot field names -> compact injected keys. Only emit a key
     # when the source field is present, so the injected object stays robust to
     # partial snapshots without inventing values.
@@ -927,12 +946,87 @@ def build_tool_meta_token_usage(agent) -> dict | None:
         ("output", "output_tokens"),
         ("thinking", "thinking_tokens"),
     )
-    compact = {
+    return {
         out_key: snapshot[src_key]
         for out_key, src_key in field_map
         if src_key in snapshot
     }
-    return compact or None
+
+
+def _build_session_token_economy(agent) -> dict:
+    """Return the current-session half of the unified token_usage block.
+
+    Prefers ``agent.get_current_session_token_usage()`` — the CURRENT runtime
+    session deltas (``current_total - session_baseline``), which exclude restored
+    lifetime/persisted totals. Falls back to the lifetime ``agent.get_token_usage()``
+    only when the current-session getter is absent (e.g. older test stubs); the
+    lifetime getter must NOT be the source for live agents, since its restored
+    cumulative totals are exactly the giant numbers this block must avoid.
+
+    Projects the current-session aggregate counters agents act on now:
+    ``session_cache_rate`` (cached/input clamped to a 0-1 fraction), ``api_calls``,
+    ``input_tokens``/``cached_tokens``, and ``avg_input_tokens_per_api_call``,
+    deriving the two rates from the raw counters so the result is consistent
+    regardless of which getter supplied them. Returns ``{}`` when no session usage
+    is available; numeric zeros are preserved.
+    """
+    usage_fn = getattr(agent, "get_current_session_token_usage", None)
+    if not callable(usage_fn):
+        usage_fn = getattr(agent, "get_token_usage", None)
+    if not callable(usage_fn):
+        return {}
+    try:
+        usage = usage_fn()
+    except Exception:
+        return {}
+    if not isinstance(usage, Mapping):
+        return {}
+
+    api_calls = _non_negative_int(usage.get("api_calls"))
+    input_tokens = _non_negative_int(usage.get("input_tokens"))
+    cached_tokens = _non_negative_int(usage.get("cached_tokens"))
+    avg_input = int(round(input_tokens / api_calls)) if api_calls > 0 else 0
+    session_cache_rate = (
+        round(min(cached_tokens / input_tokens, 1.0), 5)
+        if input_tokens > 0
+        else 0.0
+    )
+    return {
+        "session_cache_rate": session_cache_rate,
+        "api_calls": api_calls,
+        "input_tokens": input_tokens,
+        "cached_tokens": cached_tokens,
+        "avg_input_tokens_per_api_call": avg_input,
+    }
+
+
+def build_tool_meta_token_usage(agent) -> dict | None:
+    """Return the unified token diagnostics block for permanent ``tool_meta``.
+
+    Jason's FINAL contract: ALL token-related diagnostics live in ONE flat
+    ``_meta.tool_meta.token_usage`` block — there is no separate
+    ``tool_meta.token_efficiency`` nor ``agent_meta.token_efficiency``. The block
+    has two halves merged into one flat dict:
+
+    * provider-round (per-result evidence): ``input``, ``cache_miss``,
+      ``cache_rate``, ``context_usage``, ``window``, ``output``, ``thinking``.
+    * current-session aggregate: ``session_cache_rate``, ``api_calls``,
+      ``input_tokens``, ``cached_tokens``, ``avg_input_tokens_per_api_call``.
+      These are CURRENT runtime-session deltas (not restored lifetime totals);
+      see :func:`_build_session_token_economy`.
+
+    Each half is emitted only when its source data is available; missing values
+    are omitted, not invented; numeric zero/sentinel values are preserved. When
+    the block exists it always carries a short ``ref`` hook
+    (:data:`TOKEN_USAGE_GUIDANCE_REF`) back to the resident guidance subsection.
+    Returns ``None`` when neither half has any data (never an empty block).
+    """
+    compact = _build_provider_round_token_usage(agent)
+    compact.update(_build_session_token_economy(agent))
+    if not compact:
+        return None
+    compact["ref"] = TOKEN_USAGE_GUIDANCE_REF
+    return compact
 
 def build_meta(agent) -> dict:
     """Return the current meta-data snapshot for the agent.
@@ -951,7 +1045,6 @@ def build_meta(agent) -> dict:
                 "molt": str,                 # optional natural-language sustained-pressure reminder
             },
             "stamina_left_seconds": float,   # session time remaining; -1 if unstarted
-            "token_efficiency": dict,        # optional current_session token economy
             "current_tool_result_chars": dict, # total + top formal tool results >1000 chars
         }
 
@@ -982,8 +1075,6 @@ def build_meta(agent) -> dict:
             pass  # leave dirty; sentinels below
 
     decomp_ran = session is not None and not session._token_decomp_dirty
-    context_tokens_for_efficiency = -1
-    context_window_for_efficiency = -1
 
     if decomp_ran:
         sys_prompt = session._system_prompt_tokens
@@ -1030,8 +1121,6 @@ def build_meta(agent) -> dict:
             limit = agent._config.context_limit or chat_obj.context_window()
         else:
             limit = agent._config.context_limit or 0
-        context_tokens_for_efficiency = system_tokens + history_tokens
-        context_window_for_efficiency = limit if limit > 0 else -1
         usage = (system_tokens + history_tokens) / limit if limit > 0 else -1.0
 
         meta["context"] = {
@@ -1049,14 +1138,6 @@ def build_meta(agent) -> dict:
     molt = build_molt_context(agent, meta["context"].get("usage", -1.0))
     if molt:
         meta["context"]["molt"] = molt
-
-    token_efficiency = build_token_efficiency(
-        agent,
-        context_tokens=context_tokens_for_efficiency,
-        context_window=context_window_for_efficiency,
-    )
-    if token_efficiency:
-        meta["token_efficiency"] = token_efficiency
 
     tool_meta_token_usage = build_tool_meta_token_usage(agent)
     if tool_meta_token_usage:
@@ -1177,12 +1258,21 @@ def build_synthetic_meta_envelope(
     """
     try:
         agent_meta = build_meta(agent)
-        agent_meta.pop(TOOL_META_TOKEN_USAGE_PENDING_KEY, None)
+        # Token diagnostics never ride on agent_meta — pull the unified
+        # token_usage block out of the transit key so it can be stamped onto the
+        # synthetic tool_meta instead (Jason FINAL: all token diagnostics live in
+        # tool_meta.token_usage only).
+        token_usage = agent_meta.pop(TOOL_META_TOKEN_USAGE_PENDING_KEY, None)
     except (AttributeError, TypeError):
         agent_meta = {}
+        token_usage = None
+
+    tool_meta = build_synthetic_tool_meta(call_id)
+    if isinstance(token_usage, dict) and token_usage:
+        tool_meta[TOOL_META_TOKEN_USAGE_KEY] = token_usage
 
     envelope: dict = {
-        TOOL_META_KEY: build_synthetic_tool_meta(call_id),
+        TOOL_META_KEY: tool_meta,
         AGENT_META_KEY: agent_meta,
         GUIDANCE_KEY: build_meta_guidance_ref(),
     }
@@ -1518,8 +1608,8 @@ def attach_active_runtime(
         any notification keys.
       * Promote the latest dict-shaped result's per-tool ``_runtime_pending``
         snapshot (recorded by :func:`stamp_meta`) into ``_meta.agent_meta``
-        (kernel runtime state including ``token_efficiency``, plus
-        ``elapsed_ms`` + ``active_turn_tool_calls``)
+        (kernel runtime state — no token diagnostics, which live in
+        ``tool_meta.token_usage`` — plus ``elapsed_ms`` + ``active_turn_tool_calls``)
         and ``_meta.guidance`` (a lightweight ref to resident ``meta_guidance``,
         whose body is built from the guidance catalog, generated ``meta_readme``,
         and static adapter rules).
@@ -1600,7 +1690,7 @@ def _non_negative_int(value, *, default: int = 0) -> int:
 
 
 def _fallback_context_window(agent) -> int:
-    """Return a best-effort context window for token_efficiency."""
+    """Return a best-effort context window for the reconstruction event."""
     try:
         config_limit = int(getattr(getattr(agent, "_config", None), "context_limit", 0) or 0)
     except Exception:
@@ -1619,56 +1709,3 @@ def _fallback_context_window(agent) -> int:
     except Exception:
         pass
     return -1
-
-
-def build_token_efficiency(
-    agent,
-    *,
-    context_tokens: int = -1,
-    context_window: int = -1,
-) -> dict | None:
-    """Return a compact current-session token economy snapshot for agent_meta.
-
-    The snapshot intentionally mirrors the TUI-facing token counters the agent
-    can act on now.  It reads the live SessionManager through
-    ``agent.get_token_usage()`` and does not reread durable ledgers.
-    """
-    usage_fn = getattr(agent, "get_token_usage", None)
-    if not callable(usage_fn):
-        return None
-    try:
-        usage = usage_fn()
-    except Exception:
-        return None
-    if not isinstance(usage, Mapping):
-        return None
-
-    api_calls = _non_negative_int(usage.get("api_calls"))
-    input_tokens = _non_negative_int(usage.get("input_tokens"))
-    cached_tokens = _non_negative_int(usage.get("cached_tokens"))
-
-    context_tokens_value = _non_negative_int(context_tokens, default=-1)
-    if context_tokens_value < 0:
-        context_tokens_value = _non_negative_int(usage.get("ctx_total_tokens"), default=-1)
-    context_window_value = _non_negative_int(context_window, default=-1)
-    if context_window_value <= 0:
-        context_window_value = _fallback_context_window(agent)
-
-    avg_input = int(round(input_tokens / api_calls)) if api_calls > 0 else 0
-    cache_rate = (
-        round(min(cached_tokens / input_tokens, 1.0), 5)
-        if input_tokens > 0
-        else 0.0
-    )
-
-    return {
-        "scope": "current_session",
-        "api_calls": api_calls,
-        "input_tokens": input_tokens,
-        "cached_tokens": cached_tokens,
-        "cache_rate": cache_rate,
-        "avg_input_tokens_per_api_call": avg_input,
-        "context_tokens": context_tokens_value,
-        "context_window": context_window_value,
-        "guidance_ref": "meta_guidance.token_efficiency",
-    }

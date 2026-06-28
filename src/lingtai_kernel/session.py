@@ -117,6 +117,16 @@ class SessionManager:
         self._total_thinking_tokens = 0
         self._total_cached_tokens = 0
         self._api_calls = 0
+        # Current-runtime-session baselines. The ``_total_*``/``_api_calls``
+        # counters above are CUMULATIVE/lifetime and survive restore; these
+        # baselines mark where the live runtime session began so callers can
+        # compute deltas (current_total - baseline). At a fresh init the live
+        # counters are zero, so the baselines are zero too. On
+        # ``restore_token_state`` they are re-anchored to the restored lifetime
+        # totals so post-restart usage starts counting from zero again.
+        self._session_baseline_input_tokens = 0
+        self._session_baseline_cached_tokens = 0
+        self._session_baseline_api_calls = 0
         self._last_tool_context = "send_message"
         self._system_prompt_tokens = 0
         self._tools_tokens = 0
@@ -629,6 +639,43 @@ class SessionManager:
             "ctx_total_tokens": self._latest_input_tokens,
         }
 
+    def get_current_session_token_usage(self) -> dict:
+        """Return current-runtime-session token usage as DELTAS, not lifetime totals.
+
+        Unlike :meth:`get_token_usage` (which reports the cumulative/persisted
+        ``_total_*``/``_api_calls`` counters that survive ``restore_token_state``),
+        this reports only what the *live* runtime session has accrued since it
+        started — ``current_total - session_baseline`` for ``api_calls``,
+        ``input_tokens`` and ``cached_tokens`` — so restored lifetime totals do
+        not leak into the injected ``tool_meta.token_usage`` session stats.
+
+        ``session_cache_rate`` and ``avg_input_tokens_per_api_call`` are derived
+        from those deltas. All counters are clamped to ``>= 0`` so a restore to
+        lower totals than the live counters can never produce a negative delta.
+        """
+        api_calls = max(0, self._api_calls - self._session_baseline_api_calls)
+        input_tokens = max(
+            0, self._total_input_tokens - self._session_baseline_input_tokens
+        )
+        cached_tokens = max(
+            0, self._total_cached_tokens - self._session_baseline_cached_tokens
+        )
+        session_cache_rate = (
+            round(min(cached_tokens / input_tokens, 1.0), 5)
+            if input_tokens > 0
+            else 0.0
+        )
+        avg_input = (
+            int(round(input_tokens / api_calls)) if api_calls > 0 else 0
+        )
+        return {
+            "api_calls": api_calls,
+            "input_tokens": input_tokens,
+            "cached_tokens": cached_tokens,
+            "session_cache_rate": session_cache_rate,
+            "avg_input_tokens_per_api_call": avg_input,
+        }
+
     # ------------------------------------------------------------------
     # Session persistence
     # ------------------------------------------------------------------
@@ -683,12 +730,22 @@ class SessionManager:
         self.ensure_session()
 
     def restore_token_state(self, state: dict) -> None:
-        """Restore cumulative token counters from a saved session."""
+        """Restore cumulative token counters from a saved session.
+
+        Re-anchors the current-runtime-session baselines to the restored lifetime
+        totals so :meth:`get_current_session_token_usage` deltas start from zero
+        after a refresh/restart — restored cumulative totals are lifetime facts
+        and must not be reported as current-session activity.
+        """
         self._total_input_tokens = state.get("input_tokens", 0)
         self._total_output_tokens = state.get("output_tokens", 0)
         self._total_thinking_tokens = state.get("thinking_tokens", 0)
         self._total_cached_tokens = state.get("cached_tokens", 0)
         self._api_calls = state.get("api_calls", 0)
+        # Re-baseline so post-restore deltas begin at zero.
+        self._session_baseline_input_tokens = self._total_input_tokens
+        self._session_baseline_cached_tokens = self._total_cached_tokens
+        self._session_baseline_api_calls = self._api_calls
 
     # ------------------------------------------------------------------
     # Cleanup
