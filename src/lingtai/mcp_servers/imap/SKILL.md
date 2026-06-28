@@ -26,11 +26,13 @@ descriptions; you do not need to call it before every send.
 
 ## READING: check / read / search
 
-- `check`: list recent envelopes from a folder (optional `folder`, `n`).
+- `check`: list recent envelopes from a folder (optional `folder`, `n`). An
+  empty or whitespace-only `folder` is treated as omitted and defaults to
+  `INBOX`.
 - `read`: fetch full email(s) by `email_id` (a single id or a list). You are
   encouraged to read multiple relevant — or even all unread — emails and think
   before acting.
-- `search`: server-side IMAP search (`query`; optional `folder`). Queries use a server-side search DSL, e.g.
+- `search`: server-side IMAP search (`query`; optional `folder`, empty/whitespace-only defaults to `INBOX`). Queries use a server-side search DSL, e.g.
   `from:addr subject:text unseen since:YYYY-MM-DD`; supported fields depend on
   the IMAP addon, so prefer examples returned by this tool over raw RFC IMAP
   search syntax.
@@ -52,7 +54,11 @@ descriptions; you do not need to call it before every send.
 ## ORGANIZING: move / flag / delete
 
 - `move`: move email(s) to another folder (`email_id`, `folder`=destination).
+  The destination `folder` is required and must be non-empty — unlike
+  check/search it is never defaulted to `INBOX`.
 - `flag`: set/clear flags (`email_id`, `flags={"seen": true, "flagged": false}`).
+  `flags` is required; e.g. `flags={"seen": true}` marks read. A missing or
+  empty `flags` returns an error rather than silently doing nothing.
 - `delete`: delete email(s) by `email_id`.
 
 ## CONTACTS / ACCOUNTS
@@ -63,7 +69,8 @@ descriptions; you do not need to call it before every send.
 - `remove_contact`: remove a contact (`address`).
 - `accounts`: list configured IMAP accounts and connection status. Most actions
   accept an optional `account` (email address); it defaults to the primary
-  account.
+  account. An empty or whitespace-only `account` is treated as omitted and
+  uses the default/sole account rather than failing with `Unknown account`.
 
 ## SIDE EFFECTS & SAFETY
 

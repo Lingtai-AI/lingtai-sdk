@@ -54,6 +54,20 @@ def parse_email_id(email_id: str) -> tuple[str, str, str]:
     return account, folder, uid
 
 
+def _opt_str(value: object) -> str | None:
+    """Normalize an optional string arg: empty/whitespace-only → None.
+
+    LLMs frequently pass ``""`` for an optional field they mean to omit. Treat
+    empty or whitespace-only strings exactly like an absent value so callers
+    fall back to the default (default account, default ``INBOX`` folder).
+    Non-string values are returned unchanged.
+    """
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or None
+    return value
+
+
 # ---------------------------------------------------------------------------
 # Tool schema
 # ---------------------------------------------------------------------------
@@ -78,7 +92,7 @@ SCHEMA = {
                 "search: server-side IMAP search (requires query, optional folder). "
                 "delete: delete email(s) by ID (email_id). "
                 "move: move email(s) to another folder (email_id, folder=destination). "
-                "flag: set/clear flags on email(s) (email_id, flags={flag: bool}). "
+                "flag: set/clear flags on email(s) (email_id, flags={flag: bool}, e.g. flags={'seen': true}). "
                 "folders: list available IMAP folders. "
                 "contacts: list all contacts. "
                 "add_contact: add/update contact (requires address, name; optional note). "
@@ -90,7 +104,11 @@ SCHEMA = {
         },
         "account": {
             "type": "string",
-            "description": "Which account to use (email address). Defaults to the primary account.",
+            "description": (
+                "Which account to use (email address). Optional — an empty or "
+                "whitespace-only string is treated as omitted and defaults to "
+                "the primary account."
+            ),
         },
         "address": {
             "oneOf": [
@@ -133,11 +151,16 @@ SCHEMA = {
         },
         "folder": {
             "type": "string",
-            "description": "IMAP folder name (e.g. INBOX, [Gmail]/Sent Mail). For move: destination folder.",
+            "description": (
+                "IMAP folder name (e.g. INBOX, [Gmail]/Sent Mail). For "
+                "check/search an empty or whitespace-only string is treated as "
+                "omitted and defaults to INBOX. For move this is the "
+                "destination folder and must be a non-empty name."
+            ),
         },
         "flags": {
             "type": "object",
-            "description": "Dict of flag name to bool — e.g. {\"seen\": true, \"flagged\": false}",
+            "description": "Required for flag — dict of flag name to bool, e.g. {\"seen\": true, \"flagged\": false}",
         },
         "name": {
             "type": "string",
@@ -262,11 +285,16 @@ class IMAPMailManager:
         action = args.get("action")
         if action == "manual":
             return self._manual()
-        account = self._service.get_account(args.get("account"))
+        # Treat empty/whitespace-only account exactly like omitted/None so the
+        # default (or sole) account is used instead of failing the lookup.
+        requested_account = _opt_str(args.get("account"))
+        account = self._service.get_account(requested_account)
         if account is None and action != "accounts":
-            return self._inject_meta(
-                {"error": f"Unknown account: {args.get('account')}"}
-            )
+            return self._inject_meta({
+                "status": "error",
+                "error": f"Unknown account: {requested_account}",
+                "requested_account": requested_account,
+            })
 
         dispatch = {
             "send": self._send,
@@ -486,7 +514,8 @@ class IMAPMailManager:
             return {"status": "error", "error": err}
 
     def _check(self, args: dict, account: "IMAPAccount") -> dict:
-        folder = args.get("folder", "INBOX")
+        # Empty/whitespace-only folder is treated like omitted → default INBOX.
+        folder = _opt_str(args.get("folder")) or "INBOX"
         n = args.get("n", 10)
         envelopes = account.fetch_envelopes(folder, n)
         return {"status": "ok", "total": len(envelopes), "emails": envelopes}
@@ -614,7 +643,8 @@ class IMAPMailManager:
         if not query:
             return {"error": "query is required for search"}
 
-        folder = args.get("folder", "INBOX")
+        # Empty/whitespace-only folder is treated like omitted → default INBOX.
+        folder = _opt_str(args.get("folder")) or "INBOX"
         uids = account.search(folder, query)
         if not uids:
             return {"status": "ok", "total": 0, "emails": []}
@@ -640,7 +670,9 @@ class IMAPMailManager:
         ids = self._normalize_email_ids(args)
         if not ids:
             return {"error": "email_id is required"}
-        dest_folder = args.get("folder", "")
+        # Unlike check/search, an empty destination is a hard error for move —
+        # we never silently default the target folder.
+        dest_folder = _opt_str(args.get("folder"))
         if not dest_folder:
             return {"error": "folder (destination) is required for move"}
 
@@ -659,7 +691,14 @@ class IMAPMailManager:
             return {"error": "email_id is required"}
         flags_dict = args.get("flags", {})
         if not flags_dict:
-            return {"error": "flags is required"}
+            return {
+                "status": "error",
+                "error": (
+                    "flags is required for flag — pass a dict mapping flag "
+                    "name to bool, e.g. flags={'seen': true} to mark read or "
+                    "flags={'flagged': false} to clear a star."
+                ),
+            }
 
         # Convert dict of {flag_name: bool} to +FLAGS / -FLAGS calls
         add_flags: list[str] = []

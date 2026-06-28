@@ -8,7 +8,7 @@ Curated MCP server package implementations shipped inside the `lingtai` Python d
 |---|---|
 | `_skill.py` | Shared bundled-skill helper: `load_skill()` loads package `SKILL.md`, `manual_action_description()` injects frontmatter into the schema, and `manual_payload()` returns the manual body + absolute path without sidecar lists (`_skill.py:72-118`). |
 | `telegram/` | Telegram MCP. It predates `_skill.py` and keeps an inline SKILL.md loader/manual payload with the same minimal contract (`telegram/manager.py:40-118`, `telegram/manager.py:1616-1633`). |
-| `imap/`, `feishu/`, `wechat/`, `whatsapp/`, `cloud_mail/` | Curated MCPs using `_skill.py` for their `action="manual"` payloads (`imap/manager.py:294-308`, `feishu/manager.py:454-466`, `wechat/manager.py:504-516`, `whatsapp/manager.py:174-186`, `cloud_mail/manager.py:213-225`). |
+| `imap/`, `feishu/`, `wechat/`, `whatsapp/`, `cloud_mail/` | Curated MCPs using `_skill.py` for their `action="manual"` payloads (`imap/manager.py:322-333`, `feishu/manager.py:454-466`, `wechat/manager.py:504-516`, `whatsapp/manager.py:174-186`, `cloud_mail/manager.py:213-225`). |
 | Per-package `SKILL.md` | The human/agent-facing bundled manual. If a manual has sidecars, the sidecar inventory and relative paths live in this markdown, not in the tool payload. |
 | `pyproject.toml` package-data entries | Ships every curated MCP `SKILL.md`; `reference/**/*` and `assets/**/*` are also packaged for future sidecar files (`pyproject.toml:81-86`). |
 
