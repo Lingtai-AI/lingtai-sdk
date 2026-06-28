@@ -911,8 +911,6 @@ def test_tool_executor_uses_meta_fn_for_stamping():
     assert "_elapsed_ms" not in payload
 
 
-
-
 def test_tool_executor_moves_token_usage_snapshot_to_tool_meta():
     snapshot = {
         "scope": "provider_round",

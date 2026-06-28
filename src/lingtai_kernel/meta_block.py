@@ -892,8 +892,6 @@ def build_reconstruction_tool_meta(agent) -> dict | None:
     return event
 
 
-
-
 def build_tool_meta_token_usage(agent) -> dict | None:
     """Return latest provider-round token/cache usage for permanent tool_meta."""
     session = getattr(agent, "_session", None)

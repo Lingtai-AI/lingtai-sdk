@@ -685,8 +685,6 @@ def test_build_meta_emits_context_fields_when_decomp_ran():
     assert abs(meta["context"]["usage"] - 0.057) < 1e-6
 
 
-
-
 def test_build_meta_carries_latest_token_usage_for_tool_meta_only():
     snapshot = {
         "scope": "provider_round",
@@ -1445,8 +1443,6 @@ def test_attach_active_runtime_counts_current_batch_tool_result_chars():
             "chars": expected,
         }
     ]
-
-
 
 
 def test_attach_active_runtime_does_not_leak_tool_meta_token_usage_to_agent_meta():
