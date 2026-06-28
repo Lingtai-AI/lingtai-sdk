@@ -1,7 +1,6 @@
 """Tests for lingtai_kernel.handshake utility."""
 from __future__ import annotations
 
-import json
 import time
 from pathlib import Path
 
@@ -11,17 +10,21 @@ from lingtai_kernel.handshake import is_agent, is_alive, manifest
 
 
 @pytest.fixture
-def agent_dir(tmp_path):
+def agent_dir(tmp_path, make_agent_dir):
     """Create a minimal agent working directory.
 
     The ``admin`` field MUST be non-null — ``is_alive()`` short-circuits
     True for human pseudo-agents (admin=null), so a manifest without an
     explicit admin block makes every is_alive call return True regardless
-    of heartbeat state.
+    of heartbeat state.  Heartbeat is left off here; the liveness tests
+    write their own with a controlled timestamp.
     """
-    meta = {"agent_id": "abc123", "agent_name": "test", "admin": {}}
-    (tmp_path / ".agent.json").write_text(json.dumps(meta))
-    return tmp_path
+    return make_agent_dir(
+        tmp_path,
+        name="",
+        manifest={"agent_id": "abc123", "agent_name": "test", "admin": {}},
+        heartbeat=False,
+    )
 
 
 def test_is_agent_true(agent_dir):
