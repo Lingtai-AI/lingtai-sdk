@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .workdir import workdir_layout
@@ -381,23 +382,7 @@ def clear_large_result_reminders(agent, tool_call_ids) -> list[str]:
             return []
         kept = [ev for ev in events if not _is_target(ev)]
         try:
-            if kept:
-                from datetime import datetime, timezone
-                payload["header"] = (
-                    f"{len(kept)} system notification"
-                    f"{'s' if len(kept) != 1 else ''}"
-                )
-                payload["published_at"] = datetime.now(timezone.utc).strftime(
-                    "%Y-%m-%dT%H:%M:%SZ"
-                )
-                data = payload.get("data")
-                if not isinstance(data, dict):
-                    data = {}
-                data["events"] = kept
-                payload["data"] = data
-                publish(agent._working_dir, "system", payload)
-            else:
-                clear_with_result(agent._working_dir, "system")
+            _rewrite_system_events_locked(agent, kept, payload=payload)
         except OSError:
             return []
         return [r for r in removed if r]
@@ -411,18 +396,62 @@ def clear_large_result_reminders(agent, tool_call_ids) -> list[str]:
 
     if removed:
         # Pending ACTIVE-state payloads may reference the now-removed events.
-        if hasattr(agent, "_pending_notification_meta"):
-            agent._pending_notification_meta = None
-        if hasattr(agent, "_pending_notification_fp"):
-            agent._pending_notification_fp = None
-        try:
-            agent._log(
-                "large_result_reminder_cleared_by_summarize",
-                removed_ref_ids=removed,
-            )
-        except Exception:
-            pass
+        _invalidate_pending_notification_meta(agent)
+        _safe_log(
+            agent,
+            "large_result_reminder_cleared_by_summarize",
+            removed_ref_ids=removed,
+        )
     return removed
+
+
+def _safe_log(agent, event_type: str, **fields) -> None:
+    """Best-effort agent log helper for dismissal housekeeping."""
+    try:
+        agent._log(event_type, **fields)
+    except Exception:
+        pass
+
+
+def _invalidate_pending_notification_meta(agent) -> None:
+    """Drop pending ACTIVE-state notification metadata after a surface rewrite."""
+    if hasattr(agent, "_pending_notification_meta"):
+        agent._pending_notification_meta = None
+    if hasattr(agent, "_pending_notification_fp"):
+        agent._pending_notification_fp = None
+
+
+def _rewrite_system_events_locked(
+    agent,
+    events: list,
+    *,
+    payload: dict | None = None,
+) -> None:
+    """Rewrite or clear ``system.json`` with the provided retained events.
+
+    Caller owns any required ``_system_notification_lock``.  This helper is only
+    the shared file rewrite mechanic: it preserves the existing system envelope
+    fields, refreshes the count header/timestamp when events remain, and clears
+    the channel when the final event is removed.
+    """
+    if events:
+        if payload is None:
+            payload = {}
+        payload["header"] = (
+            f"{len(events)} system notification"
+            f"{'s' if len(events) != 1 else ''}"
+        )
+        payload["published_at"] = datetime.now(timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            data = {}
+        data["events"] = events
+        payload["data"] = data
+        publish(agent._working_dir, "system", payload)
+    else:
+        clear_with_result(agent._working_dir, "system")
 
 
 def _channel_fingerprint_entry(fp: tuple | None, channel: str) -> tuple | None:
@@ -523,50 +552,29 @@ def _ack_and_remove_large_result_events(
     kept = [ev for ev in all_events if ev not in large_events]
 
     try:
+        current_payload: dict = {}
         if kept:
-            from datetime import datetime, timezone
-            current_payload: dict = {}
             try:
                 target = workdir_layout(agent._working_dir).notification_file("system")
                 current_payload = json.loads(target.read_text(encoding="utf-8"))
             except Exception:
                 pass
-            current_payload["header"] = (
-                f"{len(kept)} system notification"
-                f"{'s' if len(kept) != 1 else ''}"
-            )
-            from datetime import datetime, timezone
-            current_payload["published_at"] = datetime.now(timezone.utc).strftime(
-                "%Y-%m-%dT%H:%M:%SZ"
-            )
-            data = current_payload.get("data")
-            if not isinstance(data, dict):
-                data = {}
-            data["events"] = kept
-            current_payload["data"] = data
-            publish(agent._working_dir, "system", current_payload)
-        else:
-            clear_with_result(agent._working_dir, "system")
+        _rewrite_system_events_locked(agent, kept, payload=current_payload)
     except OSError:
         pass
 
-    if hasattr(agent, "_pending_notification_meta"):
-        agent._pending_notification_meta = None
-    if hasattr(agent, "_pending_notification_fp"):
-        agent._pending_notification_fp = None
+    _invalidate_pending_notification_meta(agent)
 
-    try:
-        agent._log(
-            "large_result_reminder_dismissed",
-            channel=channel,
-            invoked_by=invoked_by,
-            forced=bool(force),
-            acked_ref_ids=sorted(large_ref_ids),
-            event_id=event_id,
-            ref_id=ref_id,
-        )
-    except Exception:
-        pass
+    _safe_log(
+        agent,
+        "large_result_reminder_dismissed",
+        channel=channel,
+        invoked_by=invoked_by,
+        forced=bool(force),
+        acked_ref_ids=sorted(large_ref_ids),
+        event_id=event_id,
+        ref_id=ref_id,
+    )
 
     result = {
         "status": "ok",
@@ -772,21 +780,19 @@ def dismiss_channel(
                         agent._working_dir,
                         {ev.get("ref_id") for ev in large_result_events if isinstance(ev, dict) and ev.get("ref_id")},
                     )
-                    try:
-                        agent._log(
-                            "large_result_reminder_dismissed",
-                            channel=channel,
-                            invoked_by=invoked_by,
-                            forced=bool(force),
-                            acked_ref_ids=sorted(
-                                ev.get("ref_id") for ev in large_result_events
-                                if isinstance(ev, dict) and ev.get("ref_id")
-                            ),
-                            event_id=None,
-                            ref_id=None,
-                        )
-                    except Exception:
-                        pass
+                    _safe_log(
+                        agent,
+                        "large_result_reminder_dismissed",
+                        channel=channel,
+                        invoked_by=invoked_by,
+                        forced=bool(force),
+                        acked_ref_ids=sorted(
+                            ev.get("ref_id") for ev in large_result_events
+                            if isinstance(ev, dict) and ev.get("ref_id")
+                        ),
+                        event_id=None,
+                        ref_id=None,
+                    )
                 except Exception:
                     pass
                 # Fall through to clear the full channel (all events, including large-result).
@@ -821,10 +827,7 @@ def dismiss_channel(
         # Any pending ACTIVE-state payload may contain the dismissed channel.
         # Invalidate after a successful clear attempt; stale refusals above
         # leave newer notification state intact for later delivery.
-        if hasattr(agent, "_pending_notification_meta"):
-            agent._pending_notification_meta = None
-        if hasattr(agent, "_pending_notification_fp"):
-            agent._pending_notification_fp = None
+        _invalidate_pending_notification_meta(agent)
 
         try:
             agent._log(
@@ -960,23 +963,7 @@ def dismiss_channel(
             return result
 
         try:
-            if kept:
-                from datetime import datetime, timezone
-                payload["header"] = (
-                    f"{len(kept)} system notification"
-                    f"{'s' if len(kept) != 1 else ''}"
-                )
-                payload["published_at"] = datetime.now(timezone.utc).strftime(
-                    "%Y-%m-%dT%H:%M:%SZ"
-                )
-                data = payload.get("data")
-                if not isinstance(data, dict):
-                    data = {}
-                data["events"] = kept
-                payload["data"] = data
-                publish(agent._working_dir, "system", payload)
-            else:
-                clear_with_result(agent._working_dir, "system")
+            _rewrite_system_events_locked(agent, kept, payload=payload)
         except OSError as e:
             return {
                 "status": "error",
@@ -985,10 +972,7 @@ def dismiss_channel(
                 "message": str(e),
             }
 
-        if hasattr(agent, "_pending_notification_meta"):
-            agent._pending_notification_meta = None
-        if hasattr(agent, "_pending_notification_fp"):
-            agent._pending_notification_fp = None
+        _invalidate_pending_notification_meta(agent)
 
         try:
             if any(

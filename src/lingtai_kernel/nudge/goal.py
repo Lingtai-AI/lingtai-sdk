@@ -8,11 +8,14 @@ the actual objective and instructions stay in ``goal.json``.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import time
 from typing import Any
 
-from ..notifications import clear_with_result, collect_notifications, publish
+from ..notifications import (
+    _invalidate_pending_notification_meta,
+    _rewrite_system_events_locked,
+    collect_notifications,
+)
 from ..state import AgentState
 
 
@@ -148,18 +151,8 @@ def _clear_goal_reminders_locked(agent, *, keep_ref_id: str | None) -> None:
         return
 
     try:
-        if kept:
-            payload = dict(system) if isinstance(system, dict) else {}
-            data = payload.get("data")
-            if not isinstance(data, dict):
-                data = {}
-            data["events"] = kept
-            payload["data"] = data
-            payload["header"] = f"{len(kept)} system notification{'s' if len(kept) != 1 else ''}"
-            payload["published_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            publish(agent._working_dir, "system", payload)
-        else:
-            clear_with_result(agent._working_dir, "system")
+        payload = dict(system) if isinstance(system, dict) else {}
+        _rewrite_system_events_locked(agent, kept, payload=payload)
     except Exception as e:
         try:
             agent._log("goal_reminder_clear_error", error=str(e)[:200])
@@ -167,10 +160,7 @@ def _clear_goal_reminders_locked(agent, *, keep_ref_id: str | None) -> None:
             pass
         return
 
-    if hasattr(agent, "_pending_notification_meta"):
-        agent._pending_notification_meta = None
-    if hasattr(agent, "_pending_notification_fp"):
-        agent._pending_notification_fp = None
+    _invalidate_pending_notification_meta(agent)
     try:
         agent._log(
             "goal_reminder_cleared",
