@@ -2852,3 +2852,174 @@ def test_daemon_provider_defaults_preserves_codex_auth_path(tmp_path):
     assert out["codex"]["codex_session_anchor"] == str(
         (run_dir.path / "daemon.json").resolve()
     )
+
+
+def _capturing_fake_service(captured, text="daemon done"):
+    """Build a FakeService class that records its init kwargs into *captured*."""
+    class FakeService:
+        def __init__(self, **kwargs):
+            captured["init"] = kwargs
+            self.model = kwargs["model"]
+            self.provider = kwargs["provider"]
+
+        def create_session(self, **kwargs):
+            mock_session = MagicMock()
+            mock_response = MagicMock()
+            mock_response.text = text
+            mock_response.tool_calls = []
+            mock_response.usage = MagicMock(
+                input_tokens=0, output_tokens=0,
+                thinking_tokens=0, cached_tokens=0,
+            )
+            mock_session.send = MagicMock(return_value=mock_response)
+            return mock_session
+
+    return FakeService
+
+
+def test_run_emanation_no_preset_uses_parent_api_key_without_resolver(
+    tmp_path, monkeypatch
+):
+    """No-preset daemon uses the implicit parent preset's direct api_key.
+
+    Jason's effective-preset design: a daemon with no explicit preset runs from
+    the parent's existing LLM configuration as an implicit preset. The parent's
+    already-resolved ``api_key`` is used directly; the daemon execution layer
+    must NOT call the parent's ``_key_resolver`` to derive the primary key — not
+    even when the parent's direct api_key is ``None`` (the prior bespoke
+    fallback resolver path that this change removes). Make the resolver raise so
+    any primary-key resolution attempt fails the test.
+    """
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent.service.provider = "custom"
+    agent.service.model = "glm-5.1"
+    agent.service._base_url = "https://proxy.example/v1"
+    agent.service._context_window = 200000
+
+    def exploding_resolver(provider):
+        raise AssertionError(
+            "daemon must not call parent _key_resolver for the primary key"
+        )
+
+    agent.service._key_resolver = exploding_resolver
+    # No direct api_key on the parent: the old bespoke no-preset branch would
+    # fall back to calling the resolver here. The effective-preset path must not.
+    agent.service._api_key = None
+    agent.service.api_key = None
+    agent.service._provider_defaults = {"custom": {"api_compat": "openai"}}
+
+    captured = {}
+    import lingtai.llm.service as service_mod
+    monkeypatch.setattr(service_mod, "LLMService", _capturing_fake_service(captured))
+
+    mgr = agent.get_capability("daemon")
+    cancel = threading.Event()
+    em_id = "em-implicit"
+    schemas, dispatch = mgr._build_tool_surface(["file"])
+    run_dir = _make_run_dir(agent, em_id=em_id)
+    mgr._emanations[em_id] = {
+        "followup_buffer": "",
+        "followup_lock": threading.Lock(),
+        "run_dir": run_dir,
+    }
+
+    # The resolver raising would surface as an exception here if consulted for
+    # the primary key.
+    result = mgr._run_emanation(em_id, run_dir, schemas, dispatch, "x", cancel)
+
+    assert result == "daemon done"
+    agent.service.create_session.assert_not_called()
+    # Primary key is the parent's direct effective key (None here) — no resolver
+    # fallback. The old branch would have raised by calling the resolver.
+    assert captured["init"]["api_key"] is None
+    # The resolver is still carried for on-demand adapters of *other* providers,
+    # but was never invoked (it would have raised).
+    assert captured["init"]["key_resolver"] is exploding_resolver
+
+
+def test_run_emanation_no_preset_preserves_parent_provider_defaults(
+    tmp_path, monkeypatch
+):
+    """Implicit preset path carries the parent provider_defaults bucket verbatim.
+
+    Includes a field outside the manifest allowlist (``codex_base_urls``) to
+    prove the implicit path forwards the parent bucket directly rather than
+    re-deriving it through ``_llm_defaults_from_manifest``.
+    """
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent.service.provider = "custom"
+    agent.service.model = "glm-5.1"
+    agent.service._base_url = "https://proxy.example/v1"
+    agent.service._context_window = 200000
+    agent.service._key_resolver = lambda provider: "token"
+    agent.service._api_key = "sk-effective"
+    agent.service.api_key = "sk-effective"
+    agent.service._provider_defaults = {
+        "custom": {
+            "api_compat": "openai",
+            "max_rpm": 9,
+            "default_headers": {"x-test": "1"},
+            # Outside the _llm_defaults_from_manifest allowlist on purpose.
+            "codex_base_urls": ["https://a.example", "https://b.example"],
+        }
+    }
+
+    captured = {}
+    import lingtai.llm.service as service_mod
+    monkeypatch.setattr(service_mod, "LLMService", _capturing_fake_service(captured))
+
+    mgr = agent.get_capability("daemon")
+    cancel = threading.Event()
+    em_id = "em-defaults"
+    schemas, dispatch = mgr._build_tool_surface(["file"])
+    run_dir = _make_run_dir(agent, em_id=em_id)
+    mgr._emanations[em_id] = {
+        "followup_buffer": "",
+        "followup_lock": threading.Lock(),
+        "run_dir": run_dir,
+    }
+
+    result = mgr._run_emanation(em_id, run_dir, schemas, dispatch, "x", cancel)
+
+    assert result == "daemon done"
+    # The whole parent bucket survives — including codex_base_urls, which the
+    # manifest allowlist would have dropped (no Codex anchor for non-codex).
+    assert captured["init"]["provider_defaults"] == {
+        "custom": {
+            "api_compat": "openai",
+            "max_rpm": 9,
+            "default_headers": {"x-test": "1"},
+            "codex_base_urls": ["https://a.example", "https://b.example"],
+        }
+    }
+
+
+def test_implicit_parent_preset_llm_does_not_resolve_primary_key(tmp_path):
+    """``_implicit_parent_preset_llm`` reads the parent's effective key directly.
+
+    It must not invoke the parent ``_key_resolver`` to synthesize the implicit
+    preset's primary key — the parent already resolved it at boot.
+    """
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent.service.provider = "anthropic"
+    agent.service.model = "claude-opus-4-8"
+    agent.service._base_url = "https://api.anthropic.com"
+    agent.service._context_window = 200000
+    agent.service.api_key = "sk-effective"
+
+    def exploding_resolver(provider):
+        raise AssertionError("must not resolve the primary key here")
+
+    agent.service._key_resolver = exploding_resolver
+    agent.service._provider_defaults = {"anthropic": {"max_rpm": 5}}
+
+    mgr = agent.get_capability("daemon")
+    preset = mgr._implicit_parent_preset_llm()
+
+    assert preset["provider"] == "anthropic"
+    assert preset["model"] == "claude-opus-4-8"
+    assert preset["api_key"] == "sk-effective"
+    assert preset["base_url"] == "https://api.anthropic.com"
+    assert preset["context_window"] == 200000
+    assert preset["key_resolver"] is exploding_resolver
+    assert preset["_provider_defaults"] == {"max_rpm": 5}
