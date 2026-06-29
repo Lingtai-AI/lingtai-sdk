@@ -1147,6 +1147,42 @@ class DaemonManager:
         )
         return {key: llm[key] for key in keys if key in llm}
 
+    def _implicit_parent_preset_llm(self) -> dict:
+        """Materialize the parent service into an implicit/effective preset.
+
+        A LingTai daemon always runs from an effective preset. When a task does
+        not name one, the parent agent's existing LLM configuration *is* the
+        implicit preset: same provider/model/base_url, the credential the parent
+        actually built its boot adapter with (``parent_service.api_key``), and
+        the parent's own provider-defaults bucket carried through unchanged.
+
+        This deliberately does NOT run fallback key resolution for the daemon's
+        primary key — the parent already resolved that at boot, so the daemon
+        inherits the same effective key directly rather than re-deriving it from
+        a guessed ``{PROVIDER}_API_KEY`` env slot. The parent's ``key_resolver``
+        is still carried so on-demand adapters for *other* providers behave like
+        the parent's; it is never consulted for this preset's primary key.
+
+        Extra non-manifest fields (``key_resolver``, ``context_window``, and the
+        verbatim ``_provider_defaults`` bucket) ride along so the shared preset
+        construction path in ``_run_emanation`` can mirror the parent service.
+        The api_key is never logged or persisted.
+        """
+        parent_service = self._agent.service
+        provider = str(getattr(parent_service, "provider", "")).lower()
+        parent_defaults = getattr(parent_service, "_provider_defaults", {}) or {}
+        return {
+            "provider": parent_service.provider,
+            "model": parent_service.model,
+            "api_key": getattr(parent_service, "api_key", None),
+            "base_url": getattr(parent_service, "_base_url", None),
+            "key_resolver": getattr(parent_service, "_key_resolver", None),
+            "context_window": getattr(parent_service, "_context_window", 1_000_000),
+            # Parent provider defaults carried verbatim (not re-derived through
+            # the manifest key list) so any provider-specific field survives.
+            "_provider_defaults": dict(parent_defaults.get(provider, {})),
+        }
+
     def _build_tool_surface(
         self,
         requested: list[str],
@@ -1456,10 +1492,14 @@ class DaemonManager:
         mark_timeout instead of mark_cancelled. None is allowed for direct-call
         tests and the cancellation defaults to "cancelled" semantics.
 
-        preset_llm: if provided, a dict with keys provider/model/api_key_env/
-        base_url (and optionally api_key) resolved from the preset. A dedicated
-        LLMService is constructed for this emanation instead of reusing
-        self._agent.service.
+        preset_llm: the per-task preset's ``manifest.llm`` block when the task
+        explicitly named a preset (keys provider/model/api_key_env/base_url and
+        optionally api_key). When the task omits ``preset``, the parent agent's
+        existing LLM configuration is used as an implicit/effective preset (see
+        ``_implicit_parent_preset_llm``). Either way a dedicated daemon-scoped
+        LLMService is built from the effective preset — the daemon never reuses
+        ``self._agent.service`` directly and never runs provider-name env-var
+        fallback resolution for its primary key.
         """
         def _exit_cancelled() -> str:
             if timeout_event is not None and timeout_event.is_set():
@@ -1471,60 +1511,49 @@ class DaemonManager:
         if cancel_event.is_set():
             return _exit_cancelled()
 
-        if preset_llm:
-            # Build a dedicated LLM service for this emanation from the preset.
-            from lingtai.llm.service import LLMService
-            from lingtai_kernel.config_resolve import resolve_env
-            api_key = resolve_env(preset_llm.get("api_key"), preset_llm.get("api_key_env"))
-            service = LLMService(
-                provider=preset_llm["provider"],
-                model=preset_llm["model"],
-                api_key=api_key,
-                base_url=preset_llm.get("base_url"),
-                provider_defaults=self._daemon_provider_defaults(
-                    preset_llm["provider"],
-                    self._llm_defaults_from_manifest(preset_llm),
-                    run_dir,
-                ),
-            )
-            effective_model = preset_llm["model"]
+        # A LingTai daemon always runs from an effective preset: the task's
+        # explicit preset if it supplied one, otherwise the parent agent's
+        # current LLM configuration synthesized into an implicit preset. Both
+        # flow through the same daemon-scoped service construction below.
+        effective_preset_llm = preset_llm or self._implicit_parent_preset_llm()
+
+        from lingtai.llm.service import LLMService
+        from lingtai_kernel.config_resolve import resolve_env
+
+        provider = effective_preset_llm["provider"]
+        effective_model = effective_preset_llm["model"]
+        # Primary key: the preset's direct api_key (resolved from its api_key_env
+        # only, never a guessed provider-name slot). For the implicit preset this
+        # is the parent's already-resolved effective key. Never logged/persisted.
+        api_key = resolve_env(
+            effective_preset_llm.get("api_key"),
+            effective_preset_llm.get("api_key_env"),
+        )
+        # Base provider defaults: the implicit preset carries the parent bucket
+        # verbatim; an explicit preset derives them from its manifest.llm fields.
+        # Codex daemons additionally get a per-run cache anchor (set inside
+        # _daemon_provider_defaults) so they don't collide with the parent slot.
+        if "_provider_defaults" in effective_preset_llm:
+            base_defaults = effective_preset_llm["_provider_defaults"]
         else:
-            # No preset: build a fresh daemon-scoped service mirroring the parent
-            # service rather than reusing ``self._agent.service``. Every provider
-            # keeps the parent's provider defaults; Codex additionally gets a
-            # per-run cache anchor (and drops any fixed session id) so this run
-            # gets its own session_id/thread_id/prompt_cache_key triple instead
-            # of colliding with the parent agent's cache slot.
-            from lingtai.llm.service import LLMService
-            parent_service = self._agent.service
-            parent_provider = str(getattr(parent_service, "provider", "")).lower()
-            parent_defaults = getattr(parent_service, "_provider_defaults", {}) or {}
-            parent_key_resolver = getattr(parent_service, "_key_resolver", None)
-            # Prefer the parent's *effective* api_key (the credential it actually
-            # built its boot adapter with) over re-deriving it through the
-            # resolver. The default resolver only reads the canonical
-            # ``{PROVIDER}_API_KEY``, so a parent whose key came from a
-            # noncanonical env slot (e.g. provider=custom + api_key_env=LLM_API_KEY,
-            # or MIMO_1_API_KEY) would otherwise be lost here, leaving the daemon
-            # without a key. The resolver is still passed through below for
-            # on-demand adapters of *other* providers. Never logged.
-            parent_api_key = getattr(parent_service, "api_key", None)
-            if parent_api_key is None and callable(parent_key_resolver):
-                parent_api_key = parent_key_resolver(parent_provider)
-            service = LLMService(
-                provider=parent_service.provider,
-                model=parent_service.model,
-                api_key=parent_api_key,
-                base_url=getattr(parent_service, "_base_url", None),
-                key_resolver=parent_key_resolver,
-                provider_defaults=self._daemon_provider_defaults(
-                    parent_provider,
-                    parent_defaults.get(parent_provider, {}),
-                    run_dir,
-                ),
-                context_window=getattr(parent_service, "_context_window", 1_000_000),
-            )
-            effective_model = parent_service.model
+            base_defaults = self._llm_defaults_from_manifest(effective_preset_llm)
+        service_kwargs = {
+            "provider": provider,
+            "model": effective_model,
+            "api_key": api_key,
+            "base_url": effective_preset_llm.get("base_url"),
+            "provider_defaults": self._daemon_provider_defaults(
+                provider, base_defaults, run_dir,
+            ),
+        }
+        # Implicit-preset-only pass-throughs that mirror the parent service:
+        # the key_resolver (for on-demand adapters of *other* providers — never
+        # the primary key) and the parent's context window.
+        if "key_resolver" in effective_preset_llm:
+            service_kwargs["key_resolver"] = effective_preset_llm["key_resolver"]
+        if "context_window" in effective_preset_llm:
+            service_kwargs["context_window"] = effective_preset_llm["context_window"]
+        service = LLMService(**service_kwargs)
 
         session = service.create_session(
             system_prompt=run_dir.prompt_path.read_text(encoding="utf-8"),
