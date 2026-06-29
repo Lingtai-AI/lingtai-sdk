@@ -15,9 +15,7 @@ from __future__ import annotations
 
 import json
 import os
-import queue
 import re
-import signal
 import subprocess
 import threading
 import time
@@ -38,6 +36,12 @@ from lingtai_kernel.meta_block import build_meta
 from lingtai_kernel.tool_executor import ToolExecutor
 from .run_dir import DaemonRunDir
 from .claude_interactive import ClaudeInteractiveError, run_claude_interactive
+from .runtime import (
+    kill_process_group as _kill_process_group,
+    iter_stdout_with_deadline as _iter_stdout_with_deadline,
+    mark_cancelled_or_timeout as _mark_cancelled_or_timeout,
+    spawn_stderr_drainer as _spawn_stderr_drainer,
+)
 
 PROVIDERS = {"providers": [], "default": "builtin"}
 
@@ -46,100 +50,6 @@ PROVIDERS = {"providers": [], "default": "builtin"}
 # larger values are capped here.
 DEFAULT_MAX_TURNS = 1000
 _DAEMON_SKILL_FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?\n)---\s*\n", re.DOTALL)
-
-
-def _kill_process_group(proc: subprocess.Popen) -> None:
-    """Terminate the entire process group for *proc*, then force-kill if needed.
-
-    Requires *proc* to have been started with ``start_new_session=True`` so
-    that its PGID equals its own PID.  Sends SIGTERM to the group, waits up
-    to 5 seconds, then escalates to SIGKILL for any survivors.
-
-    Uses ``proc.pid`` directly as the PGID (since ``start_new_session=True``
-    guarantees PGID == PID) to avoid a ``getpgid`` round-trip that could
-    race with PID recycling.
-
-    Silently ignores ``ProcessLookupError`` (process already dead) and
-    ``OSError`` (permission denied on already-dead group).
-    """
-    # start_new_session=True guarantees pgid == pid
-    pgid = proc.pid
-    try:
-        os.killpg(pgid, signal.SIGTERM)
-    except (ProcessLookupError, OSError):
-        pass
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(pgid, signal.SIGKILL)
-        except (ProcessLookupError, OSError):
-            pass
-        try:
-            proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            pass
-
-# Sentinel placed on the stdout-reader queue when the background reader
-# thread observes EOF on the subprocess pipe. The consumer treats this as
-# "no more lines will ever arrive — stop draining."
-_STDOUT_EOF = object()
-
-
-def _iter_stdout_with_deadline(
-    proc: subprocess.Popen,
-    deadline: float,
-    thread_name: str,
-):
-    """Yield stdout lines from *proc* until EOF, deadline, or process exit.
-
-    The fundamental problem this solves: ``for line in proc.stdout`` blocks
-    the caller's thread until the subprocess writes a newline. If the
-    resumed CLI hangs without producing output, the caller can never
-    observe the deadline. We work around it by pushing the blocking
-    read onto a small daemon thread that drops each line into a queue,
-    while the caller pulls from the queue with ``timeout=remaining``.
-
-    Yields raw lines (with trailing ``\\n`` preserved, matching the
-    original iterator semantics). Stops iterating when:
-      - the reader thread reports EOF (sentinel arrives), OR
-      - ``time.monotonic() >= deadline`` (caller is expected to
-        ``_kill_process_group`` after handling timeout — we do NOT do
-        it here so the worker can record timeout state first).
-
-    The reader thread is a daemon thread (won't block process exit) and
-    is left orphaned if the deadline fires — it will exit naturally once
-    the subprocess is killed and its pipe closes.
-    """
-    q: "queue.Queue[object]" = queue.Queue(maxsize=1024)
-
-    def _reader():
-        try:
-            assert proc.stdout is not None
-            for raw_line in proc.stdout:
-                q.put(raw_line)
-        except (ValueError, OSError):
-            # Pipe closed mid-read (e.g. after _kill_process_group). Treat
-            # as EOF — the consumer either already noticed the timeout or
-            # is about to.
-            pass
-        finally:
-            q.put(_STDOUT_EOF)
-
-    reader = threading.Thread(target=_reader, daemon=True, name=thread_name)
-    reader.start()
-
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return  # caller handles timeout (kill + mark)
-        try:
-            item = q.get(timeout=min(remaining, 0.5))
-        except queue.Empty:
-            continue  # re-check deadline
-        if item is _STDOUT_EOF:
-            return
-        yield item
 
 
 # Tools emanations can never use (no recursion, no spawning, no identity mutation)
@@ -1501,15 +1411,8 @@ class DaemonManager:
         ``self._agent.service`` directly and never runs provider-name env-var
         fallback resolution for its primary key.
         """
-        def _exit_cancelled() -> str:
-            if timeout_event is not None and timeout_event.is_set():
-                run_dir.mark_timeout()
-            else:
-                run_dir.mark_cancelled()
-            return "[cancelled]"
-
         if cancel_event.is_set():
-            return _exit_cancelled()
+            return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
         # A LingTai daemon always runs from an effective preset: the task's
         # explicit preset if it supplied one, otherwise the parent agent's
@@ -1628,7 +1531,7 @@ class DaemonManager:
             effective_max_turns = max_turns if max_turns is not None else self._max_turns
             while response.tool_calls and turns < effective_max_turns:
                 if cancel_event.is_set():
-                    return _exit_cancelled()
+                    return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
                 # Intermediate text is already persisted in chat_history via
                 # bump_turn(); do not inject daemon progress as parent requests.
@@ -1749,15 +1652,8 @@ class DaemonManager:
         Falls back to the legacy JSONL scan if no ``session_id`` ever
         appears in the stream.
         """
-        def _exit_cancelled() -> str:
-            if timeout_event is not None and timeout_event.is_set():
-                run_dir.mark_timeout()
-            else:
-                run_dir.mark_cancelled()
-            return "[cancelled]"
-
         if cancel_event.is_set():
-            return _exit_cancelled()
+            return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
         # Required infrastructure flags come first; free-form
         # backend_options sit between them and the task prompt so the
@@ -1805,24 +1701,10 @@ class DaemonManager:
         # the run dir even while the main thread is parsing stdout events.
         # iLink-style daemons with a chatty stderr would otherwise block
         # the pipe and stall the process.
-        stderr_lines: list[str] = []
-
-        def _drain_stderr() -> None:
-            assert proc.stderr is not None
-            for line in proc.stderr:
-                stripped = line.rstrip("\n")
-                if not stripped:
-                    continue
-                stderr_lines.append(stripped)
-                try:
-                    run_dir.record_cli_output(stripped, stream="stderr")
-                except Exception:
-                    pass
-
-        stderr_thread = threading.Thread(
-            target=_drain_stderr, daemon=True, name=f"daemon-claude-stderr-{em_id}",
+        stderr_thread = _spawn_stderr_drainer(
+            proc, run_dir, thread_name=f"daemon-claude-stderr-{em_id}",
         )
-        stderr_thread.start()
+        stderr_lines = stderr_thread.lines
 
         final_result_text: str | None = None
         final_is_error: bool = False
@@ -1834,13 +1716,10 @@ class DaemonManager:
 
         def _store_session_id(sid: str) -> None:
             nonlocal session_id_captured
-            if session_id_captured == sid:
-                return
-            session_id_captured = sid
-            run_dir._state["claude_session_id"] = sid
-            run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
-            self._log("daemon_claude_code_session",
-                      em_id=em_id, session_id=sid)
+            if run_dir.set_session_id("claude_session_id", sid, overwrite=True):
+                session_id_captured = sid
+                self._log("daemon_claude_code_session",
+                          em_id=em_id, session_id=sid)
 
         def _handle_assistant_event(event: dict) -> None:
             message = event.get("message") or {}
@@ -1895,7 +1774,7 @@ class DaemonManager:
             for raw_line in proc.stdout:
                 if cancel_event.is_set():
                     _kill_process_group(proc)
-                    return _exit_cancelled()
+                    return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
                 line = raw_line.rstrip("\n")
                 if not line:
@@ -2022,15 +1901,8 @@ class DaemonManager:
         and read Claude's transcript JSONL for the daemon result.  It does not
         mutate Claude's global config and refuses credential/trust automation.
         """
-        def _exit_cancelled() -> str:
-            if timeout_event is not None and timeout_event.is_set():
-                run_dir.mark_timeout()
-            else:
-                run_dir.mark_cancelled()
-            return "[cancelled]"
-
         if cancel_event.is_set():
-            return _exit_cancelled()
+            return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
         try:
             result = run_claude_interactive(
@@ -2052,7 +1924,7 @@ class DaemonManager:
             raise
 
         if cancel_event.is_set():
-            return _exit_cancelled()
+            return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
         text = (result.final_text or "").strip() or "[no output]"
         run_dir.mark_done(text)
@@ -2091,15 +1963,8 @@ class DaemonManager:
           is visible to the agent via ``daemon(check)`` but not via
           ``sum_token_ledger``.
         """
-        def _exit_cancelled() -> str:
-            if timeout_event is not None and timeout_event.is_set():
-                run_dir.mark_timeout()
-            else:
-                run_dir.mark_cancelled()
-            return "[cancelled]"
-
         if cancel_event.is_set():
-            return _exit_cancelled()
+            return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
         cmd = [
             "codex",
@@ -2131,24 +1996,10 @@ class DaemonManager:
             raise exc
         self._register_cli_proc(proc, group_id=run_dir.group_id)
 
-        stderr_lines: list[str] = []
-
-        def _drain_stderr() -> None:
-            assert proc.stderr is not None
-            for line in proc.stderr:
-                stripped = line.rstrip("\n")
-                if not stripped:
-                    continue
-                stderr_lines.append(stripped)
-                try:
-                    run_dir.record_cli_output(stripped, stream="stderr")
-                except Exception:
-                    pass
-
-        stderr_thread = threading.Thread(
-            target=_drain_stderr, daemon=True, name=f"daemon-codex-stderr-{em_id}",
+        stderr_thread = _spawn_stderr_drainer(
+            proc, run_dir, thread_name=f"daemon-codex-stderr-{em_id}",
         )
-        stderr_thread.start()
+        stderr_lines = stderr_thread.lines
 
         session_id_captured: str | None = None
         agent_message_texts: list[str] = []
@@ -2156,19 +2007,16 @@ class DaemonManager:
 
         def _store_session_id(sid: str) -> None:
             nonlocal session_id_captured
-            if session_id_captured == sid:
-                return
-            session_id_captured = sid
-            run_dir._state["codex_session_id"] = sid
-            run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
-            self._log("daemon_codex_session", em_id=em_id, session_id=sid)
+            if run_dir.set_session_id("codex_session_id", sid, overwrite=True):
+                session_id_captured = sid
+                self._log("daemon_codex_session", em_id=em_id, session_id=sid)
 
         try:
             assert proc.stdout is not None
             for raw_line in proc.stdout:
                 if cancel_event.is_set():
                     _kill_process_group(proc)
-                    return _exit_cancelled()
+                    return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
                 line = raw_line.rstrip("\n")
                 if not line:
@@ -3988,15 +3836,8 @@ class DaemonManager:
         See ``_opencode_extract_text`` / ``_opencode_extract_session_id``
         for the shapes accepted.
         """
-        def _exit_cancelled() -> str:
-            if timeout_event is not None and timeout_event.is_set():
-                run_dir.mark_timeout()
-            else:
-                run_dir.mark_cancelled()
-            return "[cancelled]"
-
         if cancel_event.is_set():
-            return _exit_cancelled()
+            return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
         prompt = self._build_opencode_prompt(task)
 
@@ -4030,25 +3871,10 @@ class DaemonManager:
             raise exc
         self._register_cli_proc(proc, group_id=run_dir.group_id)
 
-        stderr_lines: list[str] = []
-
-        def _drain_stderr() -> None:
-            assert proc.stderr is not None
-            for line in proc.stderr:
-                stripped = line.rstrip("\n")
-                if not stripped:
-                    continue
-                stderr_lines.append(stripped)
-                try:
-                    run_dir.record_cli_output(stripped, stream="stderr")
-                except Exception:
-                    pass
-
-        stderr_thread = threading.Thread(
-            target=_drain_stderr, daemon=True,
-            name=f"daemon-{backend_name}-stderr-{em_id}",
+        stderr_thread = _spawn_stderr_drainer(
+            proc, run_dir, thread_name=f"daemon-{backend_name}-stderr-{em_id}",
         )
-        stderr_thread.start()
+        stderr_lines = stderr_thread.lines
 
         session_id_captured: str | None = None
         text_chunks: list[str] = []
@@ -4058,24 +3884,19 @@ class DaemonManager:
 
         def _store_session_id(sid: str) -> None:
             nonlocal session_id_captured
-            if not sid:
-                return
             # The session id is established by the first session-shaped header.
             # Later OpenCode-family/Oh-My-Pi events may carry their own event ids;
-            # do not let those overwrite a working resume id.
-            if session_id_captured:
-                return
-            session_id_captured = sid
-            run_dir._state[session_state_key] = sid
-            run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
-            self._log(f"daemon_{backend_name}_session", em_id=em_id, session_id=sid)
+            # do not let those overwrite a working resume id (overwrite=False).
+            if run_dir.set_session_id(session_state_key, sid, overwrite=False):
+                session_id_captured = sid
+                self._log(f"daemon_{backend_name}_session", em_id=em_id, session_id=sid)
 
         try:
             assert proc.stdout is not None
             for raw_line in proc.stdout:
                 if cancel_event.is_set():
                     _kill_process_group(proc)
-                    return _exit_cancelled()
+                    return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
                 line = raw_line.rstrip("\n")
                 if not line:
@@ -4232,15 +4053,8 @@ class DaemonManager:
         recorded verbatim and ``daemon(action='ask')`` is intentionally
         unsupported for this backend.
         """
-        def _exit_cancelled() -> str:
-            if timeout_event is not None and timeout_event.is_set():
-                run_dir.mark_timeout()
-            else:
-                run_dir.mark_cancelled()
-            return "[cancelled]"
-
         if cancel_event.is_set():
-            return _exit_cancelled()
+            return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
         prompt = self._build_qwen_code_prompt(task)
         cmd = ["qwen", "--yolo"]
@@ -4269,32 +4083,17 @@ class DaemonManager:
         self._register_cli_proc(proc, group_id=run_dir.group_id)
 
         stdout_lines: list[str] = []
-        stderr_lines: list[str] = []
-
-        def _drain_stderr() -> None:
-            assert proc.stderr is not None
-            for line in proc.stderr:
-                stripped = line.rstrip("\n")
-                if not stripped:
-                    continue
-                stderr_lines.append(stripped)
-                try:
-                    run_dir.record_cli_output(stripped, stream="stderr")
-                except Exception:
-                    pass
-
-        stderr_thread = threading.Thread(
-            target=_drain_stderr, daemon=True,
-            name=f"daemon-qwen-code-stderr-{em_id}",
+        stderr_thread = _spawn_stderr_drainer(
+            proc, run_dir, thread_name=f"daemon-qwen-code-stderr-{em_id}",
         )
-        stderr_thread.start()
+        stderr_lines = stderr_thread.lines
 
         try:
             assert proc.stdout is not None
             for raw_line in proc.stdout:
                 if cancel_event.is_set():
                     _kill_process_group(proc)
-                    return _exit_cancelled()
+                    return _mark_cancelled_or_timeout(run_dir, timeout_event)
                 line = raw_line.rstrip("\n")
                 if not line:
                     continue
@@ -4615,15 +4414,8 @@ class DaemonManager:
         The first event carrying a session-id-shaped field is stored in
         daemon.json under ``cursor_session_id`` for ``daemon(action='ask')``.
         """
-        def _exit_cancelled() -> str:
-            if timeout_event is not None and timeout_event.is_set():
-                run_dir.mark_timeout()
-            else:
-                run_dir.mark_cancelled()
-            return "[cancelled]"
-
         if cancel_event.is_set():
-            return _exit_cancelled()
+            return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
         prompt = self._build_cursor_prompt(task)
         cmd = [
@@ -4656,25 +4448,10 @@ class DaemonManager:
             raise exc
         self._register_cli_proc(proc, group_id=run_dir.group_id)
 
-        stderr_lines: list[str] = []
-
-        def _drain_stderr() -> None:
-            assert proc.stderr is not None
-            for line in proc.stderr:
-                stripped = line.rstrip("\n")
-                if not stripped:
-                    continue
-                stderr_lines.append(stripped)
-                try:
-                    run_dir.record_cli_output(stripped, stream="stderr")
-                except Exception:
-                    pass
-
-        stderr_thread = threading.Thread(
-            target=_drain_stderr, daemon=True,
-            name=f"daemon-cursor-stderr-{em_id}",
+        stderr_thread = _spawn_stderr_drainer(
+            proc, run_dir, thread_name=f"daemon-cursor-stderr-{em_id}",
         )
-        stderr_thread.start()
+        stderr_lines = stderr_thread.lines
 
         session_id_captured: str | None = None
         text_chunks: list[str] = []
@@ -4684,19 +4461,16 @@ class DaemonManager:
 
         def _store_session_id(sid: str) -> None:
             nonlocal session_id_captured
-            if not sid or session_id_captured == sid:
-                return
-            session_id_captured = sid
-            run_dir._state["cursor_session_id"] = sid
-            run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
-            self._log("daemon_cursor_session", em_id=em_id, session_id=sid)
+            if run_dir.set_session_id("cursor_session_id", sid, overwrite=True):
+                session_id_captured = sid
+                self._log("daemon_cursor_session", em_id=em_id, session_id=sid)
 
         try:
             assert proc.stdout is not None
             for raw_line in proc.stdout:
                 if cancel_event.is_set():
                     _kill_process_group(proc)
-                    return _exit_cancelled()
+                    return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
                 line = raw_line.rstrip("\n")
                 if not line:
