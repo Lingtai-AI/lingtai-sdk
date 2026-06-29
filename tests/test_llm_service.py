@@ -1,6 +1,7 @@
 """Tests for lingtai.llm.service."""
 
 import inspect
+import os
 
 from lingtai.llm.service import LLMService
 
@@ -103,3 +104,95 @@ def test_build_provider_defaults_skips_none_api_compat():
         max_rpm=60,
     )
     assert out == {"openai": {"max_rpm": 60}}
+
+
+# ---------------------------------------------------------------------------
+# Effective api_key memory (daemon credential inheritance, Lingtai-AI/lingtai)
+#
+# A parent agent on a preset/custom endpoint resolves its api_key from a
+# *noncanonical* env slot (e.g. provider=custom with api_key_env=LLM_API_KEY)
+# and passes it directly to LLMService(api_key=...). The default key_resolver
+# only ever reads the canonical {PROVIDER}_API_KEY (CUSTOM_API_KEY), so an
+# inheriting caller (the no-preset daemon path) that re-derives the key via
+# parent_service._key_resolver(provider) loses it. LLMService must therefore
+# remember the direct key handed to its boot adapter.
+# ---------------------------------------------------------------------------
+
+
+def _register_recording_adapter(provider: str):
+    """Register a hermetic adapter that records its construction kwargs.
+
+    Returns the list the factory appends a (kwargs) dict to on each build, so
+    a test can assert on what api_key/base_url the boot adapter received
+    without touching real provider wiring.
+    """
+    calls: list[dict] = []
+
+    def _factory(**kwargs):
+        calls.append(kwargs)
+        return object()  # opaque adapter — service never calls into it here
+
+    LLMService.register_adapter(provider, _factory)
+    return calls
+
+
+def test_direct_api_key_remembered_as_effective_key(monkeypatch):
+    """A directly-supplied api_key is remembered, even from a noncanonical env.
+
+    Mirrors a parent on provider=custom whose key came from LLM_API_KEY: the
+    canonical CUSTOM_API_KEY is absent, the resolver would return None, but the
+    service was handed a real key and must expose it for daemon inheritance.
+    """
+    monkeypatch.delenv("CUSTOM_API_KEY", raising=False)
+    _register_recording_adapter("custom")
+
+    svc = LLMService(
+        provider="custom",
+        model="glm-5.1",
+        api_key="sk-from-noncanonical-LLM_API_KEY",
+        base_url="https://proxy.example/v1",
+        key_resolver=lambda p: os.environ.get(f"{p.upper()}_API_KEY"),
+    )
+
+    assert svc.api_key == "sk-from-noncanonical-LLM_API_KEY"
+    # base_url/provider/model unchanged by this fix.
+    assert svc.provider == "custom"
+    assert svc.model == "glm-5.1"
+    assert svc._base_url == "https://proxy.example/v1"
+
+
+def test_api_key_property_does_not_call_resolver_when_no_direct_key(monkeypatch):
+    """The api_key property is direct-only; daemon falls back to resolver itself."""
+
+    _register_recording_adapter("custom")
+    calls: list[str] = []
+
+    def resolver(provider: str) -> str:
+        calls.append(provider)
+        return "sk-canonical"
+
+    svc = LLMService(
+        provider="custom",
+        model="glm-5.1",
+        key_resolver=resolver,
+    )
+
+    assert svc.api_key is None
+    assert calls == []
+
+
+def test_direct_api_key_reaches_boot_adapter_unchanged(monkeypatch):
+    """Adapter-creation semantics intact: the boot adapter still gets the key."""
+    monkeypatch.delenv("CUSTOM_API_KEY", raising=False)
+    calls = _register_recording_adapter("custom")
+
+    LLMService(
+        provider="custom",
+        model="glm-5.1",
+        api_key="sk-direct",
+        base_url="https://proxy.example/v1",
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["api_key"] == "sk-direct"
+    assert calls[0]["base_url"] == "https://proxy.example/v1"

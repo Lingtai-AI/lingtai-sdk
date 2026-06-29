@@ -1500,11 +1500,17 @@ class DaemonManager:
             parent_provider = str(getattr(parent_service, "provider", "")).lower()
             parent_defaults = getattr(parent_service, "_provider_defaults", {}) or {}
             parent_key_resolver = getattr(parent_service, "_key_resolver", None)
-            parent_api_key = (
-                parent_key_resolver(parent_provider)
-                if callable(parent_key_resolver)
-                else None
-            )
+            # Prefer the parent's *effective* api_key (the credential it actually
+            # built its boot adapter with) over re-deriving it through the
+            # resolver. The default resolver only reads the canonical
+            # ``{PROVIDER}_API_KEY``, so a parent whose key came from a
+            # noncanonical env slot (e.g. provider=custom + api_key_env=LLM_API_KEY,
+            # or MIMO_1_API_KEY) would otherwise be lost here, leaving the daemon
+            # without a key. The resolver is still passed through below for
+            # on-demand adapters of *other* providers. Never logged.
+            parent_api_key = getattr(parent_service, "api_key", None)
+            if parent_api_key is None and callable(parent_key_resolver):
+                parent_api_key = parent_key_resolver(parent_provider)
             service = LLMService(
                 provider=parent_service.provider,
                 model=parent_service.model,
