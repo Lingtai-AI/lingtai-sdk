@@ -79,6 +79,20 @@ def check(agent) -> None:
         return
 
     if info.installed_version != info.running_version:
+        # Only emit the version-mismatch nudge once per version pair.
+        # Without this guard, the check re-emits every 60 seconds;
+        # when the agent dismisses the notification (deleting nudge.json),
+        # the next tick re-creates it, changing the notification fingerprint
+        # and triggering an endless wake loop ("nudge storm") that starves
+        # real work — including incoming email processing.
+        mismatch_key = f"{info.running_version}->{info.installed_version}"
+        persistent = _load_persistent_state(agent)
+        kernel_state = persistent.setdefault(_KIND, {})
+        if kernel_state.get("emitted_for_mismatch") == mismatch_key:
+            return
+        kernel_state["emitted_for_mismatch"] = mismatch_key
+        _save_persistent_state(agent, persistent)
+
         upsert(
             agent,
             _KIND,
@@ -115,6 +129,14 @@ def check(agent) -> None:
 
     persistent = _load_persistent_state(agent)
     kernel_state = persistent.setdefault(_KIND, {})
+
+    # Versions match — clear any stale mismatch tracking so a future
+    # mismatch (e.g. another upgrade) will emit the nudge again.
+    if kernel_state.pop("emitted_for_mismatch", None) is not None:
+        from . import remove
+        remove(agent, _KIND)
+        _save_persistent_state(agent, persistent)
+
     today = _today_utc()
     if not _remote_check_due(kernel_state, info.installed_version, today):
         return
