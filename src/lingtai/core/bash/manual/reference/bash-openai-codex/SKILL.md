@@ -9,6 +9,7 @@ description: >
   configuration.
 version: 1.0.1
 tags: [cli, code, delegation, openai, codex]
+last_changed_at: "2026-06-13T04:41:27-07:00"
 ---
 
 # OpenAI Codex CLI

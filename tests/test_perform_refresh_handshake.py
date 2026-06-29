@@ -306,7 +306,7 @@ def test_perform_refresh_watcher_marks_env_file_overwrite(tmp_path):
 
 def test_refresh_watcher_script_cleans_stale_duplicate_process(tmp_path):
     """Production incident 2026-06-04: refresh watcher relaunches can be
-    blocked by a stale `lingtai run <agent-dir>` process. The watcher script
+    blocked by a stale LingTai run process. The watcher script
     must detect the duplicate-process guard stderr and terminate only a stale
     same-agent process (no fresh heartbeat) before retrying.
     """
@@ -320,7 +320,8 @@ def test_refresh_watcher_script_cleans_stale_duplicate_process(tmp_path):
     script = args[0][2]
     assert "another lingtai agent is already running" in script
     assert "def _cleanup_stale_duplicate" in script
-    assert "('lingtai run ' + wd) in cmdline" in script
+    assert "def match_agent_run" in script
+    assert "match_agent_run(cmdline, wd) is not None" in script
     assert "heartbeat_age" in script
     assert "signal.SIGTERM" in script
     assert "signal.SIGKILL" in script
@@ -586,15 +587,11 @@ def test_refresh_watcher_cleanup_then_success_does_not_write_failure_alert(tmp_p
     """
     agent = _make_agent_with_launch_cmd(tmp_path)
     wd = agent._working_dir
+    fake_console = tmp_path / "lingtai-agent"
+    fake_console.write_text("#!/bin/sh\nsleep 60\n", encoding="utf-8")
+    fake_console.chmod(0o755)
     duplicate = subprocess.Popen(
-        [
-            sys.executable,
-            "-c",
-            "import time; time.sleep(60)",
-            "lingtai",
-            "run",
-            str(wd),
-        ],
+        [str(fake_console), "run", str(wd)],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

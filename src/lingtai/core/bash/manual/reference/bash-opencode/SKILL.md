@@ -9,6 +9,7 @@ description: >
   coding tasks from bash.
 version: 1.0.0
 tags: [cli, code, delegation, opencode, automation]
+last_changed_at: "2026-06-13T04:32:46-07:00"
 ---
 
 # OpenCode CLI — Local Coding Agent

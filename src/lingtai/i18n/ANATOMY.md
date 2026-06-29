@@ -1,3 +1,18 @@
+---
+related_files:
+  - src/lingtai/ANATOMY.md
+  - src/lingtai/i18n/__init__.py
+  - src/lingtai/i18n/en.json
+  - src/lingtai/i18n/wen.json
+  - src/lingtai/i18n/zh.json
+  - src/lingtai_kernel/i18n/ANATOMY.md
+maintenance: |
+  Keep related_files as repo-relative paths to real files. Include neighboring
+  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
+  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
+  maintenance field. If you notice drift between this anatomy and the code,
+  report it. See lingtai-dev-guide for details.
+---
 # src/lingtai/i18n/
 
 Wrapper-side i18n loader — language-aware string tables for lingtai capabilities, with kernel-level key injection.

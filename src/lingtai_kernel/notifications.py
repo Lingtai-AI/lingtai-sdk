@@ -24,6 +24,8 @@ import json
 import re
 from pathlib import Path
 
+from .workdir import workdir_layout
+
 
 _CHANNEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
@@ -233,7 +235,7 @@ def notification_fingerprint(workdir: Path) -> tuple:
     equivalent JSON with different whitespace or key order is still considered
     changed.
     """
-    notif_dir = workdir / ".notification"
+    notif_dir = workdir_layout(workdir).notification_dir
     if not notif_dir.is_dir():
         return ()
     entries = []
@@ -260,7 +262,7 @@ def collect_notifications(workdir: Path) -> dict:
     producer should not break the agent.  (Producer authors see the
     skip in their own logs and fix.)
     """
-    notif_dir = workdir / ".notification"
+    notif_dir = workdir_layout(workdir).notification_dir
     if not notif_dir.is_dir():
         return {}
     out = {}
@@ -285,9 +287,10 @@ def publish(workdir: Path, tool_name: str, payload: dict) -> None:
     rename`` makes the rename appear atomically to readers.
     """
     validate_allowed_channel(tool_name)
-    notif_dir = workdir / ".notification"
+    layout = workdir_layout(workdir)
+    notif_dir = layout.notification_dir
     notif_dir.mkdir(exist_ok=True)
-    target = notif_dir / f"{tool_name}.json"
+    target = layout.notification_file(tool_name)
     tmp = target.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     tmp.rename(target)
@@ -301,7 +304,7 @@ def clear(workdir: Path, tool_name: str) -> None:
     the kernel's next sync tick will strip the wire's notification block.
     """
     validate_allowed_channel(tool_name)
-    target = workdir / ".notification" / f"{tool_name}.json"
+    target = workdir_layout(workdir).notification_file(tool_name)
     try:
         target.unlink()
     except (FileNotFoundError, OSError):
@@ -316,7 +319,7 @@ def clear_with_result(workdir: Path, channel: str) -> bool:
     so agent-facing dismiss can surface honest failures.
     """
     validate_allowed_channel(channel)
-    target = workdir / ".notification" / f"{channel}.json"
+    target = workdir_layout(workdir).notification_file(channel)
     try:
         target.unlink()
     except FileNotFoundError:
@@ -352,7 +355,7 @@ def clear_large_result_reminders(agent, tool_call_ids) -> list[str]:
     if not wanted_ref_ids:
         return []
 
-    target = agent._working_dir / ".notification" / "system.json"
+    target = workdir_layout(agent._working_dir).notification_file("system")
 
     def _do_clear() -> list[str]:
         try:
@@ -524,7 +527,7 @@ def _ack_and_remove_large_result_events(
             from datetime import datetime, timezone
             current_payload: dict = {}
             try:
-                target = agent._working_dir / ".notification" / "system.json"
+                target = workdir_layout(agent._working_dir).notification_file("system")
                 current_payload = json.loads(target.read_text(encoding="utf-8"))
             except Exception:
                 pass
@@ -728,7 +731,7 @@ def dismiss_channel(
             large_result_events: list = []
             all_events: list = []
             try:
-                payload = json.loads((agent._working_dir / ".notification" / "system.json").read_text(encoding="utf-8"))
+                payload = json.loads(workdir_layout(agent._working_dir).notification_file("system").read_text(encoding="utf-8"))
                 data_obj = payload.get("data") if isinstance(payload, dict) else {}
                 events = data_obj.get("events", []) if isinstance(data_obj, dict) else []
                 all_events = events if isinstance(events, list) else []
@@ -876,7 +879,7 @@ def dismiss_channel(
                         current=current,
                     )
 
-        target = agent._working_dir / ".notification" / "system.json"
+        target = workdir_layout(agent._working_dir).notification_file("system")
         try:
             payload = json.loads(target.read_text(encoding="utf-8"))
         except FileNotFoundError:

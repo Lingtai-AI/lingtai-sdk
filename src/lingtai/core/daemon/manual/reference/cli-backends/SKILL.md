@@ -6,6 +6,7 @@ description: >
   backend_options flag passing, preset/capability inheritance, and Codex modal
   capabilities.
 version: 1.3.0
+last_changed_at: "2026-06-15T22:36:44-07:00"
 ---
 
 # Daemon CLI Backend Reference

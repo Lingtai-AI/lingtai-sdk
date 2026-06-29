@@ -220,6 +220,56 @@ def test_emanate_claude_p_dispatches_legacy_print_runner(tmp_path):
     assert captured == {"backend": "claude-p", "task": "Use print mode"}
 
 
+@pytest.mark.parametrize(
+    ("backend", "expected_runner"),
+    [
+        ("claude", "interactive"),
+        ("claude-interactive", "interactive"),
+        ("claude-p", "print"),
+        ("claude-code", "print"),
+    ],
+)
+def test_claude_backend_ids_are_preserved_while_sharing_runners(
+    tmp_path, backend, expected_runner,
+):
+    agent = _make_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    captured = {}
+
+    def fake_interactive(em_id, run_dir, task, cancel_event, timeout_event,
+                         backend_argv=None):
+        captured["runner"] = "interactive"
+        captured["backend"] = run_dir._state["backend"]
+        run_dir.mark_done("done")
+        return "done"
+
+    def fake_print(em_id, run_dir, task, cancel_event, timeout_event,
+                   backend_argv=None):
+        captured["runner"] = "print"
+        captured["backend"] = run_dir._state["backend"]
+        run_dir.mark_done("done")
+        return "done"
+
+    with (
+        patch.object(
+            mgr,
+            "_run_claude_interactive_emanation",
+            side_effect=fake_interactive,
+        ),
+        patch.object(mgr, "_run_claude_code_emanation", side_effect=fake_print),
+    ):
+        result = mgr.handle({
+            "action": "emanate",
+            "backend": backend,
+            "tasks": [{"task": "Use Claude", "tools": []}],
+        })
+        assert result["status"] == "dispatched"
+        em_id = result["ids"][0]
+        mgr._emanations[em_id]["future"].result(timeout=5)
+
+    assert captured == {"runner": expected_runner, "backend": backend}
+
+
 
 def test_claude_reserved_backend_options_are_rejected(tmp_path):
     agent = _make_agent(tmp_path)

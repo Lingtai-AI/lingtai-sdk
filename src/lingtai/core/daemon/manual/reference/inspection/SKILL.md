@@ -5,6 +5,7 @@ description: >
   patterns, backend-specific polling notes, and setting reminders before resting
   while daemon work remains pending.
 version: 1.1.0
+last_changed_at: "2026-06-24T16:24:16-07:00"
 ---
 
 # Daemon Inspection Reference

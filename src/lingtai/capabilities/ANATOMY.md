@@ -1,3 +1,19 @@
+---
+related_files:
+  - src/lingtai/ANATOMY.md
+  - src/lingtai/agent.py
+  - src/lingtai/capabilities/__init__.py
+  - src/lingtai/capabilities/_media_host.py
+  - src/lingtai/capabilities/_zhipu_mode.py
+  - src/lingtai/capabilities/vision/ANATOMY.md
+  - src/lingtai/capabilities/web_search/ANATOMY.md
+maintenance: |
+  Keep related_files as repo-relative paths to real files. Include neighboring
+  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
+  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
+  maintenance field. If you notice drift between this anatomy and the code,
+  report it. See lingtai-dev-guide for details.
+---
 # src/lingtai/capabilities/
 
 Root capabilities package — registry, capability normalization, and setup dispatcher for composable agent capabilities.

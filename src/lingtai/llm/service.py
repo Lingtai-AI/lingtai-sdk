@@ -210,6 +210,14 @@ class LLMService(LLMServiceABC):
         self._base_url = base_url
         self._key_resolver = key_resolver or (lambda p: os.environ.get(f"{p.upper()}_API_KEY"))
         self._provider_defaults = provider_defaults or {}
+        # Remember the directly supplied credential for this service's own
+        # provider. Agent boot resolves manifest ``api_key`` / ``api_key_env``
+        # before constructing LLMService, so this may be a key from a
+        # *noncanonical* env slot such as ``LLM_API_KEY`` / ``MIMO_1_API_KEY``.
+        # Keeping it lets an inheriting caller (the no-preset daemon path) reuse
+        # the real key directly instead of re-deriving it through a canonical-only
+        # resolver, which would lose a noncanonical-env key. Never logged.
+        self._api_key = api_key
         self._adapters: dict[tuple[str, str | None], LLMAdapter] = {}
         self._adapter_lock = threading.Lock()
         self._adapters[(self._provider, base_url)] = self._create_adapter(self._provider, api_key, base_url)
@@ -323,6 +331,17 @@ class LLMService(LLMServiceABC):
     @property
     def model(self) -> str:
         return self._model
+
+    @property
+    def api_key(self) -> str | None:
+        """The directly configured api_key for this service's primary provider.
+
+        Agent boot resolves manifest ``api_key`` / ``api_key_env`` before passing
+        the value here, so this captures noncanonical env slots that the generic
+        resolver cannot reconstruct. Intended for credential inheritance by
+        daemon-scoped services; callers must never log it.
+        """
+        return self._api_key
 
     def static_adapter_comment(self) -> dict | None:
         """Return static adapter guidance before a ChatSession exists, if any."""

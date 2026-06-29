@@ -1,3 +1,18 @@
+---
+related_files:
+  - src/lingtai_kernel/intrinsics/ANATOMY.md
+  - src/lingtai_kernel/intrinsics/soul/__init__.py
+  - src/lingtai_kernel/intrinsics/soul/config.py
+  - src/lingtai_kernel/intrinsics/soul/consultation.py
+  - src/lingtai_kernel/intrinsics/soul/flow.py
+  - src/lingtai_kernel/intrinsics/soul/inquiry.py
+maintenance: |
+  Keep related_files as repo-relative paths to real files. Include neighboring
+  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
+  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
+  maintenance field. If you notice drift between this anatomy and the code,
+  report it. See lingtai-dev-guide for details.
+---
 # intrinsics/soul
 
 > **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues/mail/PR proposals; do not silently fix.

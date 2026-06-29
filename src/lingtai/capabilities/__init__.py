@@ -7,6 +7,18 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from lingtai_kernel.base_agent import BaseAgent
 
+
+class _CapabilityUnavailable:
+    """Signal that a capability setup skipped before registering tools."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "CAPABILITY_UNAVAILABLE"
+
+
+CAPABILITY_UNAVAILABLE = _CapabilityUnavailable()
+
 # Registry of built-in capability names → module paths.
 # Entries starting with "." are relative to this package (lingtai.capabilities);
 # absolute paths point at lingtai.core (the always-on agent floor). Both forms
@@ -146,8 +158,10 @@ def expand_groups(names: list[str]) -> list[str]:
 def setup_capability(agent: "BaseAgent", name: str, **kwargs: Any) -> Any:
     """Look up a capability by *name* and call its ``setup(agent, **kwargs)``.
 
-    Returns whatever the capability's ``setup`` function returns (typically
-    a manager instance).
+    A setup function returns a manager instance or ``None`` after successful
+    registration. ``None`` is success for several core capabilities. To skip
+    registration, setup must return ``CAPABILITY_UNAVAILABLE`` before calling
+    ``add_tool()``.
 
     Raises ``ValueError`` if the name is unknown or the module lacks ``setup``.
     """

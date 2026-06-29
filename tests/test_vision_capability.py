@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from lingtai.capabilities import CAPABILITY_UNAVAILABLE
 from lingtai.capabilities.vision import VisionManager, setup
 from lingtai.services.vision import VisionService, create_vision_service
 
@@ -147,15 +148,15 @@ def test_vision_setup_with_codex_provider_without_api_key(tmp_path):
 
 
 def test_vision_setup_unsupported_provider_skips(tmp_path):
-    """Unsupported providers gracefully skip: setup returns None and logs capability_skipped.
+    """Unsupported providers gracefully skip and log capability_skipped.
 
     The mock agent's `service._provider_defaults` is a MagicMock (not a dict),
     so the OpenAI-compat fallback does not engage; the graceful skip path
-    runs instead. Agent.py's capability loader handles None as a no-op.
+    runs instead.
     """
     agent = make_mock_agent(tmp_path)
     result = setup(agent, provider="not-real")
-    assert result is None
+    assert result is CAPABILITY_UNAVAILABLE
     agent.add_tool.assert_not_called()
     agent._log.assert_called_with(
         "capability_skipped",
@@ -369,7 +370,7 @@ def test_vision_fallback_unknown_api_compat_skips_with_diagnostic(tmp_path):
     """Fallback with an unhandled api_compat skips and names api_compat in the reason."""
     agent = make_custom_agent(tmp_path, api_compat="gemini")
     result = setup(agent, provider="custom", api_key="sk-test")
-    assert result is None
+    assert result is CAPABILITY_UNAVAILABLE
     agent.add_tool.assert_not_called()
     log_kwargs = agent._log.call_args.kwargs
     assert log_kwargs["capability"] == "vision"

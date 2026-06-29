@@ -1,3 +1,20 @@
+---
+related_files:
+  - src/lingtai/ANATOMY.md
+  - src/lingtai/agent.py
+  - src/lingtai/core/daemon/__init__.py
+  - src/lingtai/core/skills/__init__.py
+  - src/lingtai/core/skills/manual/SKILL.md
+  - src/lingtai/init_schema.py
+  - tests/test_skills.py
+  - tests/test_validate_skill.py
+maintenance: |
+  Keep related_files as repo-relative paths to real files. Include neighboring
+  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
+  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
+  maintenance field. If you notice drift between this anatomy and the code,
+  report it. See lingtai-dev-guide for details.
+---
 # core/skills
 
 Skills capability — per-agent skill catalog and skill-manual surface. This is the renamed successor of the old `library` capability. It scans the existing `.library/` directory plus configured extra paths, renders a YAML catalog (one `- name:` block per skill with `location:` and a `description:` block scalar), and injects it into the `skills` prompt section. It never writes skill files; installation remains the Agent initializer's job.
@@ -5,7 +22,7 @@ Skills capability — per-agent skill catalog and skill-manual surface. This is 
 ## Components
 
 - `skills/__init__.py` — the capability implementation. `get_description` (`__init__.py:296-297`), `get_schema` (`__init__.py:300-311`), `setup` (`__init__.py:314-348`), `_reconcile` (`__init__.py:205-289`), and scanner helpers (`__init__.py:53-198`).
-- `skills/manual/` — `skills-manual` skill documentation, template assets, and validator script.
+- `skills/manual/` — `skills-manual` skill documentation, template assets, and validator script. The validator can optionally require `last_changed_at` for LingTai-maintained skill bundles.
 
 ## Connections
 
@@ -32,3 +49,4 @@ The `skills` tool exposes one action:
 
 - The `.library/` directory name and `.library_shared/` convention are intentionally preserved in this rename-only change; they are storage compatibility names, not the user-facing capability name.
 - New callers should use `skills({"action":"info"})`; old `library({"action":"info"})` is not registered because private durable memory is now `knowledge` and `library` is not registered.
+- LingTai-maintained `SKILL.md` files carry `last_changed_at` in frontmatter, initialized from git history for metadata-only backfills and updated on substantive skill edits.

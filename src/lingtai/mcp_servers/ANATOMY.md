@@ -1,3 +1,27 @@
+---
+related_files:
+  - pyproject.toml
+  - src/lingtai/ANATOMY.md
+  - src/lingtai/core/mcp/ANATOMY.md
+  - src/lingtai/mcp_catalog.json
+  - src/lingtai/mcp_servers/__init__.py
+  - src/lingtai/mcp_servers/_skill.py
+  - src/lingtai/mcp_servers/cloud_mail/manager.py
+  - src/lingtai/mcp_servers/feishu/manager.py
+  - src/lingtai/mcp_servers/imap/manager.py
+  - src/lingtai/mcp_servers/telegram/manager.py
+  - src/lingtai/mcp_servers/wechat/manager.py
+  - src/lingtai/mcp_servers/whatsapp/manager.py
+  - tests/test_cloud_mail_addon.py
+  - tests/test_mcp_skill_manuals.py
+  - tests/test_telegram_rich_formatting.py
+maintenance: |
+  Keep related_files as repo-relative paths to real files. Include neighboring
+  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
+  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
+  maintenance field. If you notice drift between this anatomy and the code,
+  report it. See lingtai-dev-guide for details.
+---
 # lingtai.mcp_servers
 
 Curated MCP server package implementations shipped inside the `lingtai` Python distribution. They are launched by catalog/script entry points such as `python -m lingtai.mcp_servers.<name>` and expose real addon tools (IMAP, Telegram, Feishu, WeChat, WhatsApp, Cloud Mail) plus bundled progressive-disclosure manuals.

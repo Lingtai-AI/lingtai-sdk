@@ -1,3 +1,17 @@
+---
+related_files:
+  - src/lingtai_kernel/intrinsics/ANATOMY.md
+  - src/lingtai_kernel/intrinsics/notification/__init__.py
+  - src/lingtai_kernel/intrinsics/notification/schema.py
+  - tests/test_notification_tool.py
+  - tests/test_system_dismiss.py
+maintenance: |
+  Keep related_files as repo-relative paths to real files. Include neighboring
+  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
+  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
+  maintenance field. If you notice drift between this anatomy and the code,
+  report it. See lingtai-dev-guide for details.
+---
 # intrinsics/notification
 
 Standalone notification surface — the **only** agent-callable home for the

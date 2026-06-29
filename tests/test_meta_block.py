@@ -18,6 +18,9 @@ from lingtai_kernel.meta_block import (
     build_meta_guidance,
     build_meta_readme,
     build_molt_context,
+    build_notification_payload,
+    build_synthetic_meta_envelope,
+    build_tool_meta_token_usage,
     build_guidance_with_meta_readme,
     build_runtime_guidance,
     clear_active_notification_holder,
@@ -264,7 +267,12 @@ def test_build_meta_readme_mentions_tool_result_char_count_and_summarize():
 
     assert "token_usage" in readme["tool_meta"]
     assert "provider-round token/cache snapshot" in readme["tool_meta"]
+    # The unified block documents both halves: provider-round + current-session.
+    assert "session_cache_rate" in readme["tool_meta"]
+    assert "api_calls" in readme["tool_meta"]
     assert "tool_meta.token_usage" in readme["agent_meta"]
+    # agent_meta no longer carries a token_efficiency block of its own.
+    assert "token_efficiency block" not in readme["agent_meta"]
     assert "current_tool_result_chars" in readme["agent_meta"]
     assert "top" in readme["agent_meta"]
     assert "proactive summarization candidates" in readme["agent_meta"]
@@ -686,14 +694,23 @@ def test_build_meta_emits_context_fields_when_decomp_ran():
 
 
 def test_build_meta_carries_latest_token_usage_for_tool_meta_only():
+    # The full provider-round snapshot is the source; only the compact subset is
+    # placed into the transit key destined for _meta.tool_meta.token_usage. With
+    # no get_token_usage on the agent, only the provider-round half is emitted.
     snapshot = {
         "scope": "provider_round",
         "api_call_index": 3,
         "input_tokens": 190_000,
         "cache_miss_tokens": 22_000,
         "output_tokens": 636,
+        "thinking_tokens": 40,
+        "cached_tokens": 168_000,
         "cache_rate": 0.882,
+        "context_tokens": 190_000,
+        "context_window": 250_000,
         "context_usage": 0.759,
+        "estimated": False,
+        "api_call_id": "call-abc",
     }
     agent = _fake_agent()
     agent._session = SimpleNamespace(
@@ -703,9 +720,191 @@ def test_build_meta_carries_latest_token_usage_for_tool_meta_only():
 
     meta = build_meta(agent)
 
-    assert meta[TOOL_META_TOKEN_USAGE_PENDING_KEY] == snapshot
+    assert meta[TOOL_META_TOKEN_USAGE_PENDING_KEY] == {
+        "input": 190_000,
+        "cache_miss": 22_000,
+        "cache_rate": 0.882,
+        "context_usage": 0.759,
+        "window": 250_000,
+        "output": 636,
+        "thinking": 40,
+        "ref": "See meta_guidance.token_efficiency for details.",
+    }
+    # The unified token_usage block is the sole token diagnostics carrier; the
+    # separate token_efficiency block must be gone.
+    assert "token_efficiency" not in meta
 
-def test_build_meta_token_efficiency_current_session_snapshot():
+
+# Provider-round half of the unified token_usage block (snapshot-derived).
+_PROVIDER_TOKEN_USAGE_KEYS = {
+    "input",
+    "cache_miss",
+    "cache_rate",
+    "context_usage",
+    "window",
+    "output",
+    "thinking",
+}
+# Current-session half of the unified token_usage block (get_token_usage-derived).
+_SESSION_TOKEN_USAGE_KEYS = {
+    "session_cache_rate",
+    "api_calls",
+    "input_tokens",
+    "cached_tokens",
+    "avg_input_tokens_per_api_call",
+}
+
+
+def test_build_tool_meta_token_usage_compacts_full_snapshot_to_exact_keys():
+    # A full provider-round snapshot (the internal-logging shape) must compact to
+    # exactly the seven provider keys, dropping scope/api_call_index/
+    # cached_tokens/context_tokens/context_window/estimated/api_call_id and the
+    # long names. With no get_token_usage, the session half is omitted.
+    snapshot = {
+        "scope": "provider_round",
+        "api_call_index": 3,
+        "input_tokens": 190_000,
+        "cache_miss_tokens": 22_000,
+        "output_tokens": 636,
+        "thinking_tokens": 40,
+        "cached_tokens": 168_000,
+        "cache_rate": 0.882,
+        "context_tokens": 190_000,
+        "context_window": 250_000,
+        "context_usage": 0.759,
+        "estimated": False,
+        "api_call_id": "call-abc",
+    }
+    agent = SimpleNamespace(
+        _session=SimpleNamespace(latest_token_usage_snapshot=lambda: snapshot)
+    )
+
+    compact = build_tool_meta_token_usage(agent)
+
+    assert set(compact) == _PROVIDER_TOKEN_USAGE_KEYS | {"ref"}
+    assert compact == {
+        "input": 190_000,
+        "cache_miss": 22_000,
+        "cache_rate": 0.882,
+        "context_usage": 0.759,
+        "window": 250_000,
+        "output": 636,
+        "thinking": 40,
+        "ref": "See meta_guidance.token_efficiency for details.",
+    }
+
+
+def test_build_tool_meta_token_usage_merges_session_aggregate_into_one_block():
+    # The unified block carries BOTH the provider-round half (from the snapshot)
+    # and the current-session half (from get_token_usage), in one flat dict —
+    # there is no separate token_efficiency block anywhere.
+    snapshot = {
+        "input_tokens": 190_000,
+        "cache_miss_tokens": 22_000,
+        "output_tokens": 636,
+        "thinking_tokens": 40,
+        "cache_rate": 0.882,
+        "context_window": 250_000,
+        "context_usage": 0.759,
+    }
+    agent = SimpleNamespace(
+        _session=SimpleNamespace(latest_token_usage_snapshot=lambda: snapshot),
+        get_token_usage=lambda: {
+            "api_calls": 4,
+            "input_tokens": 22_000,
+            "cached_tokens": 5_500,
+        },
+    )
+
+    compact = build_tool_meta_token_usage(agent)
+
+    assert set(compact) == _PROVIDER_TOKEN_USAGE_KEYS | _SESSION_TOKEN_USAGE_KEYS | {"ref"}
+    assert compact == {
+        # provider-round half
+        "input": 190_000,
+        "cache_miss": 22_000,
+        "cache_rate": 0.882,
+        "context_usage": 0.759,
+        "window": 250_000,
+        "output": 636,
+        "thinking": 40,
+        # current-session half
+        "session_cache_rate": 0.25,
+        "api_calls": 4,
+        "input_tokens": 22_000,
+        "cached_tokens": 5_500,
+        "avg_input_tokens_per_api_call": 5_500,
+        # short guidance hook
+        "ref": "See meta_guidance.token_efficiency for details.",
+    }
+    # No dropped/noisy keys leak into the unified block — and the hook is the
+    # short `ref`, never the long `guidance_ref`.
+    for noisy in ("scope", "guidance_ref", "context_tokens", "context_window", "estimated", "api_call_id"):
+        assert noisy not in compact
+
+
+def test_build_tool_meta_token_usage_session_only_when_no_snapshot():
+    # When no provider-round snapshot exists but session data does, only the
+    # session half is emitted (the block is never invented from nothing).
+    agent = SimpleNamespace(
+        _session=SimpleNamespace(latest_token_usage_snapshot=lambda: None),
+        get_token_usage=lambda: {
+            "api_calls": 2,
+            "input_tokens": 1_000,
+            "cached_tokens": 1_200,  # cached > input clamps to 1.0
+        },
+    )
+
+    compact = build_tool_meta_token_usage(agent)
+
+    assert set(compact) == _SESSION_TOKEN_USAGE_KEYS | {"ref"}
+    assert compact["session_cache_rate"] == 1.0
+    assert compact["avg_input_tokens_per_api_call"] == 500
+
+
+def test_build_tool_meta_token_usage_preserves_zero_and_sentinel_values():
+    # Existing numeric zero / sentinel values are kept, not dropped or invented.
+    snapshot = {
+        "input_tokens": 0,
+        "cache_miss_tokens": 0,
+        "output_tokens": 0,
+        "thinking_tokens": 0,
+        "cache_rate": 0.0,
+        "context_window": 0,
+        "context_usage": -1.0,
+    }
+    agent = SimpleNamespace(
+        _session=SimpleNamespace(latest_token_usage_snapshot=lambda: snapshot)
+    )
+
+    compact = build_tool_meta_token_usage(agent)
+
+    assert compact == {
+        "input": 0,
+        "cache_miss": 0,
+        "cache_rate": 0.0,
+        "context_usage": -1.0,
+        "window": 0,
+        "output": 0,
+        "thinking": 0,
+        "ref": "See meta_guidance.token_efficiency for details.",
+    }
+
+
+def test_build_tool_meta_token_usage_robust_to_missing_fields():
+    # Partial snapshot: only present fields are emitted; absent ones are omitted
+    # rather than invented.
+    snapshot = {"input_tokens": 100, "cache_rate": 0.5}
+    agent = SimpleNamespace(
+        _session=SimpleNamespace(latest_token_usage_snapshot=lambda: snapshot)
+    )
+
+    compact = build_tool_meta_token_usage(agent)
+
+    assert compact == {"input": 100, "cache_rate": 0.5, "ref": "See meta_guidance.token_efficiency for details."}
+
+
+def test_build_meta_folds_session_economy_into_token_usage_not_efficiency():
     agent = _fake_agent_with_session(
         system_prompt_tokens=1000,
         tools_tokens=500,
@@ -716,28 +915,28 @@ def test_build_meta_token_efficiency_current_session_snapshot():
         "api_calls": 4,
         "input_tokens": 22000,
         "cached_tokens": 5500,
-        "ctx_total_tokens": 99999,  # build_meta's live context wins
+        "ctx_total_tokens": 99999,
     }
 
     meta = build_meta(agent)
 
     assert meta["context"]["system_tokens"] == 1500
     assert meta["context"]["history_tokens"] == 5500
-    assert meta["token_efficiency"] == {
-        "scope": "current_session",
-        "api_calls": 4,
-        "input_tokens": 22000,
-        "cached_tokens": 5500,
-        "cache_rate": 0.25,
-        "avg_input_tokens_per_api_call": 5500,
-        "context_tokens": 7000,
-        "context_window": 10000,
-        "guidance_ref": "meta_guidance.token_efficiency",
-    }
-    assert "avg_input_tokens_over_guide" not in meta["token_efficiency"]
+    # There is NO token_efficiency block anywhere — the session economy now lives
+    # inside the unified token_usage transit block (destined for tool_meta).
+    assert "token_efficiency" not in meta
+    usage = meta[TOOL_META_TOKEN_USAGE_PENDING_KEY]
+    assert usage["api_calls"] == 4
+    assert usage["input_tokens"] == 22000
+    assert usage["cached_tokens"] == 5500
+    assert usage["session_cache_rate"] == 0.25
+    assert usage["avg_input_tokens_per_api_call"] == 5500
+    # Dropped noisy/invalid fields never reappear.
+    for noisy in ("scope", "guidance_ref", "context_tokens", "context_window"):
+        assert noisy not in usage
 
 
-def test_build_meta_token_efficiency_clamps_cache_rate_to_fraction():
+def test_build_meta_session_cache_rate_clamps_to_fraction():
     agent = _fake_agent_with_session(
         system_prompt_tokens=100,
         tools_tokens=0,
@@ -753,7 +952,121 @@ def test_build_meta_token_efficiency_clamps_cache_rate_to_fraction():
 
     meta = build_meta(agent)
 
-    assert meta["token_efficiency"]["cache_rate"] == 1.0
+    assert meta[TOOL_META_TOKEN_USAGE_PENDING_KEY]["session_cache_rate"] == 1.0
+
+
+def test_synthetic_meta_envelope_shows_token_usage_in_tool_meta_not_agent_meta():
+    # /notification synthetic raw meta carries token diagnostics under
+    # tool_meta.token_usage when pending/session data is available; agent_meta
+    # never carries token diagnostics.
+    snapshot = {
+        "input_tokens": 190_000,
+        "cache_miss_tokens": 22_000,
+        "cache_rate": 0.882,
+        "context_window": 250_000,
+        "context_usage": 0.759,
+        "output_tokens": 636,
+        "thinking_tokens": 40,
+    }
+    agent = _fake_agent_with_session()
+    agent._session.latest_token_usage_snapshot = lambda: snapshot
+    agent.get_token_usage = lambda: {
+        "api_calls": 4,
+        "input_tokens": 22_000,
+        "cached_tokens": 5_500,
+    }
+    payload = build_notification_payload({"system": {"events": [{"body": "ping"}]}})
+
+    envelope = build_synthetic_meta_envelope(agent, payload, call_id="c1")
+
+    tool_meta = envelope["tool_meta"]
+    assert tool_meta["synthetic"] is True
+    assert tool_meta["token_usage"]["input"] == 190_000
+    assert tool_meta["token_usage"]["session_cache_rate"] == 0.25
+    assert tool_meta["token_usage"]["api_calls"] == 4
+    # agent_meta must not carry token diagnostics in any form.
+    agent_meta = envelope["agent_meta"]
+    assert "token_efficiency" not in agent_meta
+    assert "token_usage" not in agent_meta
+    assert TOOL_META_TOKEN_USAGE_PENDING_KEY not in agent_meta
+
+
+def test_synthetic_meta_envelope_omits_token_usage_when_no_data():
+    # No snapshot and no session usage → no token_usage key on synthetic tool_meta.
+    agent = _fake_agent_with_session()
+    agent._session.latest_token_usage_snapshot = lambda: None
+    payload = build_notification_payload({"system": {"events": [{"body": "ping"}]}})
+
+    envelope = build_synthetic_meta_envelope(agent, payload, call_id="c1")
+
+    assert "token_usage" not in envelope["tool_meta"]
+
+
+def test_session_economy_prefers_current_session_over_lifetime_totals():
+    # The session-stat half MUST come from get_current_session_token_usage()
+    # (current runtime deltas), never the lifetime get_token_usage() totals.
+    # Lifetime get_token_usage carries giant restored numbers; the injected
+    # session stats must be the small current-runtime deltas instead.
+    agent = SimpleNamespace(
+        _session=SimpleNamespace(latest_token_usage_snapshot=lambda: None),
+        get_token_usage=lambda: {
+            "api_calls": 27_863,
+            "input_tokens": 5_000_000_000,
+            "cached_tokens": 4_000_000_000,
+        },
+        get_current_session_token_usage=lambda: {
+            "api_calls": 2,
+            "input_tokens": 200,
+            "cached_tokens": 40,
+            "session_cache_rate": 0.2,
+            "avg_input_tokens_per_api_call": 100,
+        },
+    )
+
+    compact = build_tool_meta_token_usage(agent)
+
+    assert compact["api_calls"] == 2
+    assert compact["input_tokens"] == 200
+    assert compact["cached_tokens"] == 40
+    assert compact["avg_input_tokens_per_api_call"] == 100
+    assert compact["session_cache_rate"] == 0.2
+    # The lifetime giants never leak in.
+    assert compact["api_calls"] != 27_863
+    assert compact["input_tokens"] != 5_000_000_000
+
+
+def test_session_economy_falls_back_to_lifetime_getter_when_no_current_session():
+    # Compatibility fallback: stubs without get_current_session_token_usage still
+    # populate the session half from get_token_usage().
+    agent = SimpleNamespace(
+        _session=SimpleNamespace(latest_token_usage_snapshot=lambda: None),
+        get_token_usage=lambda: {
+            "api_calls": 4,
+            "input_tokens": 22_000,
+            "cached_tokens": 5_500,
+        },
+    )
+
+    compact = build_tool_meta_token_usage(agent)
+
+    assert compact["api_calls"] == 4
+    assert compact["input_tokens"] == 22_000
+    assert compact["cached_tokens"] == 5_500
+
+
+def test_token_usage_block_carries_short_guidance_ref():
+    # The unified token_usage block always carries a short `ref` hook (NOT
+    # `guidance_ref`) — a short sentence, not a bare path — pointing at the
+    # resident guidance section.
+    snapshot = {"input_tokens": 100, "cache_rate": 0.5}
+    agent = SimpleNamespace(
+        _session=SimpleNamespace(latest_token_usage_snapshot=lambda: snapshot)
+    )
+
+    compact = build_tool_meta_token_usage(agent)
+
+    assert compact["ref"] == "See meta_guidance.token_efficiency for details."
+    assert "guidance_ref" not in compact
 
 
 def test_build_meta_emits_sentinels_before_decomp_runs():
@@ -1463,21 +1776,13 @@ def test_attach_active_runtime_does_not_leak_tool_meta_token_usage_to_agent_meta
     assert TOOL_META_TOKEN_USAGE_PENDING_KEY not in agent_meta
     assert "_runtime_pending" not in block.content
 
-def test_attach_active_runtime_preserves_token_efficiency_snapshot():
+def test_attach_active_runtime_keeps_no_token_efficiency_in_agent_meta():
+    # agent_meta must NOT carry any token diagnostics — those live in
+    # _meta.tool_meta.token_usage only. Even if a stale token_efficiency snapshot
+    # somehow rode along in pending, it is not promoted into agent_meta.
     agent = _runtime_agent(total_calls=3)
-    token_efficiency = {
-        "scope": "current_session",
-        "api_calls": 2,
-        "input_tokens": 5000,
-        "cached_tokens": 1000,
-        "cache_rate": 0.2,
-        "avg_input_tokens_per_api_call": 2500,
-        "context_tokens": 7000,
-        "context_window": 10000,
-        "guidance_ref": "meta_guidance.token_efficiency",
-    }
     result = _stamped_result(
-        {"current_time": "T", "token_efficiency": token_efficiency},
+        {"current_time": "T"},
         elapsed_ms=12,
     )
     block = ToolResultBlock(id="tc-eff", name="bash", content=result)
@@ -1485,7 +1790,7 @@ def test_attach_active_runtime_preserves_token_efficiency_snapshot():
     attach_active_runtime(agent, [block])
 
     agent_meta = block.content["_meta"]["agent_meta"]
-    assert agent_meta["token_efficiency"] == token_efficiency
+    assert "token_efficiency" not in agent_meta
     assert agent_meta["active_turn_tool_calls"] == 3
 
 
@@ -1668,8 +1973,11 @@ def test_packaged_guidance_resource_is_valid():
     assert "Do not call `refresh` just to apply a summarize" in body
     assert "does not mean the active provider-side context" in body
     assert "0.6 * context_window" in body
-    assert "token_efficiency" in body
-    assert "current_session" in body
+    # Unified contract: token diagnostics live in tool_meta.token_usage; the
+    # guidance points there and describes the current-session aggregate half.
+    assert "token_usage" in body
+    assert "current-session" in body
+    assert "session_cache_rate" in body
     assert "guiding_avg_input_tokens_per_api_call" not in body
     assert "recent human-channel instructions" in body
     assert "last 30 Telegram messages" in body

@@ -1,3 +1,16 @@
+---
+related_files:
+  - src/lingtai/llm/ANATOMY.md
+  - src/lingtai/llm/deepseek/__init__.py
+  - src/lingtai/llm/deepseek/adapter.py
+  - src/lingtai/llm/openai/adapter.py
+maintenance: |
+  Keep related_files as repo-relative paths to real files. Include neighboring
+  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
+  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
+  maintenance field. If you notice drift between this anatomy and the code,
+  report it. See lingtai-dev-guide for details.
+---
 # src/lingtai/llm/deepseek
 
 DeepSeek adapter — thin OpenAI-compat wrapper that satisfies DeepSeek V4 thinking mode's `reasoning_content` round-trip contract.

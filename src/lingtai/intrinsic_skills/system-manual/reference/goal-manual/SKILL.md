@@ -6,6 +6,7 @@ description: >
   completion semantics.
 version: 0.2.0
 tags: [lingtai, goal, notifications, reminders]
+last_changed_at: "2026-06-20T13:05:49-07:00"
 ---
 
 # Goal Manual

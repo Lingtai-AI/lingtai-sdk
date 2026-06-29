@@ -3,6 +3,7 @@ name: file-manual
 description: "Operational guide for LingTai's built-in file tools: read, write, edit, glob, and grep. Use when working with local text files, deciding whether to use file tools versus bash, handling large files, avoiding binary/image misuse, or reading non-UTF-8 text via explicit bash/Python/iconv instead of complicating the core read tool. Covers UTF-8 policy, safe write/edit discipline, search workflows, and examples for GBK/Shift-JIS/Latin-1 conversion."
 version: 0.1.0
 tags: [files, read, write, edit, grep, glob, encoding, utf-8]
+last_changed_at: "2026-05-26T03:24:43-07:00"
 ---
 
 # File Manual

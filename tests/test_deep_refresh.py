@@ -163,6 +163,21 @@ def test_deep_refresh_loads_new_capability(tmp_path):
     assert agent._sealed is True
 
 
+def test_deep_refresh_skipped_vision_is_not_registered(tmp_path):
+    """Refresh honors CAPABILITY_UNAVAILABLE like initial setup."""
+    init = _make_init(capabilities={"vision": {"provider": "not-real"}})
+    agent = _make_agent(tmp_path, init)
+
+    agent._setup_from_init()
+
+    manifest_registered = {
+        name for name, _ in agent._build_manifest().get("capabilities", [])
+    }
+    assert agent.has_capability("vision") is False
+    assert "vision" not in agent._tool_handlers
+    assert "vision" not in manifest_registered
+
+
 def test_deep_refresh_no_init_json_is_noop(tmp_path):
     """If init.json is missing, refresh is a no-op (no crash)."""
     agent = _make_agent(tmp_path)

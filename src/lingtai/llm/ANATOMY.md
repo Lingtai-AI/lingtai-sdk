@@ -1,3 +1,30 @@
+---
+related_files:
+  - src/lingtai/ANATOMY.md
+  - src/lingtai/llm/__init__.py
+  - src/lingtai/llm/_register.py
+  - src/lingtai/llm/anthropic/ANATOMY.md
+  - src/lingtai/llm/api_gate.py
+  - src/lingtai/llm/base.py
+  - src/lingtai/llm/claude_code/adapter.py
+  - src/lingtai/llm/custom/ANATOMY.md
+  - src/lingtai/llm/deepseek/ANATOMY.md
+  - src/lingtai/llm/gemini/ANATOMY.md
+  - src/lingtai/llm/interface_converters.py
+  - src/lingtai/llm/minimax/ANATOMY.md
+  - src/lingtai/llm/openai/ANATOMY.md
+  - src/lingtai/llm/openai/adapter.py
+  - src/lingtai/llm/openrouter/ANATOMY.md
+  - src/lingtai/llm/service.py
+  - src/lingtai_kernel/llm/ANATOMY.md
+  - tests/test_codex_endpoint_pool.py
+maintenance: |
+  Keep related_files as repo-relative paths to real files. Include neighboring
+  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
+  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
+  maintenance field. If you notice drift between this anatomy and the code,
+  report it. See lingtai-dev-guide for details.
+---
 # src/lingtai/llm/
 
 LLM adapter layer — multi-provider support with adapter registry, base classes, rate limiting, and interface converters.

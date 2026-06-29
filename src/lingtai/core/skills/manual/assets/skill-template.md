@@ -3,6 +3,7 @@ name: [SKILL_NAME]          # REQUIRED: lowercase-kebab-case, unique
 description: [ONE_LINE_DESCRIPTION]  # REQUIRED: What this skill does + when NOT to use it. Shown in catalog.
 version: 1.0.0              # Semantic versioning
 tags: [[optional, tags]]      # Optional: search/categorization tags
+# last_changed_at: "YYYY-MM-DDTHH:MM:SSZ"  # Required only for LingTai-maintained skills
 ---
 
 # [SKILL NAME]

@@ -7,7 +7,60 @@ from pathlib import Path
 
 import pytest
 
-from lingtai_kernel.workdir import WorkingDir
+from lingtai_kernel.workdir import WorkingDir, WorkdirLayout, workdir_layout
+
+
+class TestWorkdirLayout:
+    """Lock down the exact relative names the layout helper hands out.
+
+    These are the agent-workdir filesystem protocol — separate processes read
+    and write them by name — so each property is pinned to an exact path. A
+    silent rename here would break mail delivery, notification sync, handshake,
+    and spill recovery; the assertions make any drift fail loudly.
+    """
+
+    def test_returns_frozen_layout_rooted_at_path(self, tmp_path):
+        layout = workdir_layout(tmp_path)
+        assert isinstance(layout, WorkdirLayout)
+        assert layout.root == tmp_path
+        with pytest.raises(Exception):
+            layout.root = tmp_path / "other"  # frozen dataclass
+
+    def test_accepts_str_path(self, tmp_path):
+        assert workdir_layout(str(tmp_path)).root == tmp_path
+
+    def test_agent_protocol_files(self, tmp_path):
+        layout = workdir_layout(tmp_path)
+        assert layout.agent_lock == tmp_path / ".agent.lock"
+        assert layout.agent_manifest == tmp_path / ".agent.json"
+        assert layout.agent_manifest_corrupt == tmp_path / ".agent.json.corrupt"
+        assert layout.heartbeat == tmp_path / ".agent.heartbeat"
+        assert layout.status_json == tmp_path / ".status.json"
+        assert layout.init_json == tmp_path / "init.json"
+
+    def test_directories(self, tmp_path):
+        layout = workdir_layout(tmp_path)
+        assert layout.system_dir == tmp_path / "system"
+        assert layout.logs_dir == tmp_path / "logs"
+        assert layout.history_dir == tmp_path / "history"
+        assert layout.notification_dir == tmp_path / ".notification"
+        assert layout.tool_results_dir == tmp_path / "tmp" / "tool-results"
+
+    def test_derived_files(self, tmp_path):
+        layout = workdir_layout(tmp_path)
+        assert layout.chat_history == tmp_path / "history" / "chat_history.jsonl"
+        assert layout.resolved_manifest == tmp_path / "system" / "manifest.resolved.json"
+        assert layout.resolved_manifest_tmp == tmp_path / "system" / "manifest.resolved.json.tmp"
+
+    def test_notification_file(self, tmp_path):
+        layout = workdir_layout(tmp_path)
+        assert layout.notification_file("email") == tmp_path / ".notification" / "email.json"
+        assert layout.notification_file("system") == tmp_path / ".notification" / "system.json"
+        assert layout.notification_file("mcp.telegram") == tmp_path / ".notification" / "mcp.telegram.json"
+
+    def test_system_file(self, tmp_path):
+        layout = workdir_layout(tmp_path)
+        assert layout.system_file("covenant.md") == tmp_path / "system" / "covenant.md"
 
 
 def test_workdir_accepts_path(tmp_path):

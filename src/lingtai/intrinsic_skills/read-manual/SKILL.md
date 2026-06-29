@@ -3,6 +3,7 @@ name: read-manual
 description: "Complete guide for the read tool: continuation workflow, next_offset pagination, line_truncated handling, runtime tool-result spill vs read-level pagination, 50k read default / 200k runtime hard cap, and when to use bash/grep/sed for truncated lines. Use when implementing complete file-read workflows, handling large files, or understanding cap and truncation semantics."
 version: 0.1.0
 tags: [read, files, continuation, truncation, cap, pagination]
+last_changed_at: "2026-06-27T02:45:37-07:00"
 ---
 
 # Read Manual

@@ -1,3 +1,18 @@
+---
+related_files:
+  - src/lingtai/__init__.py
+  - src/lingtai_kernel/intrinsics/ANATOMY.md
+  - src/lingtai_kernel/intrinsics/email/__init__.py
+  - src/lingtai_kernel/intrinsics/email/manager.py
+  - src/lingtai_kernel/intrinsics/email/primitives.py
+  - src/lingtai_kernel/intrinsics/email/schema.py
+maintenance: |
+  Keep related_files as repo-relative paths to real files. Include neighboring
+  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
+  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
+  maintenance field. If you notice drift between this anatomy and the code,
+  report it. See lingtai-dev-guide for details.
+---
 # intrinsics/email
 
 Filesystem-based email system — mailbox I/O, composition, search, contacts, recurring schedules, and delivery. The agent's primary inter-process communication channel.

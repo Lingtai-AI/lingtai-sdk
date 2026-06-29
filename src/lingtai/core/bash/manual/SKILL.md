@@ -12,6 +12,7 @@ description: >
   long-running agent CLI, time-driven recurring work ("every hour", "weekdays at
   9", "remind me later"), or when a scheduled job misbehaves.
 version: 1.6.1
+last_changed_at: "2026-06-24T14:38:03-07:00"
 ---
 
 # Bash Manual — Router

@@ -1,3 +1,16 @@
+---
+related_files:
+  - src/lingtai/llm/ANATOMY.md
+  - src/lingtai/llm/custom/__init__.py
+  - src/lingtai/llm/custom/adapter.py
+  - src/lingtai/llm/custom/defaults.py
+maintenance: |
+  Keep related_files as repo-relative paths to real files. Include neighboring
+  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
+  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
+  maintenance field. If you notice drift between this anatomy and the code,
+  report it. See lingtai-dev-guide for details.
+---
 # src/lingtai/llm/custom
 
 Custom adapter — factory for named provider aliases routing to OpenAI, Anthropic, or Gemini backends.

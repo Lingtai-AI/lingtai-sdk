@@ -18,6 +18,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .. import CAPABILITY_UNAVAILABLE
 from ...i18n import t
 from ...services.vision import VisionService, create_vision_service
 
@@ -164,7 +165,7 @@ def setup(
                         f"(api_compat={api_compat!r})"
                     ),
                 )
-                return None
+                return CAPABILITY_UNAVAILABLE
         else:
             # Provider-specific kwarg injection. Each branch is opt-in because
             # vision services have heterogeneous constructor signatures —

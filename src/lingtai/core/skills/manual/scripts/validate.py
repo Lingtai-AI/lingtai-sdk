@@ -8,12 +8,14 @@ import os
 import sys
 import re
 import argparse
+from datetime import date, datetime
 from pathlib import Path
 
 import yaml
 
 
 PLACEHOLDER_RE = re.compile(r'\[[A-Z][A-Z_]*\]')
+ISO_TIMESTAMP_RE = re.compile(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})$')
 
 
 def _parse_frontmatter(content: str) -> dict | None:
@@ -42,7 +44,29 @@ def _parse_frontmatter(content: str) -> dict | None:
     return data
 
 
-def validate_frontmatter(skill_path: Path) -> tuple[bool, list[str]]:
+def _format_timestamp(value) -> str:
+    """Return a frontmatter timestamp as a normalized string for validation."""
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if value is None:
+        return ""
+    return str(value).strip().strip('"\'')
+
+
+def _is_iso_timestamp(value: str) -> bool:
+    """Validate the LingTai skill timestamp convention."""
+    if not value or not ISO_TIMESTAMP_RE.match(value):
+        return False
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
+
+
+def validate_frontmatter(skill_path: Path, *, require_last_changed_at: bool = False) -> tuple[bool, list[str]]:
     """Check frontmatter completeness and quality."""
     errors = []
     warnings = []
@@ -90,6 +114,14 @@ def validate_frontmatter(skill_path: Path) -> tuple[bool, list[str]]:
         # Check for unfilled placeholder
         if PLACEHOLDER_RE.search(desc_text):
             errors.append(f"Unfilled placeholder in description: {desc_text}")
+
+    if require_last_changed_at:
+        raw_changed = fm.get("last_changed_at") if fm else None
+        changed_text = _format_timestamp(raw_changed)
+        if not changed_text:
+            errors.append("Missing 'last_changed_at' field in frontmatter")
+        elif not _is_iso_timestamp(changed_text):
+            errors.append("Invalid 'last_changed_at' timestamp; use ISO 8601 like 2026-06-29T08:00:00Z")
 
     # Quality: description length (warn if > 500 chars — catalog is cluttered)
     if desc_text:
@@ -158,7 +190,7 @@ def validate_scripts(skill_path: Path) -> tuple[bool, list[str]]:
     return True, warnings  # non-executable is a warning, not an error
 
 
-def validate_skill(skill_path: str) -> bool:
+def validate_skill(skill_path: str, *, require_last_changed_at: bool = False) -> bool:
     """Validate a single skill directory."""
     skill_path = Path(skill_path)
 
@@ -173,7 +205,7 @@ def validate_skill(skill_path: str) -> bool:
     all_passed = True
 
     # 1. Frontmatter
-    passed, msgs = validate_frontmatter(skill_path)
+    passed, msgs = validate_frontmatter(skill_path, require_last_changed_at=require_last_changed_at)
     status = "PASS" if passed else "FAIL"
     print(f"  [{status}] Frontmatter")
     for m in msgs:
@@ -212,16 +244,21 @@ def validate_skill(skill_path: str) -> bool:
 def main():
     parser = argparse.ArgumentParser(description="Validate LingTai skill structure")
     parser.add_argument("skill", nargs="?", help="Skill directory path")
+    parser.add_argument(
+        "--require-last-changed-at",
+        action="store_true",
+        help="Require LingTai-maintained skills to include last_changed_at in frontmatter",
+    )
     args = parser.parse_args()
 
     if args.skill:
-        success = validate_skill(args.skill)
+        success = validate_skill(args.skill, require_last_changed_at=args.require_last_changed_at)
         sys.exit(0 if success else 1)
 
     # Validate current directory
     current = Path.cwd()
     if (current / "SKILL.md").exists():
-        success = validate_skill(current)
+        success = validate_skill(current, require_last_changed_at=args.require_last_changed_at)
         sys.exit(0 if success else 1)
     else:
         print("Usage: python validate.py <skill-directory>")

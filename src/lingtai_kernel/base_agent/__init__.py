@@ -1883,6 +1883,25 @@ class BaseAgent:
             }
         return self._session.get_token_usage()
 
+    def get_current_session_token_usage(self) -> dict:
+        """Return current-runtime-session token usage DELTAS (not lifetime totals).
+
+        Delegates to :meth:`SessionManager.get_current_session_token_usage`. Used
+        by the injected ``_meta.tool_meta.token_usage`` session-stat half so that
+        restored cumulative/persisted totals never leak in as current-session
+        activity. Distinct from :meth:`get_token_usage`, which reports lifetime
+        totals for status/identity surfaces.
+        """
+        if not hasattr(self, "_session"):
+            return {
+                "api_calls": 0,
+                "input_tokens": 0,
+                "cached_tokens": 0,
+                "session_cache_rate": 0.0,
+                "avg_input_tokens_per_api_call": 0,
+            }
+        return self._session.get_current_session_token_usage()
+
     def get_chat_state(self) -> dict:
         """Serialize current chat session for persistence."""
         return self._session.get_chat_state()

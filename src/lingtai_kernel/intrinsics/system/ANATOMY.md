@@ -1,3 +1,18 @@
+---
+related_files:
+  - src/lingtai_kernel/intrinsics/ANATOMY.md
+  - src/lingtai_kernel/intrinsics/system/__init__.py
+  - src/lingtai_kernel/intrinsics/system/karma.py
+  - src/lingtai_kernel/intrinsics/system/preset.py
+  - src/lingtai_kernel/intrinsics/system/schema.py
+  - src/lingtai_kernel/intrinsics/system/summarize.py
+maintenance: |
+  Keep related_files as repo-relative paths to real files. Include neighboring
+  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
+  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
+  maintenance field. If you notice drift between this anatomy and the code,
+  report it. See lingtai-dev-guide for details.
+---
 # intrinsics/system
 
 System intrinsic — runtime, lifecycle, and synchronization. Provides the agent with refresh (hot-reload config/presets), karma-gated lifecycle actions on other agents (sleep, lull, suspend, cpr, interrupt, clear, nirvana), preset listing, and context summarization. **System no longer owns any notification verb** — voluntary notification reads and generic dismiss moved to the standalone `notification` tool (sibling package `intrinsics/notification/`, atomic actions `check`/`dismiss_channel`/`dismiss_event`/`dismiss_ref`). The system module remains the **conceptual home** of the notification *producer* surface, though — it re-exports `publish_notification` / `clear_notification` from the kernel-root `notifications.py` so any in-process producer (intrinsic, capability, or wired-in MCP server) submits through one canonical entry point.

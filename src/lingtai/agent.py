@@ -20,8 +20,51 @@ from pathlib import Path
 from lingtai_kernel.base_agent import BaseAgent
 from lingtai_kernel.base_agent.prompt import _refresh_meta_guidance_section
 from lingtai_kernel._frontmatter import strip_frontmatter as _strip_frontmatter
+from lingtai_kernel.config import AgentConfig
 from lingtai.llm.service import LLMService, build_provider_defaults_from_manifest_llm
 from lingtai_kernel.prompt import build_system_prompt
+
+
+def build_agent_config(manifest: dict[str, Any], *, max_rpm: int) -> AgentConfig:
+    """Overlay host manifest values onto AgentConfig defaults."""
+    defaults = AgentConfig()
+    soul = manifest.get("soul", {})
+    llm = manifest.get("llm", {})
+
+    return AgentConfig(
+        stamina=manifest.get("stamina", defaults.stamina),
+        soul_delay=soul.get("delay", defaults.soul_delay),
+        consultation_past_count=soul.get(
+            "consultation_past_count", defaults.consultation_past_count
+        ),
+        soul_voice=soul.get("voice", defaults.soul_voice),
+        soul_voice_prompt=soul.get("voice_prompt", defaults.soul_voice_prompt),
+        # ``manifest.max_turns`` is a legacy/resolved-manifest field and is no
+        # longer the authoritative tool-loop guard source. ACTIVE-turn
+        # tool-call safety is kernel-owned in ``lingtai_kernel.safety_limits``.
+        # Keep AgentConfig.max_turns at its default for API compatibility, but
+        # deliberately ignore stale init.json values here.
+        language=manifest.get("language", defaults.language),
+        activeness=manifest.get("activeness", defaults.activeness),
+        context_limit=manifest.get("context_limit", defaults.context_limit),
+        thinking=llm.get("thinking", defaults.thinking),
+        # Molt thresholds and the context.molt message are kernel-fixed runtime
+        # constants and are NOT agent-configurable. Stale manifest
+        # molt_notice/molt_pressure/molt_urgency/molt_prompt values are
+        # deliberately ignored.
+        snapshot_interval=manifest.get(
+            "snapshot_interval", defaults.snapshot_interval
+        ),
+        time_awareness=manifest.get("time_awareness", defaults.time_awareness),
+        timezone_awareness=manifest.get(
+            "timezone_awareness", defaults.timezone_awareness
+        ),
+        aed_timeout=manifest.get("aed_timeout", defaults.aed_timeout),
+        max_aed_attempts=manifest.get(
+            "max_aed_attempts", defaults.max_aed_attempts
+        ),
+        max_rpm=max_rpm,
+    )
 
 
 class Agent(BaseAgent):
@@ -162,10 +205,15 @@ class Agent(BaseAgent):
     def _setup_capability(self, name: str, **kwargs: Any) -> Any:
         """Load a named capability.
 
+        ``None`` from setup means success without a manager object. A setup that
+        cannot register must return ``CAPABILITY_UNAVAILABLE`` before adding any
+        tools so this wrapper can leave the capability absent from public
+        registration surfaces.
+
         Not directly sealed — but setup() calls add_tool() which checks the seal.
         Must only be called from __init__ (before start()).
         """
-        from .capabilities import setup_capability
+        from .capabilities import CAPABILITY_UNAVAILABLE, setup_capability
 
         serializable_kw = {
             k: v for k, v in kwargs.items()
@@ -178,6 +226,9 @@ class Agent(BaseAgent):
             # Roll back the entry so _capabilities only lists registered caps.
             self._capabilities.pop()
             raise
+        if mgr is CAPABILITY_UNAVAILABLE:
+            self._capabilities.pop()
+            return None
         self._capability_managers[name] = mgr
         return mgr
 
@@ -1075,8 +1126,6 @@ class Agent(BaseAgent):
             resolve_file,
             _resolve_capabilities,
         )
-        from lingtai_kernel.config import AgentConfig, DEFAULT_SOUL_DELAY_SECONDS
-
         env_file = data.get("env_file")
         import os
 
@@ -1200,44 +1249,10 @@ class Agent(BaseAgent):
         # Reload admin from init.json (avatars have admin: {}, not inherited from parent)
         self._admin = m.get("admin", {})
 
-        # Reload config (all fields optional — fall back to AgentConfig defaults)
-        soul = m.get("soul", {})
-        # NOTE: defaults here MUST mirror src/lingtai_kernel/config.py
-        # AgentConfig defaults — _read_init reload re-constructs the
-        # whole config and would otherwise silently override any kernel-
-        # side default change with the stale literal here. Kept as
-        # explicit literals for readability rather than introspecting
-        # AgentConfig fields.
-        self._config = AgentConfig(
-            stamina=m.get("stamina", 86400.0),
-            soul_delay=soul.get("delay", DEFAULT_SOUL_DELAY_SECONDS),
-            consultation_past_count=soul.get("consultation_past_count", 0),
-            soul_voice=soul.get("voice", "inner"),
-            soul_voice_prompt=soul.get("voice_prompt", ""),
-            # ``manifest.max_turns`` is a legacy/resolved-manifest field and is
-            # no longer the authoritative tool-loop guard source.  ACTIVE-turn
-            # tool-call safety is kernel-owned in ``lingtai_kernel.safety_limits``.
-            # Keep AgentConfig.max_turns at its default for API compatibility,
-            # but deliberately ignore stale init.json values here.
-            language=m.get("language", "en"),
-            activeness=m.get("activeness", "balanced"),
-            context_limit=m.get("context_limit"),
-            thinking=llm.get("thinking", "high"),
-            # Molt thresholds and the context.molt message are kernel-fixed
-            # runtime constants and are NOT agent-configurable. Any stale
-            # init.json molt_notice/molt_pressure/molt_urgency/molt_prompt
-            # values are deliberately ignored — we leave thresholds at the
-            # AgentConfig kernel-default (MOLT_*_THRESHOLD in config.py) so an
-            # agent cannot raise its own thresholds to dodge molting under
-            # pressure, and the molt message is hardcoded in
-            # meta_block.build_molt_context.
-            snapshot_interval=m.get("snapshot_interval"),
-            time_awareness=m.get("time_awareness", True),
-            timezone_awareness=m.get("timezone_awareness", True),
-            aed_timeout=m.get("aed_timeout", 360.0),
-            max_aed_attempts=m.get("max_aed_attempts", 3),
-            max_rpm=new_max_rpm,
-        )
+        # Reload config by overlaying explicit init.json values onto
+        # AgentConfig defaults. Stale max_turns and molt_* manifest values stay
+        # deliberately ignored inside build_agent_config.
+        self._config = build_agent_config(m, max_rpm=new_max_rpm)
         self._soul_delay = max(1.0, self._config.soul_delay)
         self._session._config = self._config
 

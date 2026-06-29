@@ -37,6 +37,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from .workdir import workdir_layout
+
 # Stable, namespaced literal stamped into every manifest produced by this
 # module.  Detectors require it for new manifests; older manifests that
 # pre-date this field are still accepted by ``is_spill_manifest`` via the
@@ -191,7 +193,7 @@ def spill_oversized_result(
     spill_failed: str | None = None
     if working_dir is not None:
         wd = Path(working_dir)
-        spill_dir = wd / "tmp" / "tool-results"
+        spill_dir = workdir_layout(wd).tool_results_dir
         try:
             spill_dir.mkdir(parents=True, exist_ok=True)
             spill_path = spill_dir / filename
@@ -405,7 +407,7 @@ def mark_expired_spill_manifests(working_dir: Path | str) -> int:
     marked ``"expired"``).
     """
     wd = Path(working_dir)
-    history_path = wd / "history" / "chat_history.jsonl"
+    history_path = workdir_layout(wd).chat_history
     if not history_path.is_file():
         return 0
 

@@ -1,3 +1,23 @@
+---
+related_files:
+  - src/lingtai_kernel/ANATOMY.md
+  - src/lingtai_kernel/migrate/__init__.py
+  - src/lingtai_kernel/migrate/agent_m001_init_procedures_override.py
+  - src/lingtai_kernel/migrate/agent_m002_mcp_launch_args_rewrite.py
+  - src/lingtai_kernel/migrate/agent_m003_init_prompt_contract.py
+  - src/lingtai_kernel/migrate/m001_context_limit_relocation.py
+  - src/lingtai_kernel/migrate/m002_description_object.py
+  - src/lingtai_kernel/migrate/migrate.py
+  - tests/test_cli.py
+  - tests/test_deep_refresh.py
+  - tests/test_kernel_migrate.py
+maintenance: |
+  Keep related_files as repo-relative paths to real files. Include neighboring
+  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
+  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
+  maintenance field. If you notice drift between this anatomy and the code,
+  report it. See lingtai-dev-guide for details.
+---
 # migrate
 
 > **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues/mail/PR proposals; do not silently fix.

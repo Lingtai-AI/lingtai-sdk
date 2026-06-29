@@ -1,3 +1,20 @@
+---
+related_files:
+  - src/lingtai/intrinsic_skills/psyche-manual/assets/session-journal-entry-template.md
+  - src/lingtai_kernel/intrinsics/ANATOMY.md
+  - src/lingtai_kernel/intrinsics/psyche/__init__.py
+  - src/lingtai_kernel/intrinsics/psyche/_lingtai.py
+  - src/lingtai_kernel/intrinsics/psyche/_molt.py
+  - src/lingtai_kernel/intrinsics/psyche/_pad.py
+  - src/lingtai_kernel/intrinsics/psyche/_session_journal.py
+  - src/lingtai_kernel/intrinsics/psyche/_snapshots.py
+maintenance: |
+  Keep related_files as repo-relative paths to real files. Include neighboring
+  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
+  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
+  maintenance field. If you notice drift between this anatomy and the code,
+  report it. See lingtai-dev-guide for details.
+---
 # intrinsics/psyche
 
 Agent identity, working notes, and context lifecycle — the "bare essentials of self." Provides the agent with tools to manage its own identity, working notes (pad), and conversation context (molt). The core shed-and-reload machinery that enables cross-session persistence.

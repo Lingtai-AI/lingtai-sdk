@@ -1,3 +1,21 @@
+---
+related_files:
+  - src/lingtai/capabilities/web_search/ANATOMY.md
+  - src/lingtai/services/ANATOMY.md
+  - src/lingtai/services/websearch/__init__.py
+  - src/lingtai/services/websearch/anthropic.py
+  - src/lingtai/services/websearch/duckduckgo.py
+  - src/lingtai/services/websearch/gemini.py
+  - src/lingtai/services/websearch/minimax.py
+  - src/lingtai/services/websearch/openai.py
+  - src/lingtai/services/websearch/zhipu.py
+maintenance: |
+  Keep related_files as repo-relative paths to real files. Include neighboring
+  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
+  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
+  maintenance field. If you notice drift between this anatomy and the code,
+  report it. See lingtai-dev-guide for details.
+---
 # src/lingtai/services/websearch/
 
 Provider-specific web search — standalone services behind a common `SearchService` ABC.

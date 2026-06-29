@@ -295,6 +295,92 @@ def test_restore_token_state():
 
 
 # ------------------------------------------------------------------
+# Current-runtime-session token usage (deltas, not lifetime totals)
+# ------------------------------------------------------------------
+
+def test_current_session_token_usage_default_zero():
+    sm, _, _ = make_session_manager()
+    usage = sm.get_current_session_token_usage()
+    assert usage["api_calls"] == 0
+    assert usage["input_tokens"] == 0
+    assert usage["cached_tokens"] == 0
+    assert usage["session_cache_rate"] == 0.0
+    assert usage["avg_input_tokens_per_api_call"] == 0
+
+
+def test_current_session_token_usage_tracks_runtime_deltas():
+    sm, _, _ = make_session_manager()
+    response = MagicMock()
+    response.usage.input_tokens = 100
+    response.usage.output_tokens = 50
+    response.usage.thinking_tokens = 10
+    response.usage.cached_tokens = 20
+    sm._track_usage(response)
+    sm._track_usage(response)
+
+    usage = sm.get_current_session_token_usage()
+    assert usage["api_calls"] == 2
+    assert usage["input_tokens"] == 200
+    assert usage["cached_tokens"] == 40
+    assert usage["avg_input_tokens_per_api_call"] == 100
+    assert usage["session_cache_rate"] == 0.2
+
+
+def test_current_session_token_usage_excludes_restored_lifetime_totals():
+    # Restored cumulative lifetime totals (huge persisted numbers) must NOT leak
+    # into the current-runtime-session deltas: the restore re-baselines so that
+    # post-restore usage starts counting from zero.
+    sm, _, _ = make_session_manager()
+    sm.restore_token_state({
+        "input_tokens": 5_000_000_000, "output_tokens": 1_000_000,
+        "thinking_tokens": 500_000, "cached_tokens": 4_000_000_000,
+        "api_calls": 27_863,
+    })
+
+    # Immediately after restore, the current runtime session is empty.
+    before = sm.get_current_session_token_usage()
+    assert before["api_calls"] == 0
+    assert before["input_tokens"] == 0
+    assert before["cached_tokens"] == 0
+
+    # One real provider round adds only its own delta on top of the baseline.
+    response = MagicMock()
+    response.usage.input_tokens = 100
+    response.usage.output_tokens = 50
+    response.usage.thinking_tokens = 10
+    response.usage.cached_tokens = 20
+    sm._track_usage(response)
+
+    after = sm.get_current_session_token_usage()
+    assert after["api_calls"] == 1
+    assert after["input_tokens"] == 100
+    assert after["cached_tokens"] == 20
+    # Lifetime getter still reflects the restored cumulative totals.
+    assert sm.get_token_usage()["input_tokens"] == 5_000_000_000 + 100
+    assert sm.get_token_usage()["api_calls"] == 27_863 + 1
+
+
+def test_current_session_token_usage_clamps_negative_deltas_to_zero():
+    # A restore to LOWER totals than the live counters must not produce negatives.
+    sm, _, _ = make_session_manager()
+    response = MagicMock()
+    response.usage.input_tokens = 100
+    response.usage.output_tokens = 50
+    response.usage.thinking_tokens = 10
+    response.usage.cached_tokens = 20
+    sm._track_usage(response)
+    # Baseline now above live counters.
+    sm.restore_token_state({
+        "input_tokens": 10_000, "output_tokens": 0,
+        "thinking_tokens": 0, "cached_tokens": 10_000, "api_calls": 50,
+    })
+    usage = sm.get_current_session_token_usage()
+    assert usage["api_calls"] == 0
+    assert usage["input_tokens"] == 0
+    assert usage["cached_tokens"] == 0
+
+
+# ------------------------------------------------------------------
 # Session persistence
 # ------------------------------------------------------------------
 

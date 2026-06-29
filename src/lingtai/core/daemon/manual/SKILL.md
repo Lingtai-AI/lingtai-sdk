@@ -7,6 +7,7 @@ description: >
   and clean up daemon footprint. Read this after dispatching daemon work that is
   slow, failed, timed out, exited 143 / SIGTERM, or needs backend-specific reasoning.
 version: 0.5.1
+last_changed_at: "2026-06-23T16:35:37-07:00"
 ---
 
 # Daemon Manual — Router

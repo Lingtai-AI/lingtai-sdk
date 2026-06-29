@@ -15,13 +15,12 @@ from __future__ import annotations
 
 import json
 import os
-import queue
 import re
-import signal
 import subprocess
 import threading
 import time
 import yaml
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
@@ -38,6 +37,12 @@ from lingtai_kernel.meta_block import build_meta
 from lingtai_kernel.tool_executor import ToolExecutor
 from .run_dir import DaemonRunDir
 from .claude_interactive import ClaudeInteractiveError, run_claude_interactive
+from .runtime import (
+    kill_process_group as _kill_process_group,
+    iter_stdout_with_deadline as _iter_stdout_with_deadline,
+    mark_cancelled_or_timeout as _mark_cancelled_or_timeout,
+    spawn_stderr_drainer as _spawn_stderr_drainer,
+)
 
 PROVIDERS = {"providers": [], "default": "builtin"}
 
@@ -46,100 +51,6 @@ PROVIDERS = {"providers": [], "default": "builtin"}
 # larger values are capped here.
 DEFAULT_MAX_TURNS = 1000
 _DAEMON_SKILL_FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?\n)---\s*\n", re.DOTALL)
-
-
-def _kill_process_group(proc: subprocess.Popen) -> None:
-    """Terminate the entire process group for *proc*, then force-kill if needed.
-
-    Requires *proc* to have been started with ``start_new_session=True`` so
-    that its PGID equals its own PID.  Sends SIGTERM to the group, waits up
-    to 5 seconds, then escalates to SIGKILL for any survivors.
-
-    Uses ``proc.pid`` directly as the PGID (since ``start_new_session=True``
-    guarantees PGID == PID) to avoid a ``getpgid`` round-trip that could
-    race with PID recycling.
-
-    Silently ignores ``ProcessLookupError`` (process already dead) and
-    ``OSError`` (permission denied on already-dead group).
-    """
-    # start_new_session=True guarantees pgid == pid
-    pgid = proc.pid
-    try:
-        os.killpg(pgid, signal.SIGTERM)
-    except (ProcessLookupError, OSError):
-        pass
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(pgid, signal.SIGKILL)
-        except (ProcessLookupError, OSError):
-            pass
-        try:
-            proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            pass
-
-# Sentinel placed on the stdout-reader queue when the background reader
-# thread observes EOF on the subprocess pipe. The consumer treats this as
-# "no more lines will ever arrive — stop draining."
-_STDOUT_EOF = object()
-
-
-def _iter_stdout_with_deadline(
-    proc: subprocess.Popen,
-    deadline: float,
-    thread_name: str,
-):
-    """Yield stdout lines from *proc* until EOF, deadline, or process exit.
-
-    The fundamental problem this solves: ``for line in proc.stdout`` blocks
-    the caller's thread until the subprocess writes a newline. If the
-    resumed CLI hangs without producing output, the caller can never
-    observe the deadline. We work around it by pushing the blocking
-    read onto a small daemon thread that drops each line into a queue,
-    while the caller pulls from the queue with ``timeout=remaining``.
-
-    Yields raw lines (with trailing ``\\n`` preserved, matching the
-    original iterator semantics). Stops iterating when:
-      - the reader thread reports EOF (sentinel arrives), OR
-      - ``time.monotonic() >= deadline`` (caller is expected to
-        ``_kill_process_group`` after handling timeout — we do NOT do
-        it here so the worker can record timeout state first).
-
-    The reader thread is a daemon thread (won't block process exit) and
-    is left orphaned if the deadline fires — it will exit naturally once
-    the subprocess is killed and its pipe closes.
-    """
-    q: "queue.Queue[object]" = queue.Queue(maxsize=1024)
-
-    def _reader():
-        try:
-            assert proc.stdout is not None
-            for raw_line in proc.stdout:
-                q.put(raw_line)
-        except (ValueError, OSError):
-            # Pipe closed mid-read (e.g. after _kill_process_group). Treat
-            # as EOF — the consumer either already noticed the timeout or
-            # is about to.
-            pass
-        finally:
-            q.put(_STDOUT_EOF)
-
-    reader = threading.Thread(target=_reader, daemon=True, name=thread_name)
-    reader.start()
-
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return  # caller handles timeout (kill + mark)
-        try:
-            item = q.get(timeout=min(remaining, 0.5))
-        except queue.Empty:
-            continue  # re-check deadline
-        if item is _STDOUT_EOF:
-            return
-        yield item
 
 
 # Tools emanations can never use (no recursion, no spawning, no identity mutation)
@@ -356,12 +267,165 @@ _BACKEND_ALIASES = {
     "omp": "oh-my-pi",
 }
 
+_QWEN_CODE_ASK_UNSUPPORTED_MESSAGE = (
+    "qwen-code daemon backend does not support daemon(action='ask') yet; "
+    "start a new qwen-code emanation instead."
+)
+
+
+@dataclass(frozen=True)
+class _BackendSpec:
+    id: str
+    is_cli: bool
+    runner_attr: str | None
+    ask_handler_attr: str | None
+    ask_unsupported_msg: str | None
+    reserved_flags: frozenset[str]
+
+
+@dataclass(frozen=True)
+class _CliTaskContext:
+    """Passive per-task CLI context; MCP entries are registration dicts only."""
+
+    backend_argv: list[str]
+    system_prompt: str | None
+    skill_catalog: str | None
+    mcp_catalog: str | None
+    mcp_regs: list[dict]
+
+
+_CLAUDE_INTERACTIVE_RESERVED_FLAGS = frozenset(
+    _CLAUDE_COMMON_RESERVED_BACKEND_FLAGS
+    | _CLAUDE_INTERACTIVE_RESERVED_BACKEND_FLAGS
+)
+
+_BACKEND_SPECS: dict[str, _BackendSpec] = {
+    "lingtai": _BackendSpec(
+        id="lingtai",
+        is_cli=False,
+        runner_attr=None,
+        ask_handler_attr=None,
+        ask_unsupported_msg=None,
+        reserved_flags=frozenset(),
+    ),
+    "claude": _BackendSpec(
+        id="claude",
+        is_cli=True,
+        runner_attr="_run_claude_interactive_emanation",
+        ask_handler_attr="_handle_ask_claude_interactive",
+        ask_unsupported_msg=None,
+        reserved_flags=_CLAUDE_INTERACTIVE_RESERVED_FLAGS,
+    ),
+    "claude-interactive": _BackendSpec(
+        id="claude-interactive",
+        is_cli=True,
+        runner_attr="_run_claude_interactive_emanation",
+        ask_handler_attr="_handle_ask_claude_interactive",
+        ask_unsupported_msg=None,
+        reserved_flags=_CLAUDE_INTERACTIVE_RESERVED_FLAGS,
+    ),
+    "claude-p": _BackendSpec(
+        id="claude-p",
+        is_cli=True,
+        runner_attr="_run_claude_code_emanation",
+        ask_handler_attr="_handle_ask_cli",
+        ask_unsupported_msg=None,
+        reserved_flags=frozenset(_CLAUDE_COMMON_RESERVED_BACKEND_FLAGS),
+    ),
+    "claude-code": _BackendSpec(
+        id="claude-code",
+        is_cli=True,
+        runner_attr="_run_claude_code_emanation",
+        ask_handler_attr="_handle_ask_cli",
+        ask_unsupported_msg=None,
+        reserved_flags=frozenset(_CLAUDE_COMMON_RESERVED_BACKEND_FLAGS),
+    ),
+    "codex": _BackendSpec(
+        id="codex",
+        is_cli=True,
+        runner_attr="_run_codex_emanation",
+        ask_handler_attr="_handle_ask_codex",
+        ask_unsupported_msg=None,
+        reserved_flags=frozenset(),
+    ),
+    "opencode": _BackendSpec(
+        id="opencode",
+        is_cli=True,
+        runner_attr="_run_opencode_emanation",
+        ask_handler_attr="_handle_ask_opencode",
+        ask_unsupported_msg=None,
+        reserved_flags=frozenset(_OPENCODE_FAMILY_RESERVED_BACKEND_FLAGS),
+    ),
+    "mimocode": _BackendSpec(
+        id="mimocode",
+        is_cli=True,
+        runner_attr="_run_mimocode_emanation",
+        ask_handler_attr="_handle_ask_mimocode",
+        ask_unsupported_msg=None,
+        reserved_flags=frozenset(_OPENCODE_FAMILY_RESERVED_BACKEND_FLAGS),
+    ),
+    "qwen-code": _BackendSpec(
+        id="qwen-code",
+        is_cli=True,
+        runner_attr="_run_qwen_code_emanation",
+        ask_handler_attr=None,
+        ask_unsupported_msg=_QWEN_CODE_ASK_UNSUPPORTED_MESSAGE,
+        reserved_flags=frozenset(_QWEN_RESERVED_BACKEND_FLAGS),
+    ),
+    "oh-my-pi": _BackendSpec(
+        id="oh-my-pi",
+        is_cli=True,
+        runner_attr="_run_oh_my_pi_emanation",
+        ask_handler_attr="_handle_ask_oh_my_pi",
+        ask_unsupported_msg=None,
+        reserved_flags=frozenset(_OH_MY_PI_RESERVED_BACKEND_FLAGS),
+    ),
+    "cursor": _BackendSpec(
+        id="cursor",
+        is_cli=True,
+        runner_attr="_run_cursor_emanation",
+        ask_handler_attr="_handle_ask_cursor",
+        ask_unsupported_msg=None,
+        reserved_flags=frozenset(),
+    ),
+}
+
+_BACKEND_SCHEMA_ENUM = [
+    "lingtai",
+    "claude-p",
+    "claude-code",
+    "codex",
+    "opencode",
+    "mimocode",
+    "mimo",
+    "qwen-code",
+    "qwen",
+    "oh-my-pi",
+    "omp",
+    "cursor",
+]
+
+_HIDDEN_SCHEMA_BACKENDS = frozenset({"claude", "claude-interactive"})
+assert all(name == spec.id for name, spec in _BACKEND_SPECS.items())
+assert set(_BACKEND_ALIASES.values()).issubset(_BACKEND_SPECS)
+assert set(_BACKEND_SCHEMA_ENUM) == (
+    (set(_BACKEND_SPECS) - _HIDDEN_SCHEMA_BACKENDS)
+    | set(_BACKEND_ALIASES)
+)
+
 
 def _normalize_backend(backend: str | None) -> str:
     """Map a caller-supplied backend (incl. aliases) to its canonical id."""
     if not backend:
         return "lingtai"
     return _BACKEND_ALIASES.get(backend, backend)
+
+
+def _backend_spec(backend: str | None) -> _BackendSpec | None:
+    """Return the runtime backend spec for a stored backend id, if known."""
+    if not backend:
+        return None
+    return _BACKEND_SPECS.get(backend)
 
 
 def _validate_claude_backend_argv(backend: str, argv: list[str]) -> None:
@@ -379,20 +443,11 @@ def _validate_claude_backend_argv(backend: str, argv: list[str]) -> None:
 
     Despite the historical name, this validator now covers all CLI backends.
     """
-    if backend in ("claude", "claude-interactive", "claude-p", "claude-code"):
-        reserved = set(_CLAUDE_COMMON_RESERVED_BACKEND_FLAGS)
-        if backend in ("claude", "claude-interactive"):
-            reserved.update(_CLAUDE_INTERACTIVE_RESERVED_BACKEND_FLAGS)
-    elif backend in ("opencode", "mimocode"):
-        reserved = set(_OPENCODE_FAMILY_RESERVED_BACKEND_FLAGS)
-    elif backend == "qwen-code":
-        reserved = set(_QWEN_RESERVED_BACKEND_FLAGS)
-    elif backend == "oh-my-pi":
-        reserved = set(_OH_MY_PI_RESERVED_BACKEND_FLAGS)
-    else:
+    spec = _backend_spec(backend)
+    if spec is None or not spec.reserved_flags:
         return
     for token in argv:
-        if token in reserved:
+        if token in spec.reserved_flags:
             raise ValueError(f"{token} is reserved by the {backend} daemon backend")
 
 
@@ -518,20 +573,7 @@ def get_schema(lang: str = "en") -> dict:
             },
             "backend": {
                 "type": "string",
-                "enum": [
-                    "lingtai",
-                    "claude-p",
-                    "claude-code",
-                    "codex",
-                    "opencode",
-                    "mimocode",
-                    "mimo",
-                    "qwen-code",
-                    "qwen",
-                    "oh-my-pi",
-                    "omp",
-                    "cursor",
-                ],
+                "enum": list(_BACKEND_SCHEMA_ENUM),
                 "description": (
                     "Execution backend: 'lingtai' (default — parallel LLM reasoning, uses your current model), "
                     "'claude-p' (Claude Code print-mode backend; 'claude-code' is a compatibility alias), "
@@ -1147,6 +1189,42 @@ class DaemonManager:
         )
         return {key: llm[key] for key in keys if key in llm}
 
+    def _implicit_parent_preset_llm(self) -> dict:
+        """Materialize the parent service into an implicit/effective preset.
+
+        A LingTai daemon always runs from an effective preset. When a task does
+        not name one, the parent agent's existing LLM configuration *is* the
+        implicit preset: same provider/model/base_url, the credential the parent
+        actually built its boot adapter with (``parent_service.api_key``), and
+        the parent's own provider-defaults bucket carried through unchanged.
+
+        This deliberately does NOT run fallback key resolution for the daemon's
+        primary key — the parent already resolved that at boot, so the daemon
+        inherits the same effective key directly rather than re-deriving it from
+        a guessed ``{PROVIDER}_API_KEY`` env slot. The parent's ``key_resolver``
+        is still carried so on-demand adapters for *other* providers behave like
+        the parent's; it is never consulted for this preset's primary key.
+
+        Extra non-manifest fields (``key_resolver``, ``context_window``, and the
+        verbatim ``_provider_defaults`` bucket) ride along so the shared preset
+        construction path in ``_run_emanation`` can mirror the parent service.
+        The api_key is never logged or persisted.
+        """
+        parent_service = self._agent.service
+        provider = str(getattr(parent_service, "provider", "")).lower()
+        parent_defaults = getattr(parent_service, "_provider_defaults", {}) or {}
+        return {
+            "provider": parent_service.provider,
+            "model": parent_service.model,
+            "api_key": getattr(parent_service, "api_key", None),
+            "base_url": getattr(parent_service, "_base_url", None),
+            "key_resolver": getattr(parent_service, "_key_resolver", None),
+            "context_window": getattr(parent_service, "_context_window", 1_000_000),
+            # Parent provider defaults carried verbatim (not re-derived through
+            # the manifest key list) so any provider-specific field survives.
+            "_provider_defaults": dict(parent_defaults.get(provider, {})),
+        }
+
     def _build_tool_surface(
         self,
         requested: list[str],
@@ -1456,69 +1534,61 @@ class DaemonManager:
         mark_timeout instead of mark_cancelled. None is allowed for direct-call
         tests and the cancellation defaults to "cancelled" semantics.
 
-        preset_llm: if provided, a dict with keys provider/model/api_key_env/
-        base_url (and optionally api_key) resolved from the preset. A dedicated
-        LLMService is constructed for this emanation instead of reusing
-        self._agent.service.
+        preset_llm: the per-task preset's ``manifest.llm`` block when the task
+        explicitly named a preset (keys provider/model/api_key_env/base_url and
+        optionally api_key). When the task omits ``preset``, the parent agent's
+        existing LLM configuration is used as an implicit/effective preset (see
+        ``_implicit_parent_preset_llm``). Either way a dedicated daemon-scoped
+        LLMService is built from the effective preset — the daemon never reuses
+        ``self._agent.service`` directly and never runs provider-name env-var
+        fallback resolution for its primary key.
         """
-        def _exit_cancelled() -> str:
-            if timeout_event is not None and timeout_event.is_set():
-                run_dir.mark_timeout()
-            else:
-                run_dir.mark_cancelled()
-            return "[cancelled]"
-
         if cancel_event.is_set():
-            return _exit_cancelled()
+            return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
-        if preset_llm:
-            # Build a dedicated LLM service for this emanation from the preset.
-            from lingtai.llm.service import LLMService
-            from lingtai_kernel.config_resolve import resolve_env
-            api_key = resolve_env(preset_llm.get("api_key"), preset_llm.get("api_key_env"))
-            service = LLMService(
-                provider=preset_llm["provider"],
-                model=preset_llm["model"],
-                api_key=api_key,
-                base_url=preset_llm.get("base_url"),
-                provider_defaults=self._daemon_provider_defaults(
-                    preset_llm["provider"],
-                    self._llm_defaults_from_manifest(preset_llm),
-                    run_dir,
-                ),
-            )
-            effective_model = preset_llm["model"]
+        # A LingTai daemon always runs from an effective preset: the task's
+        # explicit preset if it supplied one, otherwise the parent agent's
+        # current LLM configuration synthesized into an implicit preset. Both
+        # flow through the same daemon-scoped service construction below.
+        effective_preset_llm = preset_llm or self._implicit_parent_preset_llm()
+
+        from lingtai.llm.service import LLMService
+        from lingtai_kernel.config_resolve import resolve_env
+
+        provider = effective_preset_llm["provider"]
+        effective_model = effective_preset_llm["model"]
+        # Primary key: the preset's direct api_key (resolved from its api_key_env
+        # only, never a guessed provider-name slot). For the implicit preset this
+        # is the parent's already-resolved effective key. Never logged/persisted.
+        api_key = resolve_env(
+            effective_preset_llm.get("api_key"),
+            effective_preset_llm.get("api_key_env"),
+        )
+        # Base provider defaults: the implicit preset carries the parent bucket
+        # verbatim; an explicit preset derives them from its manifest.llm fields.
+        # Codex daemons additionally get a per-run cache anchor (set inside
+        # _daemon_provider_defaults) so they don't collide with the parent slot.
+        if "_provider_defaults" in effective_preset_llm:
+            base_defaults = effective_preset_llm["_provider_defaults"]
         else:
-            # No preset: build a fresh daemon-scoped service mirroring the parent
-            # service rather than reusing ``self._agent.service``. Every provider
-            # keeps the parent's provider defaults; Codex additionally gets a
-            # per-run cache anchor (and drops any fixed session id) so this run
-            # gets its own session_id/thread_id/prompt_cache_key triple instead
-            # of colliding with the parent agent's cache slot.
-            from lingtai.llm.service import LLMService
-            parent_service = self._agent.service
-            parent_provider = str(getattr(parent_service, "provider", "")).lower()
-            parent_defaults = getattr(parent_service, "_provider_defaults", {}) or {}
-            parent_key_resolver = getattr(parent_service, "_key_resolver", None)
-            parent_api_key = (
-                parent_key_resolver(parent_provider)
-                if callable(parent_key_resolver)
-                else None
-            )
-            service = LLMService(
-                provider=parent_service.provider,
-                model=parent_service.model,
-                api_key=parent_api_key,
-                base_url=getattr(parent_service, "_base_url", None),
-                key_resolver=parent_key_resolver,
-                provider_defaults=self._daemon_provider_defaults(
-                    parent_provider,
-                    parent_defaults.get(parent_provider, {}),
-                    run_dir,
-                ),
-                context_window=getattr(parent_service, "_context_window", 1_000_000),
-            )
-            effective_model = parent_service.model
+            base_defaults = self._llm_defaults_from_manifest(effective_preset_llm)
+        service_kwargs = {
+            "provider": provider,
+            "model": effective_model,
+            "api_key": api_key,
+            "base_url": effective_preset_llm.get("base_url"),
+            "provider_defaults": self._daemon_provider_defaults(
+                provider, base_defaults, run_dir,
+            ),
+        }
+        # Implicit-preset-only pass-throughs that mirror the parent service:
+        # the key_resolver (for on-demand adapters of *other* providers — never
+        # the primary key) and the parent's context window.
+        if "key_resolver" in effective_preset_llm:
+            service_kwargs["key_resolver"] = effective_preset_llm["key_resolver"]
+        if "context_window" in effective_preset_llm:
+            service_kwargs["context_window"] = effective_preset_llm["context_window"]
+        service = LLMService(**service_kwargs)
 
         session = service.create_session(
             system_prompt=run_dir.prompt_path.read_text(encoding="utf-8"),
@@ -1593,7 +1663,7 @@ class DaemonManager:
             effective_max_turns = max_turns if max_turns is not None else self._max_turns
             while response.tool_calls and turns < effective_max_turns:
                 if cancel_event.is_set():
-                    return _exit_cancelled()
+                    return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
                 # Intermediate text is already persisted in chat_history via
                 # bump_turn(); do not inject daemon progress as parent requests.
@@ -1714,15 +1784,8 @@ class DaemonManager:
         Falls back to the legacy JSONL scan if no ``session_id`` ever
         appears in the stream.
         """
-        def _exit_cancelled() -> str:
-            if timeout_event is not None and timeout_event.is_set():
-                run_dir.mark_timeout()
-            else:
-                run_dir.mark_cancelled()
-            return "[cancelled]"
-
         if cancel_event.is_set():
-            return _exit_cancelled()
+            return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
         # Required infrastructure flags come first; free-form
         # backend_options sit between them and the task prompt so the
@@ -1770,24 +1833,10 @@ class DaemonManager:
         # the run dir even while the main thread is parsing stdout events.
         # iLink-style daemons with a chatty stderr would otherwise block
         # the pipe and stall the process.
-        stderr_lines: list[str] = []
-
-        def _drain_stderr() -> None:
-            assert proc.stderr is not None
-            for line in proc.stderr:
-                stripped = line.rstrip("\n")
-                if not stripped:
-                    continue
-                stderr_lines.append(stripped)
-                try:
-                    run_dir.record_cli_output(stripped, stream="stderr")
-                except Exception:
-                    pass
-
-        stderr_thread = threading.Thread(
-            target=_drain_stderr, daemon=True, name=f"daemon-claude-stderr-{em_id}",
+        stderr_thread = _spawn_stderr_drainer(
+            proc, run_dir, thread_name=f"daemon-claude-stderr-{em_id}",
         )
-        stderr_thread.start()
+        stderr_lines = stderr_thread.lines
 
         final_result_text: str | None = None
         final_is_error: bool = False
@@ -1799,13 +1848,10 @@ class DaemonManager:
 
         def _store_session_id(sid: str) -> None:
             nonlocal session_id_captured
-            if session_id_captured == sid:
-                return
-            session_id_captured = sid
-            run_dir._state["claude_session_id"] = sid
-            run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
-            self._log("daemon_claude_code_session",
-                      em_id=em_id, session_id=sid)
+            if run_dir.set_session_id("claude_session_id", sid, overwrite=True):
+                session_id_captured = sid
+                self._log("daemon_claude_code_session",
+                          em_id=em_id, session_id=sid)
 
         def _handle_assistant_event(event: dict) -> None:
             message = event.get("message") or {}
@@ -1860,7 +1906,7 @@ class DaemonManager:
             for raw_line in proc.stdout:
                 if cancel_event.is_set():
                     _kill_process_group(proc)
-                    return _exit_cancelled()
+                    return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
                 line = raw_line.rstrip("\n")
                 if not line:
@@ -1987,15 +2033,8 @@ class DaemonManager:
         and read Claude's transcript JSONL for the daemon result.  It does not
         mutate Claude's global config and refuses credential/trust automation.
         """
-        def _exit_cancelled() -> str:
-            if timeout_event is not None and timeout_event.is_set():
-                run_dir.mark_timeout()
-            else:
-                run_dir.mark_cancelled()
-            return "[cancelled]"
-
         if cancel_event.is_set():
-            return _exit_cancelled()
+            return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
         try:
             result = run_claude_interactive(
@@ -2017,7 +2056,7 @@ class DaemonManager:
             raise
 
         if cancel_event.is_set():
-            return _exit_cancelled()
+            return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
         text = (result.final_text or "").strip() or "[no output]"
         run_dir.mark_done(text)
@@ -2056,15 +2095,8 @@ class DaemonManager:
           is visible to the agent via ``daemon(check)`` but not via
           ``sum_token_ledger``.
         """
-        def _exit_cancelled() -> str:
-            if timeout_event is not None and timeout_event.is_set():
-                run_dir.mark_timeout()
-            else:
-                run_dir.mark_cancelled()
-            return "[cancelled]"
-
         if cancel_event.is_set():
-            return _exit_cancelled()
+            return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
         cmd = [
             "codex",
@@ -2096,24 +2128,10 @@ class DaemonManager:
             raise exc
         self._register_cli_proc(proc, group_id=run_dir.group_id)
 
-        stderr_lines: list[str] = []
-
-        def _drain_stderr() -> None:
-            assert proc.stderr is not None
-            for line in proc.stderr:
-                stripped = line.rstrip("\n")
-                if not stripped:
-                    continue
-                stderr_lines.append(stripped)
-                try:
-                    run_dir.record_cli_output(stripped, stream="stderr")
-                except Exception:
-                    pass
-
-        stderr_thread = threading.Thread(
-            target=_drain_stderr, daemon=True, name=f"daemon-codex-stderr-{em_id}",
+        stderr_thread = _spawn_stderr_drainer(
+            proc, run_dir, thread_name=f"daemon-codex-stderr-{em_id}",
         )
-        stderr_thread.start()
+        stderr_lines = stderr_thread.lines
 
         session_id_captured: str | None = None
         agent_message_texts: list[str] = []
@@ -2121,19 +2139,16 @@ class DaemonManager:
 
         def _store_session_id(sid: str) -> None:
             nonlocal session_id_captured
-            if session_id_captured == sid:
-                return
-            session_id_captured = sid
-            run_dir._state["codex_session_id"] = sid
-            run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
-            self._log("daemon_codex_session", em_id=em_id, session_id=sid)
+            if run_dir.set_session_id("codex_session_id", sid, overwrite=True):
+                session_id_captured = sid
+                self._log("daemon_codex_session", em_id=em_id, session_id=sid)
 
         try:
             assert proc.stdout is not None
             for raw_line in proc.stdout:
                 if cancel_event.is_set():
                     _kill_process_group(proc)
-                    return _exit_cancelled()
+                    return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
                 line = raw_line.rstrip("\n")
                 if not line:
@@ -2410,10 +2425,8 @@ class DaemonManager:
         self._pools = [(p, c) for p, c in self._pools if not c.is_set()]
 
         # --- External CLI backends: skip preset resolution entirely ---
-        if backend in (
-            "claude", "claude-interactive", "claude-p", "claude-code",
-            "codex", "opencode", "mimocode", "qwen-code", "oh-my-pi", "cursor",
-        ):
+        backend_spec = _backend_spec(backend)
+        if backend_spec is not None and backend_spec.is_cli:
             return self._handle_emanate_cli(
                 tasks, backend=backend,
                 effective_max_turns=effective_max_turns,
@@ -2625,35 +2638,43 @@ class DaemonManager:
         run directory; only terminal completion/failure emits a compact
         system notification.
         """
+        backend_spec = _backend_spec(backend)
+        if (
+            backend_spec is None
+            or not backend_spec.is_cli
+            or backend_spec.runner_attr is None
+        ):
+            return {"status": "error", "message": f"Unknown CLI backend: {backend}"}
+
         # Pre-flight: validate per-task backend_options BEFORE creating any
         # run_dir or scheduling work, so a single bad spec refuses the whole
         # batch with a clear message instead of leaving half-spawned daemons.
-        resolved_backend_argv: list[list[str]] = []
-        task_system_prompts: list[str | None] = []
-        task_skill_catalogs: list[str | None] = []
-        task_mcp_catalogs: list[str | None] = []
-        task_mcp_registrations: list[list[dict]] = []
+        contexts: list[_CliTaskContext] = []
         for i, spec in enumerate(tasks):
             try:
-                task_system_prompts.append(self._task_system_prompt(spec))
-                task_skill_catalogs.append(self._task_skill_catalog(spec))
+                task_system_prompt = self._task_system_prompt(spec)
+                task_skill_catalog = self._task_skill_catalog(spec)
                 task_mcp_regs, task_mcp_catalog = self._task_mcp_registrations(spec)
-                task_mcp_registrations.append(task_mcp_regs)
-                task_mcp_catalogs.append(task_mcp_catalog)
             except ValueError as e:
                 return {"status": "error",
                         "message": f"tasks[{i}]: {e}"}
             raw_opts = spec.get("backend_options")
             if raw_opts is None:
-                resolved_backend_argv.append([])
-                continue
-            try:
-                argv = _backend_options_to_argv(raw_opts)
-                _validate_claude_backend_argv(backend, argv)
-                resolved_backend_argv.append(argv)
-            except ValueError as e:
-                return {"status": "error",
-                        "message": f"tasks[{i}].backend_options: {e}"}
+                backend_argv = []
+            else:
+                try:
+                    backend_argv = _backend_options_to_argv(raw_opts)
+                    _validate_claude_backend_argv(backend, backend_argv)
+                except ValueError as e:
+                    return {"status": "error",
+                            "message": f"tasks[{i}].backend_options: {e}"}
+            contexts.append(_CliTaskContext(
+                backend_argv=backend_argv,
+                system_prompt=task_system_prompt,
+                skill_catalog=task_skill_catalog,
+                mcp_catalog=task_mcp_catalog,
+                mcp_regs=task_mcp_regs,
+            ))
 
         cancel_event = threading.Event()
         timeout_event = threading.Event()
@@ -2665,19 +2686,15 @@ class DaemonManager:
         parent_addr = self._agent._working_dir.name
         parent_pid = os.getpid()
 
-        for i, spec in enumerate(tasks):
+        for spec, context in zip(tasks, contexts):
             em_id = f"em-{self._next_id}"
             self._next_id += 1
             ids.append(em_id)
-            backend_argv = resolved_backend_argv[i]
+            backend_argv = context.backend_argv
             backend_options = spec.get("backend_options") or None
 
-            task_system_prompt = task_system_prompts[i]
-            task_skill_catalog = task_skill_catalogs[i]
-            task_mcp_catalog = task_mcp_catalogs[i]
-            task_mcp_regs = task_mcp_registrations[i]
             task_context = self._combine_oneshot_context(
-                task_system_prompt, task_skill_catalog, task_mcp_catalog
+                context.system_prompt, context.skill_catalog, context.mcp_catalog
             )
             system_prompt = f"[{backend} backend — task delegated to external CLI]"
             if task_context:
@@ -2703,8 +2720,11 @@ class DaemonManager:
                         "task": spec["task"],
                         "tools": spec.get("tools", []),
                         "skills": spec.get("skills", []),
-                        "mcp": [self._redact_mcp_registration_for_prompt(r) for r in task_mcp_regs],
-                        "system_prompt": task_system_prompt,
+                        "mcp": [
+                            self._redact_mcp_registration_for_prompt(r)
+                            for r in context.mcp_regs
+                        ],
+                        "system_prompt": context.system_prompt,
                         "backend_options": backend_options,
                     },
                     log_callback=self._log,
@@ -2726,25 +2746,7 @@ class DaemonManager:
                       em_id=em_id, backend=backend,
                       argv=list(backend_argv))
 
-            if backend == "codex":
-                run_fn = self._run_codex_emanation
-            elif backend == "opencode":
-                run_fn = self._run_opencode_emanation
-            elif backend == "mimocode":
-                run_fn = self._run_mimocode_emanation
-            elif backend == "qwen-code":
-                run_fn = self._run_qwen_code_emanation
-            elif backend == "oh-my-pi":
-                run_fn = self._run_oh_my_pi_emanation
-            elif backend == "cursor":
-                run_fn = self._run_cursor_emanation
-            elif backend in ("claude", "claude-interactive"):
-                run_fn = self._run_claude_interactive_emanation
-            else:
-                # ``claude-p`` is the new explicit name for the existing
-                # print-mode backend; ``claude-code`` remains a compatibility
-                # alias for older callers and stored daemon entries.
-                run_fn = self._run_claude_code_emanation
+            run_fn = getattr(self, backend_spec.runner_attr)
             future = pool.submit(
                 run_fn,
                 em_id, run_dir, cli_task,
@@ -3245,23 +3247,13 @@ class DaemonManager:
         # All stream progress into the daemon run directory so
         # `daemon(check)` shows live progress.
         backend = entry.get("backend")
-        if backend in ("claude", "claude-interactive"):
-            return self._handle_ask_claude_interactive(em_id, entry, message)
-        if backend in ("claude-p", "claude-code"):
-            return self._handle_ask_cli(em_id, entry, message)
-        if backend == "codex":
-            return self._handle_ask_codex(em_id, entry, message)
-        if backend == "opencode":
-            return self._handle_ask_opencode(em_id, entry, message)
-        if backend == "mimocode":
-            return self._handle_ask_mimocode(em_id, entry, message)
-        if backend == "oh-my-pi":
-            return self._handle_ask_oh_my_pi(em_id, entry, message)
-        if backend == "qwen-code":
-            return {"status": "error", "id": em_id,
-                    "message": "qwen-code daemon backend does not support daemon(action='ask') yet; start a new qwen-code emanation instead."}
-        if backend == "cursor":
-            return self._handle_ask_cursor(em_id, entry, message)
+        backend_spec = _backend_spec(backend)
+        if backend_spec is not None and backend_spec.is_cli:
+            if backend_spec.ask_handler_attr is None:
+                return {"status": "error", "id": em_id,
+                        "message": backend_spec.ask_unsupported_msg}
+            ask_handler = getattr(self, backend_spec.ask_handler_attr)
+            return ask_handler(em_id, entry, message)
 
         if entry["future"].done():
             return {"status": "error", "message": "not running"}
@@ -3953,15 +3945,8 @@ class DaemonManager:
         See ``_opencode_extract_text`` / ``_opencode_extract_session_id``
         for the shapes accepted.
         """
-        def _exit_cancelled() -> str:
-            if timeout_event is not None and timeout_event.is_set():
-                run_dir.mark_timeout()
-            else:
-                run_dir.mark_cancelled()
-            return "[cancelled]"
-
         if cancel_event.is_set():
-            return _exit_cancelled()
+            return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
         prompt = self._build_opencode_prompt(task)
 
@@ -3995,25 +3980,10 @@ class DaemonManager:
             raise exc
         self._register_cli_proc(proc, group_id=run_dir.group_id)
 
-        stderr_lines: list[str] = []
-
-        def _drain_stderr() -> None:
-            assert proc.stderr is not None
-            for line in proc.stderr:
-                stripped = line.rstrip("\n")
-                if not stripped:
-                    continue
-                stderr_lines.append(stripped)
-                try:
-                    run_dir.record_cli_output(stripped, stream="stderr")
-                except Exception:
-                    pass
-
-        stderr_thread = threading.Thread(
-            target=_drain_stderr, daemon=True,
-            name=f"daemon-{backend_name}-stderr-{em_id}",
+        stderr_thread = _spawn_stderr_drainer(
+            proc, run_dir, thread_name=f"daemon-{backend_name}-stderr-{em_id}",
         )
-        stderr_thread.start()
+        stderr_lines = stderr_thread.lines
 
         session_id_captured: str | None = None
         text_chunks: list[str] = []
@@ -4023,24 +3993,19 @@ class DaemonManager:
 
         def _store_session_id(sid: str) -> None:
             nonlocal session_id_captured
-            if not sid:
-                return
             # The session id is established by the first session-shaped header.
             # Later OpenCode-family/Oh-My-Pi events may carry their own event ids;
-            # do not let those overwrite a working resume id.
-            if session_id_captured:
-                return
-            session_id_captured = sid
-            run_dir._state[session_state_key] = sid
-            run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
-            self._log(f"daemon_{backend_name}_session", em_id=em_id, session_id=sid)
+            # do not let those overwrite a working resume id (overwrite=False).
+            if run_dir.set_session_id(session_state_key, sid, overwrite=False):
+                session_id_captured = sid
+                self._log(f"daemon_{backend_name}_session", em_id=em_id, session_id=sid)
 
         try:
             assert proc.stdout is not None
             for raw_line in proc.stdout:
                 if cancel_event.is_set():
                     _kill_process_group(proc)
-                    return _exit_cancelled()
+                    return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
                 line = raw_line.rstrip("\n")
                 if not line:
@@ -4197,15 +4162,8 @@ class DaemonManager:
         recorded verbatim and ``daemon(action='ask')`` is intentionally
         unsupported for this backend.
         """
-        def _exit_cancelled() -> str:
-            if timeout_event is not None and timeout_event.is_set():
-                run_dir.mark_timeout()
-            else:
-                run_dir.mark_cancelled()
-            return "[cancelled]"
-
         if cancel_event.is_set():
-            return _exit_cancelled()
+            return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
         prompt = self._build_qwen_code_prompt(task)
         cmd = ["qwen", "--yolo"]
@@ -4234,32 +4192,17 @@ class DaemonManager:
         self._register_cli_proc(proc, group_id=run_dir.group_id)
 
         stdout_lines: list[str] = []
-        stderr_lines: list[str] = []
-
-        def _drain_stderr() -> None:
-            assert proc.stderr is not None
-            for line in proc.stderr:
-                stripped = line.rstrip("\n")
-                if not stripped:
-                    continue
-                stderr_lines.append(stripped)
-                try:
-                    run_dir.record_cli_output(stripped, stream="stderr")
-                except Exception:
-                    pass
-
-        stderr_thread = threading.Thread(
-            target=_drain_stderr, daemon=True,
-            name=f"daemon-qwen-code-stderr-{em_id}",
+        stderr_thread = _spawn_stderr_drainer(
+            proc, run_dir, thread_name=f"daemon-qwen-code-stderr-{em_id}",
         )
-        stderr_thread.start()
+        stderr_lines = stderr_thread.lines
 
         try:
             assert proc.stdout is not None
             for raw_line in proc.stdout:
                 if cancel_event.is_set():
                     _kill_process_group(proc)
-                    return _exit_cancelled()
+                    return _mark_cancelled_or_timeout(run_dir, timeout_event)
                 line = raw_line.rstrip("\n")
                 if not line:
                     continue
@@ -4580,15 +4523,8 @@ class DaemonManager:
         The first event carrying a session-id-shaped field is stored in
         daemon.json under ``cursor_session_id`` for ``daemon(action='ask')``.
         """
-        def _exit_cancelled() -> str:
-            if timeout_event is not None and timeout_event.is_set():
-                run_dir.mark_timeout()
-            else:
-                run_dir.mark_cancelled()
-            return "[cancelled]"
-
         if cancel_event.is_set():
-            return _exit_cancelled()
+            return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
         prompt = self._build_cursor_prompt(task)
         cmd = [
@@ -4621,25 +4557,10 @@ class DaemonManager:
             raise exc
         self._register_cli_proc(proc, group_id=run_dir.group_id)
 
-        stderr_lines: list[str] = []
-
-        def _drain_stderr() -> None:
-            assert proc.stderr is not None
-            for line in proc.stderr:
-                stripped = line.rstrip("\n")
-                if not stripped:
-                    continue
-                stderr_lines.append(stripped)
-                try:
-                    run_dir.record_cli_output(stripped, stream="stderr")
-                except Exception:
-                    pass
-
-        stderr_thread = threading.Thread(
-            target=_drain_stderr, daemon=True,
-            name=f"daemon-cursor-stderr-{em_id}",
+        stderr_thread = _spawn_stderr_drainer(
+            proc, run_dir, thread_name=f"daemon-cursor-stderr-{em_id}",
         )
-        stderr_thread.start()
+        stderr_lines = stderr_thread.lines
 
         session_id_captured: str | None = None
         text_chunks: list[str] = []
@@ -4649,19 +4570,16 @@ class DaemonManager:
 
         def _store_session_id(sid: str) -> None:
             nonlocal session_id_captured
-            if not sid or session_id_captured == sid:
-                return
-            session_id_captured = sid
-            run_dir._state["cursor_session_id"] = sid
-            run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
-            self._log("daemon_cursor_session", em_id=em_id, session_id=sid)
+            if run_dir.set_session_id("cursor_session_id", sid, overwrite=True):
+                session_id_captured = sid
+                self._log("daemon_cursor_session", em_id=em_id, session_id=sid)
 
         try:
             assert proc.stdout is not None
             for raw_line in proc.stdout:
                 if cancel_event.is_set():
                     _kill_process_group(proc)
-                    return _exit_cancelled()
+                    return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
                 line = raw_line.rstrip("\n")
                 if not line:

@@ -1,3 +1,15 @@
+---
+related_files:
+  - src/lingtai/capabilities/ANATOMY.md
+  - src/lingtai/capabilities/vision/__init__.py
+  - src/lingtai/services/vision/ANATOMY.md
+maintenance: |
+  Keep related_files as repo-relative paths to real files. Include neighboring
+  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
+  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
+  maintenance field. If you notice drift between this anatomy and the code,
+  report it. See lingtai-dev-guide for details.
+---
 # src/lingtai/capabilities/vision/
 
 Vision capability — image understanding via pluggable VisionService backends.

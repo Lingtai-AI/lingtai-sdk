@@ -1,3 +1,23 @@
+---
+related_files:
+  - docs/references/codex-http-anatomy-investigation.md
+  - src/lingtai/auth/ANATOMY.md
+  - src/lingtai/llm/ANATOMY.md
+  - src/lingtai/llm/_register.py
+  - src/lingtai/llm/interface_converters.py
+  - src/lingtai/llm/openai/__init__.py
+  - src/lingtai/llm/openai/adapter.py
+  - src/lingtai/llm/openai/codex_ws.py
+  - src/lingtai/llm/openai/defaults.py
+  - src/lingtai/llm/service.py
+  - tests/test_codex_prompt_cache_key.py
+maintenance: |
+  Keep related_files as repo-relative paths to real files. Include neighboring
+  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
+  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
+  maintenance field. If you notice drift between this anatomy and the code,
+  report it. See lingtai-dev-guide for details.
+---
 # src/lingtai/llm/openai/
 
 OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses APIs, with Codex OAuth variant.

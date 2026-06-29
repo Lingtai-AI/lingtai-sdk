@@ -18,7 +18,11 @@ import pytest
 
 from lingtai_kernel.config import AgentConfig
 from lingtai.core.daemon import (
+    _BACKEND_ALIASES,
     _backend_options_to_argv,
+    _BACKEND_SCHEMA_ENUM,
+    _BACKEND_SPECS,
+    _normalize_backend,
 )
 
 
@@ -279,6 +283,39 @@ def test_lingtai_backend_ignores_backend_options(tmp_path):
     assert result["status"] == "dispatched"
 
 
+def test_unknown_backend_falls_back_to_lingtai_path(tmp_path):
+    """Direct callers that bypass schema validation keep the old fallback.
+
+    Unknown backend strings are not CLI backends; they route to the in-process
+    LingTai worker and therefore do not store a CLI ``backend`` field.
+    """
+    agent = _make_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    captured: dict = {}
+
+    def fake_run(em_id, run_dir, schemas, dispatch, task, cancel_event,
+                 timeout_event=None, preset_llm=None, max_turns=None,
+                 task_mcp_clients=None):
+        captured["task"] = task
+        captured["state"] = dict(run_dir._state)
+        run_dir.mark_done("[fake done]")
+        return "[fake done]"
+
+    with patch.object(mgr, "_run_emanation", side_effect=fake_run):
+        result = mgr.handle({
+            "action": "emanate",
+            "backend": "not-real",
+            "tasks": [{"task": "fall back", "tools": []}],
+        })
+        assert result["status"] == "dispatched"
+        em_id = result["ids"][0]
+        mgr._emanations[em_id]["future"].result(timeout=5)
+
+    assert captured["task"] == "fall back"
+    assert captured["state"]["backend"] == "lingtai"
+    assert "backend" not in mgr._emanations[em_id]
+
+
 # ---------------------------------------------------------------------------
 # Runner cmd construction: backend_argv lands before the task prompt
 # ---------------------------------------------------------------------------
@@ -440,6 +477,53 @@ def test_schema_includes_backend_options():
     assert "--help" in task_props["backend_options"]["description"]
 
 
+def test_backend_schema_enum_matches_ordered_contract():
+    from lingtai.core.daemon import get_schema
+
+    expected = [
+        "lingtai",
+        "claude-p",
+        "claude-code",
+        "codex",
+        "opencode",
+        "mimocode",
+        "mimo",
+        "qwen-code",
+        "qwen",
+        "oh-my-pi",
+        "omp",
+        "cursor",
+    ]
+    assert list(_BACKEND_SCHEMA_ENUM) == expected
+    assert get_schema("en")["properties"]["backend"]["enum"] == expected
+
+
+def test_backend_metadata_consistency_keeps_hidden_legacy_claude():
+    hidden = {"claude", "claude-interactive"}
+    assert set(_BACKEND_SCHEMA_ENUM) == (
+        (set(_BACKEND_SPECS) - hidden) | set(_BACKEND_ALIASES)
+    )
+    assert hidden.isdisjoint(_BACKEND_SCHEMA_ENUM)
+    assert _BACKEND_ALIASES == {
+        "mimo": "mimocode",
+        "qwen": "qwen-code",
+        "omp": "oh-my-pi",
+    }
+    assert all(target in _BACKEND_SPECS for target in _BACKEND_ALIASES.values())
+    assert _BACKEND_SPECS["claude-code"].runner_attr == "_run_claude_code_emanation"
+    assert _BACKEND_SPECS["claude-p"].runner_attr == "_run_claude_code_emanation"
+
+
+def test_normalize_backend_aliases_only_true_aliases():
+    assert _normalize_backend("mimo") == "mimocode"
+    assert _normalize_backend("qwen") == "qwen-code"
+    assert _normalize_backend("omp") == "oh-my-pi"
+    assert _normalize_backend(None) == "lingtai"
+    assert _normalize_backend("") == "lingtai"
+    assert _normalize_backend("claude-code") == "claude-code"
+    assert _normalize_backend("not-real") == "not-real"
+
+
 def test_schema_includes_mimocode_and_qwen_code_backends():
     from lingtai.core.daemon import get_schema
 
@@ -476,6 +560,68 @@ def test_mimocode_alias_dispatches_to_canonical_backend(tmp_path):
     assert captured["backend"] == "mimocode"
     assert captured["model"] == "mimocode"
     assert captured["backend_argv"] == ["--model", "mimo-auto"]
+
+
+def test_cli_contexts_keep_per_task_argv_and_passive_mcp(tmp_path):
+    agent = _make_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    captured: dict[str, dict] = {}
+
+    def fake_run(em_id, run_dir, task, cancel_event, timeout_event, backend_argv=None):
+        captured[run_dir._state["task"]] = {
+            "backend_argv": list(backend_argv or []),
+            "call_parameters": run_dir._state["call_parameters"],
+            "state": dict(run_dir._state),
+        }
+        run_dir.mark_done("[fake done]")
+        return "[fake done]"
+
+    with (
+        patch.object(mgr, "_run_claude_code_emanation", side_effect=fake_run),
+        patch.object(
+            mgr,
+            "_connect_task_mcp_registrations",
+            side_effect=AssertionError("CLI backend must not connect MCP clients"),
+        ),
+    ):
+        result = mgr.handle({
+            "action": "emanate",
+            "backend": "claude-code",
+            "tasks": [
+                {
+                    "task": "task with argv",
+                    "tools": [],
+                    "backend_options": {"model": "claude-opus-4-7"},
+                },
+                {
+                    "task": "task with mcp",
+                    "tools": [],
+                    "mcp": [{
+                        "name": "demo",
+                        "command": "demo-mcp",
+                        "args": ["--serve"],
+                        "env": {"TOKEN": "secret"},
+                    }],
+                },
+            ],
+        })
+        assert result["status"] == "dispatched"
+        for em_id in result["ids"]:
+            mgr._emanations[em_id]["future"].result(timeout=5)
+
+    assert captured["task with argv"]["backend_argv"] == [
+        "--model", "claude-opus-4-7",
+    ]
+    assert captured["task with argv"]["call_parameters"]["mcp"] == []
+    assert captured["task with mcp"]["backend_argv"] == []
+    assert "backend_argv" not in captured["task with mcp"]["state"]
+    assert captured["task with mcp"]["call_parameters"]["mcp"] == [{
+        "name": "demo",
+        "command": "demo-mcp",
+        "args": ["--serve"],
+        "env": {"TOKEN": "<redacted>"},
+        "transport": "stdio",
+    }]
 
 
 def test_mimocode_cmd_appends_backend_argv_before_prompt(tmp_path):
@@ -613,7 +759,10 @@ def test_qwen_code_ask_is_explicitly_unsupported(tmp_path):
     ask = mgr.handle({"action": "ask", "id": em_id, "message": "follow up"})
 
     assert ask["status"] == "error"
-    assert "does not support" in ask["message"]
+    assert ask["message"] == (
+        "qwen-code daemon backend does not support daemon(action='ask') yet; "
+        "start a new qwen-code emanation instead."
+    )
 
 
 # ---------------------------------------------------------------------------

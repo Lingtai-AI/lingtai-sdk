@@ -1,3 +1,19 @@
+---
+related_files:
+  - src/lingtai/i18n/ANATOMY.md
+  - src/lingtai/i18n/__init__.py
+  - src/lingtai_kernel/ANATOMY.md
+  - src/lingtai_kernel/i18n/__init__.py
+  - src/lingtai_kernel/i18n/en.json
+  - src/lingtai_kernel/i18n/wen.json
+  - src/lingtai_kernel/i18n/zh.json
+maintenance: |
+  Keep related_files as repo-relative paths to real files. Include neighboring
+  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
+  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
+  maintenance field. If you notice drift between this anatomy and the code,
+  report it. See lingtai-dev-guide for details.
+---
 # i18n
 
 > **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues/mail/PR proposals; do not silently fix.

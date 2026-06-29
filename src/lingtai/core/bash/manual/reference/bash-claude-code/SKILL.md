@@ -9,6 +9,7 @@ description: >
   that would be faster delegated than done manually.
 version: 1.0.2
 tags: [cli, code, delegation, claude, implementation]
+last_changed_at: "2026-06-14T00:11:48-07:00"
 ---
 
 # Claude Code CLI — Code Delegation

@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -31,9 +32,113 @@ else:
 
 _LOCK_FILE = ".agent.lock"
 _MANIFEST_FILE = ".agent.json"
+_MANIFEST_CORRUPT_FILE = ".agent.json.corrupt"
+_HEARTBEAT_FILE = ".agent.heartbeat"
+_STATUS_FILE = ".status.json"
+_INIT_FILE = "init.json"
+_SYSTEM_DIR = "system"
+_LOGS_DIR = "logs"
+_HISTORY_DIR = "history"
+_NOTIFICATION_DIR = ".notification"
 
 _RESOLVED_MANIFEST_FILE = "manifest.resolved.json"
 _RESOLVED_MANIFEST_SCHEMA = "lingtai.manifest.resolved/v1"
+
+
+@dataclass(frozen=True)
+class WorkdirLayout:
+    """Names the kernel-owned paths inside an agent working directory.
+
+    Deliberately dumb: it only *names* paths from a root. No validation, no
+    file creation, no policy — those stay in the owning modules
+    (``handshake.is_alive``, ``notifications.validate_allowed_channel``, …).
+    The point is a single discoverable surface for the agent workdir
+    filesystem protocol (``.agent.json``, ``.agent.heartbeat``,
+    ``.notification/<channel>.json``, ``tmp/tool-results/``, …) so the same
+    relative names are not retyped across runtime modules and tests.
+
+    Internal by convention: import from ``lingtai_kernel.workdir``; not
+    re-exported from ``lingtai_kernel.__init__``.
+    """
+
+    root: Path
+
+    @property
+    def agent_lock(self) -> Path:
+        return self.root / _LOCK_FILE
+
+    @property
+    def agent_manifest(self) -> Path:
+        return self.root / _MANIFEST_FILE
+
+    @property
+    def agent_manifest_corrupt(self) -> Path:
+        return self.root / _MANIFEST_CORRUPT_FILE
+
+    @property
+    def heartbeat(self) -> Path:
+        return self.root / _HEARTBEAT_FILE
+
+    @property
+    def status_json(self) -> Path:
+        return self.root / _STATUS_FILE
+
+    @property
+    def init_json(self) -> Path:
+        return self.root / _INIT_FILE
+
+    @property
+    def system_dir(self) -> Path:
+        return self.root / _SYSTEM_DIR
+
+    @property
+    def logs_dir(self) -> Path:
+        return self.root / _LOGS_DIR
+
+    @property
+    def history_dir(self) -> Path:
+        return self.root / _HISTORY_DIR
+
+    @property
+    def chat_history(self) -> Path:
+        return self.history_dir / "chat_history.jsonl"
+
+    @property
+    def notification_dir(self) -> Path:
+        return self.root / _NOTIFICATION_DIR
+
+    @property
+    def tool_results_dir(self) -> Path:
+        return self.root / "tmp" / "tool-results"
+
+    @property
+    def resolved_manifest(self) -> Path:
+        return self.system_dir / _RESOLVED_MANIFEST_FILE
+
+    @property
+    def resolved_manifest_tmp(self) -> Path:
+        return self.system_dir / (_RESOLVED_MANIFEST_FILE + ".tmp")
+
+    def notification_file(self, channel: str) -> Path:
+        """Path to a ``.notification/<channel>.json`` file (no validation)."""
+        return self.notification_dir / f"{channel}.json"
+
+    def system_file(self, name: str) -> Path:
+        """Path to a file inside the ``system/`` directory."""
+        return self.system_dir / name
+
+
+def workdir_layout(path: Path | str) -> WorkdirLayout:
+    """Return the :class:`WorkdirLayout` rooted at *path*.
+
+    A ``str`` is coerced to ``Path`` (so ``handshake.is_agent(str(dir))`` keeps
+    working); anything else — a real ``Path`` or a duck-typed stand-in such as a
+    test ``MagicMock`` — is stored as-is so the ``root / name`` joins stay on
+    whatever object the caller passed. This mirrors the pre-helper behavior
+    where producers used ``workdir / "…"`` directly without coercion.
+    """
+    root = Path(path) if isinstance(path, str) else path
+    return WorkdirLayout(root)
 
 # Key names that carry (or point at) secret material — dropped recursively
 # before the resolved manifest is published. `*_env` names are included to
@@ -114,10 +219,10 @@ def write_resolved_manifest(working_dir: Path | str, data: dict) -> Path | None:
         artifact["preset"] = _redact_secrets(preset)
 
     try:
-        system_dir = Path(working_dir) / "system"
-        system_dir.mkdir(parents=True, exist_ok=True)
-        target = system_dir / _RESOLVED_MANIFEST_FILE
-        tmp = system_dir / (_RESOLVED_MANIFEST_FILE + ".tmp")
+        layout = workdir_layout(working_dir)
+        layout.system_dir.mkdir(parents=True, exist_ok=True)
+        target = layout.resolved_manifest
+        tmp = layout.resolved_manifest_tmp
         tmp.write_text(
             json.dumps(artifact, indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",
@@ -134,6 +239,7 @@ class WorkingDir:
     def __init__(self, working_dir: Path | str) -> None:
         self._path = Path(working_dir)
         self._path.mkdir(parents=True, exist_ok=True)
+        self._layout = workdir_layout(self._path)
         self._lock_file: Any = None
 
     @property
@@ -149,7 +255,7 @@ class WorkingDir:
             timeout: Max seconds to wait for the lock. 0 = fail immediately
                 (default, backward compatible). Polls at 250ms intervals.
         """
-        lock_path = self._path / _LOCK_FILE
+        lock_path = self._layout.agent_lock
         deadline = time.monotonic() + timeout
         while True:
             self._lock_file = open(lock_path, "w")
@@ -168,7 +274,7 @@ class WorkingDir:
 
     def release_lock(self) -> None:
         if self._lock_file is not None:
-            lock_path = self._path / _LOCK_FILE
+            lock_path = self._layout.agent_lock
             try:
                 _unlock_fd(self._lock_file)
                 self._lock_file.close()
@@ -356,14 +462,14 @@ class WorkingDir:
 
     def read_manifest(self) -> str:
         """Read the covenant from the manifest file. Returns empty string if missing."""
-        path = self._path / _MANIFEST_FILE
+        path = self._layout.agent_manifest
         if not path.is_file():
             return ""
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             return data.get("covenant", "")
         except (json.JSONDecodeError, OSError):
-            corrupt = self._path / ".agent.json.corrupt"
+            corrupt = self._layout.agent_manifest_corrupt
             try:
                 path.rename(corrupt)
             except OSError:
@@ -372,7 +478,7 @@ class WorkingDir:
 
     def read_full_manifest(self) -> dict:
         """Read entire .agent.json as dict. Returns empty dict if missing or corrupt."""
-        path = self._path / _MANIFEST_FILE
+        path = self._layout.agent_manifest
         if not path.is_file():
             return {}
         try:
@@ -386,4 +492,4 @@ class WorkingDir:
         # byte-identical to the previous inline implementation.
         from ._fsutil import atomic_write_json
 
-        atomic_write_json(self._path / _MANIFEST_FILE, manifest)
+        atomic_write_json(self._layout.agent_manifest, manifest)

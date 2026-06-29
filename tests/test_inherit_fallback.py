@@ -44,9 +44,11 @@ def test_web_search_unknown_provider_falls_back_to_duckduckgo():
 
 def test_vision_unknown_provider_silently_skips():
     """vision with provider='deepseek' (no vision, no fallback) skips registration."""
+    from lingtai.capabilities import CAPABILITY_UNAVAILABLE
     from lingtai.capabilities.vision import setup as vision_setup
     a = _stub_agent()
     result = vision_setup(a, provider="deepseek", api_key=None, api_key_env="X")
+    assert result is CAPABILITY_UNAVAILABLE
     assert "vision" not in a._tool_handlers
     events = [e for e, _ in a._log_events]
     assert "capability_skipped" in events

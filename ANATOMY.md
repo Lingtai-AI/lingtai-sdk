@@ -1,3 +1,24 @@
+---
+related_files:
+  - CLAUDE.md
+  - CODE_OF_CONDUCT.md
+  - CONTRIBUTING.md
+  - MANIFEST.in
+  - README.md
+  - SECURITY.md
+  - SUPPORT.md
+  - docs/references/claude-code-guide.md
+  - pyproject.toml
+  - setup.py
+  - src/lingtai/ANATOMY.md
+  - src/lingtai_kernel/ANATOMY.md
+maintenance: |
+  Keep related_files as repo-relative paths to real files. Include neighboring
+  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
+  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
+  maintenance field. If you notice drift between this anatomy and the code,
+  report it. See lingtai-dev-guide for details.
+---
 # lingtai-kernel Repository Anatomy
 
 This root anatomy is a router for the repository. It intentionally stays short:

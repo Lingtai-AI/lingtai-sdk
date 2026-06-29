@@ -3,21 +3,10 @@ from __future__ import annotations
 
 import json
 import time
-from pathlib import Path
 
 import pytest
 
-
-def _make_agent_dir(base: Path, name: str) -> Path:
-    """Create a minimal agent working dir with .agent.json and fresh heartbeat."""
-    d = base / name
-    d.mkdir()
-    (d / ".agent.json").write_text(json.dumps({
-        "agent_name": "test",
-        "admin": {},
-    }))
-    (d / ".agent.heartbeat").write_text(str(time.time()))
-    return d
+from ._agent_dir_helpers import make_agent_dir as _make_agent_dir
 
 
 class TestSend:

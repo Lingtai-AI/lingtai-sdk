@@ -8,6 +8,7 @@ description: |
   external-delivery side-effect caveats. Pulled on demand via action='manual'; you
   do not need to call it before every send.
 version: 1.0.0
+last_changed_at: "2026-06-26T14:33:19-07:00"
 ---
 
 # WhatsApp MCP — usage manual (progressive disclosure)

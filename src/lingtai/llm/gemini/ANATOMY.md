@@ -1,3 +1,16 @@
+---
+related_files:
+  - src/lingtai/llm/ANATOMY.md
+  - src/lingtai/llm/gemini/__init__.py
+  - src/lingtai/llm/gemini/adapter.py
+  - src/lingtai/llm/gemini/defaults.py
+maintenance: |
+  Keep related_files as repo-relative paths to real files. Include neighboring
+  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
+  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
+  maintenance field. If you notice drift between this anatomy and the code,
+  report it. See lingtai-dev-guide for details.
+---
 # src/lingtai/llm/gemini
 
 Gemini adapter — `google-genai` SDK with Chat API and Interactions API, thinking budget, function declarations.

@@ -180,6 +180,36 @@ class DaemonRunDir:
         """Return a shallow copy of the current daemon.json state."""
         return dict(self._state)
 
+    def set_session_id(self, key: str, value: str, *, overwrite: bool = True) -> bool:
+        """Persist a backend resume id into daemon.json under *key*.
+
+        Returns ``True`` only when the value was actually written (so callers
+        can log a session event exactly once on a real change). Specifically:
+
+        - returns ``False`` for an empty *value*;
+        - returns ``False`` when the stored value already equals *value*
+          (no redundant rewrite/log);
+        - when *overwrite* is ``False`` and a truthy value is already stored,
+          returns ``False`` and keeps the first id (OpenCode-family backends
+          establish the resume id from the first session-shaped header and must
+          not let later event ids clobber it);
+        - otherwise stores the value, atomically rewrites daemon.json, and
+          returns ``True``.
+
+        Write failures are intentionally NOT swallowed: ``_atomic_write_json``
+        may raise, matching the previous inline behavior where a failed
+        session-id write fails the run.
+        """
+        if not value:
+            return False
+        if self._state.get(key) == value:
+            return False
+        if not overwrite and self._state.get(key):
+            return False
+        self._state[key] = value
+        self._atomic_write_json(self.daemon_json_path, self._state)
+        return True
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------

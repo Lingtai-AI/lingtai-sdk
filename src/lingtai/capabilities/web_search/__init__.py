@@ -79,6 +79,7 @@ def setup(
     search_service: Any | None = None,
     provider: str | None = None,
     api_key: str | None = None,
+    api_key_env: str | None = None,
     model: str | None = None,
     **kwargs: Any,
 ) -> WebSearchManager:
@@ -89,9 +90,14 @@ def setup(
         search_service: A pre-built SearchService instance.
         provider: Provider name for ``create_search_service()``.
         api_key: API key for the provider.
+        api_key_env: Optional environment variable name for the API key.
         model: Optional model override for the provider.
     """
     if search_service is None and provider is not None:
+        if api_key_env:
+            from lingtai_kernel.config_resolve import resolve_env
+            api_key = resolve_env(api_key, api_key_env)
+
         # Graceful fallback: if the resolved provider isn't supported by web_search,
         # use fallback_on_inherit (duckduckgo). Never raise.
         if provider not in PROVIDERS["providers"]:

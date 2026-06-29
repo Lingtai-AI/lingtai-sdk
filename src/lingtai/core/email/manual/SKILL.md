@@ -13,6 +13,7 @@ description: >
   skill (the lingtai-imap addon owns that surface).
 version: 1.0.0
 tags: [capabilities, email, communication]
+last_changed_at: "2026-06-20T13:05:49-07:00"
 ---
 
 # Email Manual — the internal `email` tool

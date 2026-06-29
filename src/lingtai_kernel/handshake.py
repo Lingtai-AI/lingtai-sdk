@@ -11,6 +11,8 @@ import json
 import time
 from pathlib import Path
 
+from .workdir import workdir_layout
+
 
 def resolve_address(address: str | Path, base_dir: str | Path) -> Path:
     """Resolve an agent address to an absolute Path.
@@ -26,7 +28,7 @@ def resolve_address(address: str | Path, base_dir: str | Path) -> Path:
 
 def is_agent(path: str | Path) -> bool:
     """Check if an agent exists at *path* (has .agent.json)."""
-    return (Path(path) / ".agent.json").is_file()
+    return workdir_layout(path).agent_manifest.is_file()
 
 
 def is_human(path: str | Path) -> bool:
@@ -47,7 +49,7 @@ def is_alive(path: str | Path, threshold: float = 2.0) -> bool:
     """
     if is_human(path):
         return True
-    hb = Path(path) / ".agent.heartbeat"
+    hb = workdir_layout(path).heartbeat
     if not hb.is_file():
         return False
     try:
@@ -63,7 +65,7 @@ def manifest(path: str | Path) -> dict:
     Raises FileNotFoundError if .agent.json does not exist.
     Raises json.JSONDecodeError if file is not valid JSON.
     """
-    agent_json = Path(path) / ".agent.json"
+    agent_json = workdir_layout(path).agent_manifest
     if not agent_json.is_file():
         raise FileNotFoundError(f"No .agent.json at {path}")
     return json.loads(agent_json.read_text(encoding="utf-8"))

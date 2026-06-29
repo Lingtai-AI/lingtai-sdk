@@ -12,6 +12,7 @@ description: >
   its folder may carry scripts/assets as the substrate reference grows.
 version: 1.0.0
 tags: [lingtai, system-manual, substrate, runtime, lifecycle, communication, memory, notifications, mcp]
+last_changed_at: "2026-06-27T21:13:46-07:00"
 ---
 
 # Substrate Manual

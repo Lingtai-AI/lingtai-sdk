@@ -41,6 +41,7 @@ description: >
   internal logic all live in `lingtai-kernel-anatomy reference/mcp-protocol.md`.
   Read this for *what to do*; read anatomy for *how it works*.
 version: 3.2.0
+last_changed_at: "2026-06-24T16:26:32-07:00"
 ---
 
 # MCP Capability — How To Use It

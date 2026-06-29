@@ -1,3 +1,23 @@
+---
+related_files:
+  - src/lingtai/capabilities/vision/ANATOMY.md
+  - src/lingtai/services/ANATOMY.md
+  - src/lingtai/services/vision/__init__.py
+  - src/lingtai/services/vision/anthropic.py
+  - src/lingtai/services/vision/codex.py
+  - src/lingtai/services/vision/gemini.py
+  - src/lingtai/services/vision/local.py
+  - src/lingtai/services/vision/mimo.py
+  - src/lingtai/services/vision/minimax.py
+  - src/lingtai/services/vision/openai.py
+  - src/lingtai/services/vision/zhipu.py
+maintenance: |
+  Keep related_files as repo-relative paths to real files. Include neighboring
+  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
+  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
+  maintenance field. If you notice drift between this anatomy and the code,
+  report it. See lingtai-dev-guide for details.
+---
 # src/lingtai/services/vision/
 
 Provider-specific image understanding — standalone services that own their own API clients.

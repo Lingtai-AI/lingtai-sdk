@@ -644,3 +644,64 @@ def test_log_callback_failures_swallowed(tmp_path, monkeypatch):
 
     # Should not raise — secondary failure (callback exception) is silent
     rd.set_current_tool("read", {})
+
+
+# --------------------------------------------------------------------------
+# set_session_id — backend resume id persistence
+# --------------------------------------------------------------------------
+
+def test_set_session_id_writes_new_key(tmp_path):
+    rd = _make_run_dir(tmp_path)
+    assert rd.set_session_id("claude_session_id", "sess-abc") is True
+    data = json.loads(rd.daemon_json_path.read_text())
+    assert data["claude_session_id"] == "sess-abc"
+
+
+def test_set_session_id_empty_value_returns_false(tmp_path):
+    rd = _make_run_dir(tmp_path)
+    # Use a non-seeded key so an empty value leaves daemon.json untouched.
+    assert rd.set_session_id("codex_session_id", "") is False
+    data = json.loads(rd.daemon_json_path.read_text())
+    assert "codex_session_id" not in data
+    # A pre-seeded-None key (claude) is likewise not changed by an empty value.
+    assert rd.set_session_id("claude_session_id", "") is False
+    data = json.loads(rd.daemon_json_path.read_text())
+    assert data["claude_session_id"] is None
+
+
+def test_set_session_id_duplicate_value_returns_false(tmp_path):
+    rd = _make_run_dir(tmp_path)
+    assert rd.set_session_id("codex_session_id", "tid-1") is True
+    # Same value again: no rewrite, returns False (callers skip logging).
+    assert rd.set_session_id("codex_session_id", "tid-1") is False
+
+
+def test_set_session_id_overwrite_true_replaces_different_value(tmp_path):
+    rd = _make_run_dir(tmp_path)
+    assert rd.set_session_id("cursor_session_id", "first", overwrite=True) is True
+    assert rd.set_session_id("cursor_session_id", "second", overwrite=True) is True
+    data = json.loads(rd.daemon_json_path.read_text())
+    assert data["cursor_session_id"] == "second"
+
+
+def test_set_session_id_overwrite_false_keeps_first_value(tmp_path):
+    rd = _make_run_dir(tmp_path)
+    assert rd.set_session_id("opencode_session_id", "first", overwrite=False) is True
+    # A later id must not clobber the established resume id.
+    assert rd.set_session_id("opencode_session_id", "second", overwrite=False) is False
+    data = json.loads(rd.daemon_json_path.read_text())
+    assert data["opencode_session_id"] == "first"
+
+
+def test_set_session_id_write_failure_propagates(tmp_path, monkeypatch):
+    rd = _make_run_dir(tmp_path)
+
+    def failing_replace(src, dst):
+        raise OSError("disk full")
+    monkeypatch.setattr("os.replace", failing_replace)
+
+    # Session-id writes deliberately do NOT swallow failures (unlike _safe
+    # mutation writes) so the run can fail and be marked failed upstream.
+    import pytest
+    with pytest.raises(OSError):
+        rd.set_session_id("claude_session_id", "sess-x")

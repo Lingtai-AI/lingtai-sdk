@@ -34,9 +34,35 @@ def test_agent_no_capabilities_boots_core_floor(tmp_path):
         f"expected exactly the core defaults, got {registered - set(CORE_DEFAULTS)} extra / "
         f"{set(CORE_DEFAULTS) - registered} missing"
     )
+    manifest_registered = {
+        name for name, _ in agent._build_manifest().get("capabilities", [])
+    }
+    for name in CORE_DEFAULTS:
+        assert agent.has_capability(name) is True
+        assert name in manifest_registered
     assert "vision" not in registered
     assert "web_search" not in registered
     agent.stop(timeout=1.0)
+
+
+def test_agent_unsupported_vision_skip_is_not_registered(tmp_path):
+    """A skipped capability must not appear registered or callable."""
+    agent = Agent(
+        service=make_mock_service(),
+        agent_name="test",
+        working_dir=tmp_path / "test",
+        capabilities={"vision": {"provider": "not-real"}},
+    )
+    try:
+        manifest_registered = {
+            name for name, _ in agent._build_manifest().get("capabilities", [])
+        }
+        assert agent.has_capability("vision") is False
+        assert agent.get_capability("vision") is None
+        assert "vision" not in agent._tool_handlers
+        assert "vision" not in manifest_registered
+    finally:
+        agent.stop(timeout=1.0)
 
 
 def test_agent_disable_strips_core_capability(tmp_path):

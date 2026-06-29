@@ -58,7 +58,7 @@ class AgentConfig:
     base_url: str | None = None
     retry_timeout: float = 300.0  # LLM call watchdog (seconds). Bumped from 120s — modern thinking models (GLM-5.1, DeepSeek V4 thinking, Anthropic extended-thinking) routinely take 60–180s for high-context turns; 120s spuriously fired on slow-but-successful calls and triggered AED cascades. 300s catches truly-hung connections without false positives on normal responses.
     aed_timeout: float = 360.0   # max seconds in STUCK before ASLEEP
-    max_aed_attempts: int = 10   # max AED retry attempts per inbox message turn
+    max_aed_attempts: int = 3   # max AED retry attempts per inbox message turn
     max_rpm: int = 60  # API requests-per-minute cap for this agent's provider; 0 = no gating. Shared across all agents in the same process that use the same (provider, base_url) pair (adapter cache key).
     thinking_budget: int | None = None
     thinking: str = "high"  # reasoning/thinking tier passed to the main persistent LLM session
@@ -66,7 +66,7 @@ class AgentConfig:
     soul_delay: float = DEFAULT_SOUL_DELAY_SECONDS  # seconds idle before soul whispers; large value (> stamina) = effectively off
     language: str = "en"  # legacy language field retained for compatibility; prompt.py no longer injects prose from it
     activeness: str | None = "balanced"  # legacy responsiveness posture field; prompt.py no longer injects text from it
-    stamina: float = 3600.0  # agent stamina in seconds; set at birth, not changeable by the agent
+    stamina: float = 86400.0  # agent stamina in seconds; set at birth, not changeable by the agent
     time_awareness: bool = True  # experimental: False strips LLM-visible timestamps (perception nerf)
     timezone_awareness: bool = True  # when True, now_iso emits OS local time; when False, UTC
     context_limit: int | None = None  # max context tokens; None = use model default
