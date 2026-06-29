@@ -1,56 +1,15 @@
 """Tests for daemon(action='check') — read-only event-tail surface."""
-import threading
-from unittest.mock import MagicMock
 
-from lingtai_kernel.config import AgentConfig
-
-
-def _make_agent(tmp_path, capabilities=None):
-    from lingtai.agent import Agent
-    svc = MagicMock()
-    svc.provider = "mock"
-    svc.model = "mock-model"
-    svc.create_session = MagicMock()
-    svc.make_tool_result = MagicMock()
-    return Agent(
-        svc,
-        working_dir=tmp_path / "daemon-agent",
-        capabilities=capabilities or ["daemon"],
-        config=AgentConfig(),
-    )
-
-
-def _make_run_dir(agent, em_id="em-test"):
-    from lingtai.core.daemon.run_dir import DaemonRunDir
-    return DaemonRunDir(
-        parent_working_dir=agent._working_dir,
-        handle=em_id,
-        task="test task",
-        tools=["file"],
-        model="mock-model",
-        max_turns=30,
-        timeout_s=300.0,
-        parent_addr=agent._working_dir.name,
-        parent_pid=12345,
-        system_prompt="You are a daemon.",
-    )
-
-
-def _register(mgr, em_id, run_dir, future=None):
-    mgr._emanations[em_id] = {
-        "future": future or MagicMock(done=MagicMock(return_value=False)),
-        "task": "test task",
-        "start_time": 0.0,
-        "cancel_event": threading.Event(),
-        "timeout_event": threading.Event(),
-        "followup_buffer": "",
-        "followup_lock": threading.Lock(),
-        "run_dir": run_dir,
-    }
+from tests._daemon_helpers import (
+    completed_future,
+    make_daemon_agent,
+    make_daemon_run_dir,
+    register_daemon_entry,
+)
 
 
 def test_check_unknown_id_returns_error(tmp_path):
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
     out = mgr.handle({"action": "check", "id": "em-999"})
     assert out["status"] == "error"
@@ -58,10 +17,10 @@ def test_check_unknown_id_returns_error(tmp_path):
 
 
 def test_check_running_emanation_returns_state_and_events(tmp_path):
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
-    rd = _make_run_dir(agent, "em-1")
-    _register(mgr, "em-1", rd)
+    rd = make_daemon_run_dir(agent, handle="em-1")
+    register_daemon_entry(mgr, "em-1", rd)
 
     # Constructor already wrote daemon_start event. Add a couple more.
     rd.set_current_tool("read", {"file_path": "/tmp/x"})
@@ -81,10 +40,10 @@ def test_check_running_emanation_returns_state_and_events(tmp_path):
 
 
 def test_check_respects_last_parameter(tmp_path):
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
-    rd = _make_run_dir(agent, "em-2")
-    _register(mgr, "em-2", rd)
+    rd = make_daemon_run_dir(agent, handle="em-2")
+    register_daemon_entry(mgr, "em-2", rd)
 
     # Generate ~10 events
     for i in range(5):
@@ -100,10 +59,10 @@ def test_check_respects_last_parameter(tmp_path):
 
 
 def test_check_truncate_limits_string_fields(tmp_path):
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
-    rd = _make_run_dir(agent, "em-3")
-    _register(mgr, "em-3", rd)
+    rd = make_daemon_run_dir(agent, handle="em-3")
+    register_daemon_entry(mgr, "em-3", rd)
 
     # Inject an event with a very long args_preview
     rd.set_current_tool("bash", {"cmd": "x" * 2000})
@@ -119,10 +78,10 @@ def test_check_truncate_limits_string_fields(tmp_path):
 
 
 def test_check_truncate_zero_disables(tmp_path):
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
-    rd = _make_run_dir(agent, "em-4")
-    _register(mgr, "em-4", rd)
+    rd = make_daemon_run_dir(agent, handle="em-4")
+    register_daemon_entry(mgr, "em-4", rd)
     rd.set_current_tool("bash", {"cmd": "x" * 100})
 
     out = mgr.handle({"action": "check", "id": "em-4", "truncate": 0})
@@ -137,10 +96,12 @@ def test_check_truncate_zero_disables(tmp_path):
 
 
 def test_check_includes_terminal_event_for_done_emanation(tmp_path):
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
-    rd = _make_run_dir(agent, "em-5")
-    _register(mgr, "em-5", rd, future=MagicMock(done=MagicMock(return_value=True)))
+    rd = make_daemon_run_dir(agent, handle="em-5")
+    register_daemon_entry(
+        mgr, "em-5", rd, future=completed_future("[fake done]"),
+    )
 
     rd.mark_done("final report text")
 
@@ -158,12 +119,12 @@ def test_check_includes_terminal_event_for_done_emanation(tmp_path):
 
 
 def test_check_includes_cli_progress_fields(tmp_path):
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
-    rd = _make_run_dir(agent, "em-cli")
+    rd = make_daemon_run_dir(agent, handle="em-cli")
     rd._state["backend"] = "codex"
     rd._atomic_write_json(rd.daemon_json_path, rd._state)
-    _register(mgr, "em-cli", rd)
+    register_daemon_entry(mgr, "em-cli", rd)
 
     rd.record_cli_output("phase 1 complete", stream="combined")
 
@@ -177,10 +138,12 @@ def test_check_includes_cli_progress_fields(tmp_path):
 
 
 def test_check_includes_failure_error(tmp_path):
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
-    rd = _make_run_dir(agent, "em-fail")
-    _register(mgr, "em-fail", rd, future=MagicMock(done=MagicMock(return_value=True)))
+    rd = make_daemon_run_dir(agent, handle="em-fail")
+    register_daemon_entry(
+        mgr, "em-fail", rd, future=completed_future("[fake done]"),
+    )
 
     rd.mark_failed(RuntimeError("boom"))
 
@@ -191,10 +154,10 @@ def test_check_includes_failure_error(tmp_path):
     assert out["finished_at"] is not None
 
 def test_check_default_last_is_20(tmp_path):
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
-    rd = _make_run_dir(agent, "em-6")
-    _register(mgr, "em-6", rd)
+    rd = make_daemon_run_dir(agent, handle="em-6")
+    register_daemon_entry(mgr, "em-6", rd)
 
     # Generate 30 events (15 tool_call + tool_result pairs)
     for i in range(15):
@@ -209,7 +172,7 @@ def test_check_default_last_is_20(tmp_path):
 
 def test_check_rejects_non_numeric_last(tmp_path):
     """Non-numeric `last` must return a clean error, not raise."""
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
     out = mgr.handle({"action": "check", "id": "em-x", "last": "twenty"})
     assert out["status"] == "error"
@@ -217,7 +180,7 @@ def test_check_rejects_non_numeric_last(tmp_path):
 
 
 def test_check_rejects_non_numeric_truncate(tmp_path):
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
     out = mgr.handle({"action": "check", "id": "em-x", "truncate": "tons"})
     assert out["status"] == "error"
@@ -225,7 +188,7 @@ def test_check_rejects_non_numeric_truncate(tmp_path):
 
 
 def test_check_rejects_zero_or_negative_last(tmp_path):
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
     out = mgr.handle({"action": "check", "id": "em-x", "last": 0})
     assert out["status"] == "error"
@@ -235,7 +198,7 @@ def test_check_rejects_zero_or_negative_last(tmp_path):
 
 
 def test_check_rejects_negative_truncate(tmp_path):
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
     out = mgr.handle({"action": "check", "id": "em-x", "truncate": -10})
     assert out["status"] == "error"
@@ -246,10 +209,10 @@ def test_check_caps_last_at_max(tmp_path):
     """last is capped at _CHECK_LAST_MAX so events.jsonl can't be slurped
     unboundedly (readlines() would otherwise read the whole file)."""
     from lingtai.core.daemon import DaemonManager
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
-    rd = _make_run_dir(agent, "em-cap")
-    _register(mgr, "em-cap", rd)
+    rd = make_daemon_run_dir(agent, handle="em-cap")
+    register_daemon_entry(mgr, "em-cap", rd)
 
     # Asking for a huge value still works but only returns up to the cap.
     out = mgr.handle({"action": "check", "id": "em-cap", "last": 10**9})

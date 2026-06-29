@@ -22,13 +22,18 @@ from __future__ import annotations
 
 import json
 import threading
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from lingtai_kernel.config import AgentConfig
 from lingtai.core.daemon import DaemonManager
-from lingtai.core.daemon.run_dir import DaemonRunDir
+from tests._daemon_helpers import (
+    FiniteFakeProc,
+    completed_future,
+    make_daemon_agent,
+    make_daemon_run_dir,
+    register_daemon_entry,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -36,26 +41,9 @@ from lingtai.core.daemon.run_dir import DaemonRunDir
 # ---------------------------------------------------------------------------
 
 
-def _make_agent(tmp_path):
-    """Minimal Agent with daemon capability and a mock LLM service."""
-    from lingtai.agent import Agent
-
-    svc = MagicMock()
-    svc.provider = "mock"
-    svc.model = "mock-model"
-    svc.create_session = MagicMock()
-    svc.make_tool_result = MagicMock()
-    return Agent(
-        svc,
-        working_dir=tmp_path / "daemon-agent",
-        capabilities=["daemon"],
-        config=AgentConfig(),
-    )
-
-
 def _make_run_dir(agent, *, handle="em-test"):
-    return DaemonRunDir(
-        parent_working_dir=agent._working_dir,
+    return make_daemon_run_dir(
+        agent,
         handle=handle,
         task="dummy task",
         tools=[],
@@ -67,19 +55,6 @@ def _make_run_dir(agent, *, handle="em-test"):
         system_prompt="[stub]",
         backend="opencode",
     )
-
-
-class _FakeProc:
-    """Minimal subprocess.Popen stand-in for opencode."""
-
-    def __init__(self, stdout_lines=(), stderr_lines=(), returncode=0):
-        self.stdout = iter(list(stdout_lines))
-        self.stderr = iter(list(stderr_lines))
-        self.returncode = returncode
-        self.pid = 0
-
-    def wait(self, timeout=None):
-        return self.returncode
 
 
 # ---------------------------------------------------------------------------
@@ -157,14 +132,14 @@ def test_text_extraction_returns_empty_for_purely_structural_events():
 
 
 def test_opencode_emanate_cmd_includes_run_and_format_json(tmp_path):
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
 
     captured: list[list[str]] = []
 
     def fake_popen(cmd, *args, **kwargs):
         captured.append(list(cmd))
-        return _FakeProc()
+        return FiniteFakeProc()
 
     run_dir = _make_run_dir(agent, handle="em-oc")
     cancel = threading.Event()
@@ -193,14 +168,14 @@ def test_opencode_emanate_cmd_includes_run_and_format_json(tmp_path):
 
 def test_opencode_emanate_appends_backend_argv_before_prompt(tmp_path):
     """backend_options tokens must sit between --format json and the prompt."""
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
 
     captured: list[list[str]] = []
 
     def fake_popen(cmd, *args, **kwargs):
         captured.append(list(cmd))
-        return _FakeProc()
+        return FiniteFakeProc()
 
     run_dir = _make_run_dir(agent, handle="em-oc-opts")
     cancel = threading.Event()
@@ -230,7 +205,7 @@ def test_opencode_emanate_persists_session_id_from_first_event(tmp_path):
     """The first JSON event carrying a session-id-shaped field is stored
     in daemon.json so daemon(ask) can resume from the moment the
     emanation returns."""
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
 
     stdout_lines = [
@@ -241,7 +216,7 @@ def test_opencode_emanate_persists_session_id_from_first_event(tmp_path):
     ]
 
     def fake_popen(cmd, *args, **kwargs):
-        return _FakeProc(stdout_lines=stdout_lines)
+        return FiniteFakeProc(stdout_lines=stdout_lines)
 
     run_dir = _make_run_dir(agent, handle="em-oc-sid")
     cancel = threading.Event()
@@ -264,7 +239,7 @@ def test_opencode_emanate_handles_non_json_lines_gracefully(tmp_path):
     """Banners / progress lines that aren't JSON should be recorded as
     cli_output, not crash the parser. The terminal text from a later
     JSON event still wins."""
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
 
     stdout_lines = [
@@ -275,7 +250,7 @@ def test_opencode_emanate_handles_non_json_lines_gracefully(tmp_path):
     ]
 
     def fake_popen(cmd, *args, **kwargs):
-        return _FakeProc(stdout_lines=stdout_lines)
+        return FiniteFakeProc(stdout_lines=stdout_lines)
 
     run_dir = _make_run_dir(agent, handle="em-oc-mixed")
     cancel = threading.Event()
@@ -296,11 +271,11 @@ def test_opencode_emanate_uses_no_output_sentinel_when_silent(tmp_path):
     """A process that exits 0 with no JSON events and no stderr is
     surfaced as the explicit [no output] sentinel — not as an empty
     string that the agent has to interpret."""
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
 
     def fake_popen(cmd, *args, **kwargs):
-        return _FakeProc(stdout_lines=[], stderr_lines=[], returncode=0)
+        return FiniteFakeProc(stdout_lines=[], stderr_lines=[], returncode=0)
 
     run_dir = _make_run_dir(agent, handle="em-oc-silent")
     cancel = threading.Event()
@@ -318,14 +293,14 @@ def test_opencode_emanate_uses_no_output_sentinel_when_silent(tmp_path):
 def test_opencode_emanate_raises_when_returncode_nonzero(tmp_path):
     """Non-zero exit → mark_failed + raise, with the stderr tail in the
     error message so the parent can see what went wrong."""
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
 
     stdout_lines = ['{"type":"text","text":"partial"}\n']
     stderr_lines = ['auth: invalid token\n', 'exit 1\n']
 
     def fake_popen(cmd, *args, **kwargs):
-        return _FakeProc(
+        return FiniteFakeProc(
             stdout_lines=stdout_lines, stderr_lines=stderr_lines, returncode=1,
         )
 
@@ -343,7 +318,7 @@ def test_opencode_emanate_raises_when_returncode_nonzero(tmp_path):
 
 def test_opencode_emanate_missing_cli_raises_runtime_error(tmp_path):
     """FileNotFoundError → mark_failed + RuntimeError naming opencode."""
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
 
     def fake_popen(cmd, *args, **kwargs):
@@ -370,7 +345,7 @@ def test_emanate_opencode_routes_to_cli_handler(tmp_path):
     """`emanate` with backend='opencode' must go through
     `_handle_emanate_cli` (which skips preset resolution) and ultimately
     submit `_run_opencode_emanation` to the pool."""
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
 
     captured: dict = {}
@@ -414,28 +389,21 @@ def test_emanate_opencode_routes_to_cli_handler(tmp_path):
 def test_ask_opencode_errors_when_no_session_id(tmp_path):
     """ask before the emanation captured a session id → clear error
     pointing the agent at the (still-initializing) state, not a hang."""
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
 
     # Register a fake opencode emanation entry with a run_dir but no
     # opencode_session_id yet.
-    from concurrent.futures import Future
     run_dir = _make_run_dir(agent, handle="em-oc-noresume")
-    fut = Future()
-    fut.set_result("[fake done]")
-    mgr._emanations["em-oc-noresume"] = {
-        "future": fut,
-        "task": "x",
-        "start_time": 0,
-        "cancel_event": threading.Event(),
-        "timeout_event": threading.Event(),
-        "followup_buffer": "",
-        "followup_lock": threading.Lock(),
-        "run_dir": run_dir,
-        "backend": "opencode",
-        "ask_in_flight": False,
-        "ask_future": None,
-    }
+    register_daemon_entry(
+        mgr,
+        "em-oc-noresume",
+        run_dir,
+        future=completed_future("[fake done]"),
+        task="x",
+        backend="opencode",
+        ask_in_flight=False,
+    )
 
     result = mgr.handle({
         "action": "ask",
@@ -451,7 +419,7 @@ def test_ask_opencode_resumes_with_captured_session_id(tmp_path):
     """When opencode_session_id is present, ask spawns
     `opencode run --session <id> --format json <message>` and returns
     {"status":"sent","async":true} synchronously."""
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
 
     captured_cmd: list[list[str]] = []
@@ -460,29 +428,22 @@ def test_ask_opencode_resumes_with_captured_session_id(tmp_path):
         captured_cmd.append(list(cmd))
         # Return an empty-stream proc — the ask worker will see EOF and
         # complete cleanly via the deadline branch.
-        return _FakeProc()
+        return FiniteFakeProc()
 
-    from concurrent.futures import Future
     run_dir = _make_run_dir(agent, handle="em-oc-resume")
     # Pre-seed the session id as if a prior emanation captured it.
     run_dir._state["opencode_session_id"] = "oc-resumable-123"
     run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
 
-    fut = Future()
-    fut.set_result("[fake done]")
-    mgr._emanations["em-oc-resume"] = {
-        "future": fut,
-        "task": "x",
-        "start_time": 0,
-        "cancel_event": threading.Event(),
-        "timeout_event": threading.Event(),
-        "followup_buffer": "",
-        "followup_lock": threading.Lock(),
-        "run_dir": run_dir,
-        "backend": "opencode",
-        "ask_in_flight": False,
-        "ask_future": None,
-    }
+    register_daemon_entry(
+        mgr,
+        "em-oc-resume",
+        run_dir,
+        future=completed_future("[fake done]"),
+        task="x",
+        backend="opencode",
+        ask_in_flight=False,
+    )
 
     with patch("lingtai.core.daemon.subprocess.Popen", side_effect=fake_popen):
         result = mgr.handle({
@@ -520,29 +481,22 @@ def test_ask_opencode_concurrent_returns_busy(tmp_path):
     still streaming must return ``status='busy'`` (the resumed CLI
     serializes per session and a second spawn would interleave or
     error)."""
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
 
-    from concurrent.futures import Future
     run_dir = _make_run_dir(agent, handle="em-oc-busy")
     run_dir._state["opencode_session_id"] = "oc-busy-1"
     run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
 
-    fut = Future()
-    fut.set_result("[fake done]")
-    mgr._emanations["em-oc-busy"] = {
-        "future": fut,
-        "task": "x",
-        "start_time": 0,
-        "cancel_event": threading.Event(),
-        "timeout_event": threading.Event(),
-        "followup_buffer": "",
-        "followup_lock": threading.Lock(),
-        "run_dir": run_dir,
-        "backend": "opencode",
-        "ask_in_flight": True,  # pretend an ask is already in flight
-        "ask_future": None,
-    }
+    register_daemon_entry(
+        mgr,
+        "em-oc-busy",
+        run_dir,
+        future=completed_future("[fake done]"),
+        task="x",
+        backend="opencode",
+        ask_in_flight=True,  # pretend an ask is already in flight
+    )
 
     result = mgr._handle_ask("em-oc-busy", "second concurrent ask")
     assert result["status"] == "busy"

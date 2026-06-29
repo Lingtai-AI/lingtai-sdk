@@ -7,35 +7,18 @@ import subprocess
 from pathlib import Path
 import textwrap
 import threading
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from lingtai.agent import Agent
 from lingtai.core.daemon import get_schema
 from lingtai.core.daemon.claude_interactive import ClaudeInteractiveError, run_claude_interactive
-from lingtai.core.daemon.run_dir import DaemonRunDir
-from lingtai_kernel.config import AgentConfig
+from tests._daemon_helpers import make_daemon_agent, make_daemon_run_dir
 
 
-def _make_agent(tmp_path: Path) -> Agent:
-    svc = MagicMock()
-    svc.provider = "mock"
-    svc.model = "mock-model"
-    svc.create_session = MagicMock()
-    svc.make_tool_result = MagicMock()
-    return Agent(
-        svc,
-        working_dir=tmp_path / "daemon-agent",
-        capabilities=["daemon"],
-        config=AgentConfig(),
-    )
-
-
-def _make_run_dir(tmp_path: Path, *, backend: str = "claude") -> DaemonRunDir:
+def _make_run_dir(tmp_path: Path, *, backend: str = "claude"):
     parent = tmp_path / "daemon-agent"
-    parent.mkdir(parents=True, exist_ok=True)
-    return DaemonRunDir(
+    return make_daemon_run_dir(
         parent_working_dir=parent,
         handle="em-1",
         task="interactive task",
@@ -162,7 +145,7 @@ def test_schema_hides_interactive_claude_backends_keeps_print_mode():
 
 
 def test_emanate_claude_dispatches_interactive_runner(tmp_path):
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
     captured = {}
 
@@ -197,7 +180,7 @@ def test_emanate_claude_dispatches_interactive_runner(tmp_path):
 
 
 def test_emanate_claude_p_dispatches_legacy_print_runner(tmp_path):
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
     captured = {}
 
@@ -232,7 +215,7 @@ def test_emanate_claude_p_dispatches_legacy_print_runner(tmp_path):
 def test_claude_backend_ids_are_preserved_while_sharing_runners(
     tmp_path, backend, expected_runner,
 ):
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
     captured = {}
 
@@ -272,7 +255,7 @@ def test_claude_backend_ids_are_preserved_while_sharing_runners(
 
 
 def test_claude_reserved_backend_options_are_rejected(tmp_path):
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
 
     result = mgr.handle({
@@ -291,7 +274,7 @@ def test_claude_reserved_backend_options_are_rejected(tmp_path):
 
 
 def test_claude_interactive_system_prompt_backend_option_is_rejected(tmp_path):
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
 
     result = mgr.handle({

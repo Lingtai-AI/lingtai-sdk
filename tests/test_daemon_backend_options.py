@@ -12,17 +12,24 @@ Covers:
 from __future__ import annotations
 
 import json
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lingtai_kernel.config import AgentConfig
 from lingtai.core.daemon import (
     _BACKEND_ALIASES,
     _backend_options_to_argv,
     _BACKEND_SCHEMA_ENUM,
     _BACKEND_SPECS,
     _normalize_backend,
+)
+from tests._daemon_helpers import (
+    FiniteFakeProc,
+    completed_future,
+    make_daemon_agent,
+    make_daemon_run_dir,
+    register_daemon_entry,
 )
 
 
@@ -124,27 +131,10 @@ def test_argv_rejects_non_dict_root():
 # ---------------------------------------------------------------------------
 
 
-def _make_agent(tmp_path):
-    """Minimal Agent with daemon capability and mock LLM service."""
-    from lingtai.agent import Agent
-    svc = MagicMock()
-    svc.provider = "mock"
-    svc.model = "mock-model"
-    svc.create_session = MagicMock()
-    svc.make_tool_result = MagicMock()
-    agent = Agent(
-        svc,
-        working_dir=tmp_path / "daemon-agent",
-        capabilities=["daemon"],
-        config=AgentConfig(),
-    )
-    return agent
-
-
 def test_emanate_cli_rejects_bad_backend_options(tmp_path):
     """A single invalid backend_options spec refuses the whole batch
     with a tool-level error mentioning the offending index."""
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
     result = mgr.handle({
         "action": "emanate",
@@ -164,7 +154,7 @@ def test_emanate_cli_persists_resolved_options(tmp_path):
     """Successful CLI emanate writes backend_options + backend_argv into
     daemon.json so daemon(check) and the on-disk artifact can be
     reconstructed later."""
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
 
     # Block the worker from actually invoking subprocess.Popen — we only
@@ -226,7 +216,7 @@ def test_emanate_cli_no_options_omits_fields(tmp_path):
     """When backend_options is absent, daemon.json should not carry the
     fields at all (avoids confusing readers into thinking an empty
     options object was passed)."""
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
 
     captured: dict = {}
@@ -256,7 +246,7 @@ def test_emanate_cli_no_options_omits_fields(tmp_path):
 def test_lingtai_backend_ignores_backend_options(tmp_path):
     """The lingtai backend has no CLI process — backend_options must be
     silently ignored, never raised against the schema."""
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
 
     # Force preset path off and mock create_session so the worker is a no-op.
@@ -289,7 +279,7 @@ def test_unknown_backend_falls_back_to_lingtai_path(tmp_path):
     Unknown backend strings are not CLI backends; they route to the in-process
     LingTai worker and therefore do not store a CLI ``backend`` field.
     """
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
     captured: dict = {}
 
@@ -324,28 +314,17 @@ def test_unknown_backend_falls_back_to_lingtai_path(tmp_path):
 def test_claude_code_cmd_appends_backend_argv_before_task(tmp_path):
     """The Claude Code runner must put backend_argv after the required
     infrastructure flags and immediately before the task positional."""
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
 
     captured_cmd: list[list[str]] = []
 
-    class FakeProc:
-        def __init__(self):
-            self.stdout = iter([])
-            self.stderr = iter([])
-            self.returncode = 0
-            self.pid = 0
-
-        def wait(self, timeout=None):
-            return 0
-
     def fake_popen(cmd, *args, **kwargs):
         captured_cmd.append(list(cmd))
-        return FakeProc()
+        return FiniteFakeProc()
 
-    from lingtai.core.daemon.run_dir import DaemonRunDir
-    run_dir = DaemonRunDir(
-        parent_working_dir=agent._working_dir,
+    run_dir = make_daemon_run_dir(
+        agent,
         handle="em-test",
         task="dummy task",
         tools=[],
@@ -358,9 +337,8 @@ def test_claude_code_cmd_appends_backend_argv_before_task(tmp_path):
         backend="claude-code",
     )
 
-    import threading as _t
-    cancel = _t.Event()
-    timeout = _t.Event()
+    cancel = threading.Event()
+    timeout = threading.Event()
 
     with patch("lingtai.core.daemon.subprocess.Popen", side_effect=fake_popen):
         mgr._run_claude_code_emanation(
@@ -390,28 +368,17 @@ def test_claude_code_cmd_appends_backend_argv_before_task(tmp_path):
 
 
 def test_codex_cmd_appends_backend_argv_before_task(tmp_path):
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
 
     captured_cmd: list[list[str]] = []
 
-    class FakeProc:
-        def __init__(self):
-            self.stdout = iter([])
-            self.stderr = iter([])
-            self.returncode = 0
-            self.pid = 0
-
-        def wait(self, timeout=None):
-            return 0
-
     def fake_popen(cmd, *args, **kwargs):
         captured_cmd.append(list(cmd))
-        return FakeProc()
+        return FiniteFakeProc()
 
-    from lingtai.core.daemon.run_dir import DaemonRunDir
-    run_dir = DaemonRunDir(
-        parent_working_dir=agent._working_dir,
+    run_dir = make_daemon_run_dir(
+        agent,
         handle="em-codex",
         task="dummy",
         tools=[],
@@ -424,9 +391,8 @@ def test_codex_cmd_appends_backend_argv_before_task(tmp_path):
         backend="codex",
     )
 
-    import threading as _t
-    cancel = _t.Event()
-    timeout = _t.Event()
+    cancel = threading.Event()
+    timeout = threading.Event()
 
     # Codex needs a `turn.completed` event to consider the run successful;
     # feed a minimal valid stream.
@@ -436,15 +402,11 @@ def test_codex_cmd_appends_backend_argv_before_task(tmp_path):
         '{"type":"turn.completed"}\n',
     ]
 
-    class StreamingFakeProc(FakeProc):
-        def __init__(self):
-            super().__init__()
-            self.stdout = iter(fake_stdout_lines)
-            self.stderr = iter([])
-
     with patch("lingtai.core.daemon.subprocess.Popen",
                side_effect=lambda cmd, *a, **kw: (captured_cmd.append(list(cmd))
-                                                  or StreamingFakeProc())):
+                                                  or FiniteFakeProc(
+                                                      stdout_lines=fake_stdout_lines,
+                                                  ))):
         mgr._run_codex_emanation(
             "em-codex", run_dir, "Find the breaking change.",
             cancel, timeout,
@@ -535,7 +497,7 @@ def test_schema_includes_mimocode_and_qwen_code_backends():
 
 
 def test_mimocode_alias_dispatches_to_canonical_backend(tmp_path):
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
     captured: dict = {}
 
@@ -563,7 +525,7 @@ def test_mimocode_alias_dispatches_to_canonical_backend(tmp_path):
 
 
 def test_cli_contexts_keep_per_task_argv_and_passive_mcp(tmp_path):
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
     captured: dict[str, dict] = {}
 
@@ -625,26 +587,12 @@ def test_cli_contexts_keep_per_task_argv_and_passive_mcp(tmp_path):
 
 
 def test_mimocode_cmd_appends_backend_argv_before_prompt(tmp_path):
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
     captured_cmd: list[list[str]] = []
 
-    class FakeProc:
-        def __init__(self):
-            self.stdout = iter([
-                '{"type":"session.created","sessionID":"sess-mimo"}\n',
-                '{"type":"message.completed","text":"done"}\n',
-            ])
-            self.stderr = iter([])
-            self.returncode = 0
-            self.pid = 0
-
-        def wait(self, timeout=None):
-            return 0
-
-    from lingtai.core.daemon.run_dir import DaemonRunDir
-    run_dir = DaemonRunDir(
-        parent_working_dir=agent._working_dir,
+    run_dir = make_daemon_run_dir(
+        agent,
         handle="em-mimo",
         task="dummy",
         tools=[],
@@ -656,14 +604,19 @@ def test_mimocode_cmd_appends_backend_argv_before_prompt(tmp_path):
         system_prompt="[stub]",
         backend="mimocode",
     )
+    stdout_lines = [
+        '{"type":"session.created","sessionID":"sess-mimo"}\n',
+        '{"type":"message.completed","text":"done"}\n',
+    ]
 
-    import threading as _t
     with patch("lingtai.core.daemon.subprocess.Popen",
                side_effect=lambda cmd, *a, **kw: (captured_cmd.append(list(cmd))
-                                                  or FakeProc())):
+                                                  or FiniteFakeProc(
+                                                      stdout_lines=stdout_lines,
+                                                  ))):
         mgr._run_mimocode_emanation(
             "em-mimo", run_dir, "Refactor with MiMo.",
-            _t.Event(), _t.Event(),
+            threading.Event(), threading.Event(),
             backend_argv=["--model", "mimo-auto", "--agent", "build"],
         )
 
@@ -675,23 +628,12 @@ def test_mimocode_cmd_appends_backend_argv_before_prompt(tmp_path):
 
 
 def test_qwen_code_cmd_appends_backend_argv_before_prompt(tmp_path):
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
     captured_cmd: list[list[str]] = []
 
-    class FakeProc:
-        def __init__(self):
-            self.stdout = iter(["qwen done\n"])
-            self.stderr = iter([])
-            self.returncode = 0
-            self.pid = 0
-
-        def wait(self, timeout=None):
-            return 0
-
-    from lingtai.core.daemon.run_dir import DaemonRunDir
-    run_dir = DaemonRunDir(
-        parent_working_dir=agent._working_dir,
+    run_dir = make_daemon_run_dir(
+        agent,
         handle="em-qwen",
         task="dummy",
         tools=[],
@@ -704,13 +646,14 @@ def test_qwen_code_cmd_appends_backend_argv_before_prompt(tmp_path):
         backend="qwen-code",
     )
 
-    import threading as _t
     with patch("lingtai.core.daemon.subprocess.Popen",
                side_effect=lambda cmd, *a, **kw: (captured_cmd.append(list(cmd))
-                                                  or FakeProc())):
+                                                  or FiniteFakeProc(
+                                                      stdout_lines=["qwen done\n"],
+                                                  ))):
         mgr._run_qwen_code_emanation(
             "em-qwen", run_dir, "Refactor with Qwen.",
-            _t.Event(), _t.Event(),
+            threading.Event(), threading.Event(),
             backend_argv=["--model", "qwen3-coder-plus"],
         )
 
@@ -723,7 +666,7 @@ def test_qwen_code_cmd_appends_backend_argv_before_prompt(tmp_path):
 
 
 def test_qwen_code_rejects_harness_owned_backend_options(tmp_path):
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
 
     result = mgr.handle({
@@ -739,7 +682,7 @@ def test_qwen_code_rejects_harness_owned_backend_options(tmp_path):
 
 
 def test_qwen_code_ask_is_explicitly_unsupported(tmp_path):
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
 
     def fake_run(em_id, run_dir, task, cancel_event, timeout_event, backend_argv=None):
@@ -781,7 +724,7 @@ def test_schema_includes_oh_my_pi_backend():
 
 @pytest.mark.parametrize("backend", ["omp", "oh-my-pi"])
 def test_oh_my_pi_alias_and_canonical_dispatch_to_backend(tmp_path, backend):
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
     captured: dict = {}
 
@@ -809,31 +752,21 @@ def test_oh_my_pi_alias_and_canonical_dispatch_to_backend(tmp_path, backend):
 
 
 def test_oh_my_pi_cmd_includes_mode_json_and_session_id_from_header(tmp_path):
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
     captured_cmd: list[list[str]] = []
 
-    class FakeProc:
-        def __init__(self):
-            # Oh-My-Pi JSON mode: a `type:session` header (bare top-level id)
-            # followed by agent events.
-            self.stdout = iter([
-                '{"type":"session","id":"omp-sess-1","cwd":"/tmp"}\n',
-                # Event ids that arrive after the session header must not
-                # overwrite the resumable session id.
-                '{"type":"session.updated","id":"not-the-session-id"}\n',
-                '{"type":"message.completed","text":"all done"}\n',
-            ])
-            self.stderr = iter([])
-            self.returncode = 0
-            self.pid = 0
-
-        def wait(self, timeout=None):
-            return 0
-
-    from lingtai.core.daemon.run_dir import DaemonRunDir
-    run_dir = DaemonRunDir(
-        parent_working_dir=agent._working_dir,
+    # Oh-My-Pi JSON mode: a `type:session` header (bare top-level id)
+    # followed by agent events.
+    stdout_lines = [
+        '{"type":"session","id":"omp-sess-1","cwd":"/tmp"}\n',
+        # Event ids that arrive after the session header must not overwrite
+        # the resumable session id.
+        '{"type":"session.updated","id":"not-the-session-id"}\n',
+        '{"type":"message.completed","text":"all done"}\n',
+    ]
+    run_dir = make_daemon_run_dir(
+        agent,
         handle="em-omp",
         task="dummy",
         tools=[],
@@ -846,13 +779,14 @@ def test_oh_my_pi_cmd_includes_mode_json_and_session_id_from_header(tmp_path):
         backend="oh-my-pi",
     )
 
-    import threading as _t
     with patch("lingtai.core.daemon.subprocess.Popen",
                side_effect=lambda cmd, *a, **kw: (captured_cmd.append(list(cmd))
-                                                  or FakeProc())):
+                                                  or FiniteFakeProc(
+                                                      stdout_lines=stdout_lines,
+                                                  ))):
         mgr._run_oh_my_pi_emanation(
             "em-omp", run_dir, "Refactor with Oh-My-Pi.",
-            _t.Event(), _t.Event(),
+            threading.Event(), threading.Event(),
             backend_argv=["--provider", "anthropic", "--model", "claude-x"],
         )
 
@@ -867,23 +801,12 @@ def test_oh_my_pi_cmd_includes_mode_json_and_session_id_from_header(tmp_path):
 
 
 def test_oh_my_pi_ask_resume_uses_session_flag(tmp_path):
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
     captured_cmd: list[list[str]] = []
 
-    class FakeProc:
-        def __init__(self):
-            self.stdout = iter(['{"type":"message.completed","text":"resumed"}\n'])
-            self.stderr = iter([])
-            self.returncode = 0
-            self.pid = 0
-
-        def wait(self, timeout=None):
-            return 0
-
-    from lingtai.core.daemon.run_dir import DaemonRunDir
-    run_dir = DaemonRunDir(
-        parent_working_dir=agent._working_dir,
+    run_dir = make_daemon_run_dir(
+        agent,
         handle="em-omp-ask",
         task="dummy",
         tools=[],
@@ -898,29 +821,24 @@ def test_oh_my_pi_ask_resume_uses_session_flag(tmp_path):
     run_dir._state["oh_my_pi_session_id"] = "omp-sess-9"
     run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
 
-    import threading as _t
-    from concurrent.futures import Future
-    done = Future()
-    done.set_result("[fake done]")
-    entry = {
-        "run_dir": run_dir,
-        "task": "x",
-        "start_time": 0,
-        "cancel_event": _t.Event(),
-        "timeout_event": _t.Event(),
-        "followup_buffer": "",
-        "backend": "oh-my-pi",
-        "future": done,
-        "followup_lock": _t.Lock(),
-        "ask_in_flight": False,
-        "ask_future": None,
-    }
     em_id = "em-omp-ask"
-    mgr._emanations[em_id] = entry
+    entry = register_daemon_entry(
+        mgr,
+        em_id,
+        run_dir,
+        future=completed_future("[fake done]"),
+        task="x",
+        backend="oh-my-pi",
+        ask_in_flight=False,
+    )
 
     with patch("lingtai.core.daemon.subprocess.Popen",
                side_effect=lambda cmd, *a, **kw: (captured_cmd.append(list(cmd))
-                                                  or FakeProc())):
+                                                  or FiniteFakeProc(
+                                                      stdout_lines=[
+                                                          '{"type":"message.completed","text":"resumed"}\n',
+                                                      ],
+                                                  ))):
         resp = mgr.handle({"action": "ask", "id": em_id, "message": "keep going"})
         # ask is async; wait for the ask worker to finish before asserting.
         fut = entry.get("ask_future")
@@ -936,15 +854,11 @@ def test_oh_my_pi_ask_resume_uses_session_flag(tmp_path):
 
 
 def test_oh_my_pi_ask_before_session_id_returns_initializing_error(tmp_path):
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
 
-    from concurrent.futures import Future
-    import threading as _t
-    from lingtai.core.daemon.run_dir import DaemonRunDir
-
-    run_dir = DaemonRunDir(
-        parent_working_dir=agent._working_dir,
+    run_dir = make_daemon_run_dir(
+        agent,
         handle="em-omp-no-session",
         task="dummy",
         tools=[],
@@ -956,22 +870,16 @@ def test_oh_my_pi_ask_before_session_id_returns_initializing_error(tmp_path):
         system_prompt="[stub]",
         backend="oh-my-pi",
     )
-    done = Future()
-    done.set_result("[fake done]")
     em_id = "em-omp-no-session"
-    mgr._emanations[em_id] = {
-        "run_dir": run_dir,
-        "task": "x",
-        "start_time": 0,
-        "cancel_event": _t.Event(),
-        "timeout_event": _t.Event(),
-        "followup_buffer": "",
-        "backend": "oh-my-pi",
-        "future": done,
-        "followup_lock": _t.Lock(),
-        "ask_in_flight": False,
-        "ask_future": None,
-    }
+    register_daemon_entry(
+        mgr,
+        em_id,
+        run_dir,
+        future=completed_future("[fake done]"),
+        task="x",
+        backend="oh-my-pi",
+        ask_in_flight=False,
+    )
 
     resp = mgr.handle({"action": "ask", "id": em_id, "message": "continue"})
 
@@ -981,7 +889,7 @@ def test_oh_my_pi_ask_before_session_id_returns_initializing_error(tmp_path):
 
 
 def test_oh_my_pi_rejects_harness_owned_backend_options(tmp_path):
-    agent = _make_agent(tmp_path)
+    agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
 
     for flag, key, value in (
