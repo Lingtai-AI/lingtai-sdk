@@ -56,7 +56,7 @@ agent:
 
 1. **Identity / lifecycle files** — `.agent.json`, `.status.json`, and
    `.agent.heartbeat` freshness.
-2. **Process evidence** — best-effort `ps` scan for `lingtai run <agent-dir>`.
+2. **Process evidence** — best-effort `ps` scan for `lingtai-agent run <agent-dir>` / `python -m lingtai run <agent-dir>`.
 3. **Notifications and logs** — channel files, mtimes, sizes, and common log
    files such as `logs/events.jsonl`, `logs/agent.log`, and token ledgers.
 4. **Internal mail footprint** — inbox/outbox counts without message bodies.

@@ -44,6 +44,33 @@ ADDON_MODULES = {
 }
 
 
+def match_agent_run(cmdline: str, working_dir: str) -> str | None:
+    """Return the launch form if ``cmdline`` is an agent run for ``working_dir``.
+
+    Keep this stdlib-only copy in sync with
+    ``lingtai_kernel.process_match.match_agent_run``. The doctor script is
+    copied into agent skill bundles and cannot import kernel modules there.
+
+    Residual limitation: ``ps command=`` is a flat string, not the original argv
+    vector. A non-LingTai process can still match if its argument text is shaped
+    exactly like an absolute LingTai program path followed by ``run <dir>``.
+    """
+    target = os.path.normpath(working_dir)
+    for token, label, program_anchored in (
+        (" -m lingtai run ", "module", False),
+        ("lingtai-agent run ", "console", True),
+        ("lingtai run ", "legacy", True),
+    ):
+        idx = cmdline.find(token)
+        while idx != -1:
+            if (not program_anchored) or idx == 0 or cmdline[idx - 1] == "/":
+                tail = cmdline[idx + len(token):].strip()
+                if tail and os.path.normpath(tail) == target:
+                    return label
+            idx = cmdline.find(token, idx + 1)
+    return None
+
+
 @dataclass
 class Finding:
     severity: str
@@ -395,12 +422,18 @@ def collect_process(report: Report) -> None:
     agent_str = str(report.agent_dir)
     matches = []
     for line in proc.stdout.splitlines():
-        if "lingtai run" in line and agent_str in line:
+        trimmed = line.strip()
+        parts = trimmed.split(None, 1)
+        if len(parts) == 2 and parts[0].isdigit():
+            command = parts[1]
+        else:
+            command = trimmed
+        if match_agent_run(command, agent_str) is not None:
             matches.append(line.strip())
     if matches:
         sec.add("OK", "lingtai process found", f"Found {len(matches)} process line(s) referencing this agent.", processes=matches[:5])
     else:
-        sec.add("WARN", "no lingtai process found", "No `lingtai run <agent-dir>` process was found. A fresh heartbeat would make this inconsistent.")
+        sec.add("WARN", "no lingtai process found", "No `lingtai-agent run <agent-dir>` or `python -m lingtai run <agent-dir>` process was found. A fresh heartbeat would make this inconsistent.")
 
 
 def collect_notifications_logs_mail(report: Report) -> None:

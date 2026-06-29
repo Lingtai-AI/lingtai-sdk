@@ -15,6 +15,7 @@ from lingtai_kernel.config_resolve import (
 from lingtai.init_schema import validate_init
 from lingtai.llm.service import LLMService, build_provider_defaults_from_manifest_llm
 from lingtai.agent import Agent
+from lingtai_kernel.process_match import match_agent_run
 from lingtai_kernel.services.mail import FilesystemMailService
 
 
@@ -168,7 +169,7 @@ def _install_signal_handlers(working_dir: Path, agent: Agent) -> None:
 
 
 def _check_duplicate_process(working_dir: Path) -> None:
-    """Abort if another `lingtai run <working_dir>` process is already alive.
+    """Abort if another LingTai run process for ``working_dir`` is already alive.
 
     Defense-in-depth alongside the kernel's flock — the flock prevents
     data corruption, but a duplicate Python process still shows up in
@@ -184,13 +185,8 @@ def _check_duplicate_process(working_dir: Path) -> None:
         )
     except Exception:
         return  # ps unavailable — fall through to flock
-    # Match the working-dir argument exactly. A substring test false-positives
-    # on prefix-sharing siblings (e.g. starting "codex" while "codex_colleague"
-    # is alive — "codex" is a prefix of "codex_colleague") and on shell wrappers
-    # whose argv merely contains the path, so tokenize each command line and
-    # require a `lingtai ... run <abs_dir>` invocation where the token after
-    # `run` resolves to exactly our working dir.
-    import shlex as _shlex
+    # Match the command segment, not the whole ps row, so start-of-command
+    # anchoring still works after the leading PID column.
     my_pid = os.getpid()
     for line in out.splitlines():
         trimmed = line.strip()
@@ -202,23 +198,7 @@ def _check_duplicate_process(working_dir: Path) -> None:
         pid_str, command = parts
         if not pid_str.isdigit() or int(pid_str) == my_pid:
             continue
-        try:
-            tokens = _shlex.split(command)
-        except ValueError:
-            continue  # unparseable command line — let flock be the backstop
-        matched = False
-        for i in range(1, len(tokens) - 1):
-            if tokens[i] != "run" or "lingtai" not in tokens[i - 1]:
-                continue
-            candidate = tokens[i + 1]
-            try:
-                candidate = str(Path(candidate).resolve())
-            except Exception:
-                pass
-            if candidate == abs_dir:
-                matched = True
-                break
-        if not matched:
+        if match_agent_run(command, abs_dir) is None:
             continue
         print(
             f"error: another lingtai agent is already running in {abs_dir}\n"
