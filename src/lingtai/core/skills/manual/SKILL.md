@@ -35,6 +35,7 @@ description: >
   SKILL.md files document them. This is meta — how the skills *system*
   works, not what's *inside* it.
 version: 1.1.0
+last_changed_at: "2026-06-29T08:11:47Z"
 ---
 
 # The Skills Capability
@@ -89,12 +90,32 @@ Create a folder under `<agent>/.library/custom/<skill-name>/` with a `SKILL.md` 
 name: <skill-name>
 description: One-line description of what this skill does
 version: 1.0.0
+# Required for LingTai-maintained skills; optional for custom/external skills.
+last_changed_at: "2026-06-29T08:00:00Z"
 ---
 
 Full instructions in Markdown below...
 ```
 
-Required frontmatter: `name`, `description`. Optional: `version`, `author`, `tags`.
+Required frontmatter for ordinary custom/external skills: `name`,
+`description`. Optional for those skills: `version`, `author`, `tags`,
+`last_changed_at`.
+
+**LingTai-maintained skill metadata:** every skill bundle maintained inside a
+LingTai repository must also include `last_changed_at` in its YAML frontmatter.
+This applies to intrinsic capability manuals, standalone intrinsic skills, MCP
+manual bundles, TUI preset utility skills, and their nested reference
+`SKILL.md` files. Use an ISO 8601 timestamp with timezone, for example:
+
+```yaml
+last_changed_at: "2026-06-29T08:00:00Z"
+```
+
+For a historical backfill or metadata-only edit, derive the value from git
+history, e.g. `git log -1 --format=%cI -- path/to/SKILL.md`, so the field points
+to the latest meaningful skill-content change rather than the bookkeeping commit.
+For any substantive future edit to the skill body, update `last_changed_at` in
+the same commit.
 
 `tags` is a list of lowercase, hyphenated strings that aid discoverability and (eventually) tier filtering. Three useful axes:
 
@@ -144,6 +165,13 @@ python3 .library/intrinsic/capabilities/skills/scripts/validate.py \
 ```
 
 It checks: required frontmatter (`name`, `description`), unfilled `[PLACEHOLDER]` slots from the template, broken internal references (paths under `scripts/`, `assets/`, `references/` mentioned in `SKILL.md` that don't exist on disk), and `chmod +x` on Python scripts under `scripts/`. Exits 1 on any FAIL, 0 on PASS (warnings allowed). Run it after authoring and before `cp -r`'ing into `.library_shared/`.
+
+For LingTai-maintained skill bundles, require the timestamp field too:
+
+```
+python3 .library/intrinsic/capabilities/skills/scripts/validate.py \
+   --require-last-changed-at .library/custom/<skill-name>/
+```
 
 ### Self-test before publishing
 
@@ -248,9 +276,11 @@ find directly from the top-level catalog. Those should be normal skills under
 Nested child conventions:
 
 - Each child `reference/<topic>/SKILL.md` must have normal skill frontmatter:
-  `name` and `description` required; `version`/`tags` optional. `name` should be
-  unique within the parent and descriptive (`system-manual-sqlite-log-query`,
-  `daily-reflection-data-collection`), even though it is not globally cataloged.
+  `name` and `description` required; `version`/`tags` optional. If the parent
+  skill is maintained inside a LingTai repository, the child must also carry
+  `last_changed_at`. `name` should be unique within the parent and descriptive
+  (`system-manual-sqlite-log-query`, `daily-reflection-data-collection`), even
+  though it is not globally cataloged.
 - The child `description` and the parent catalog `description` should start with
   the fact that it is nested, name the parent, and give the trigger condition:
   `Nested system-manual reference for ...`.

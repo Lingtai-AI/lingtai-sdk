@@ -21,6 +21,7 @@ description: >
   design, and the `system` tool actions.
 version: 1.3.0
 tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, memory, communication, skills, molt, summarize, nudge, updates, runtime-checks]
+last_changed_at: "2026-06-23T23:50:45-07:00"
 ---
 
 # System Manual — Progressive Disclosure Router

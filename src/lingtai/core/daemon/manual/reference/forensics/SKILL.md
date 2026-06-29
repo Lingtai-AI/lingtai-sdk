@@ -6,6 +6,7 @@ description: >
   chat_history.jsonl, token_ledger.jsonl, events.jsonl, exit code 143 / SIGTERM,
   and how to inspect progress without guessing.
 version: 1.2.0
+last_changed_at: "2026-06-24T16:53:19-07:00"
 ---
 
 # Daemon Forensics Reference

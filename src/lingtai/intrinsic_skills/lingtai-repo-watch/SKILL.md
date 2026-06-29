@@ -24,6 +24,7 @@ description: >
     4. Stop. Do not act on findings unless the caller asked for action.
        The digest is the deliverable.
 version: 0.1.0
+last_changed_at: "2026-05-12T23:30:27-07:00"
 ---
 
 # LingTai Repo Watch — the Routine

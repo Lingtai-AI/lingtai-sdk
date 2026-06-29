@@ -8,6 +8,7 @@ description: >
   need to create, organize, or load private knowledge, lay out a routing parent
   over related entries, or explain how knowledge differs from portable skills.
 version: 1.0.0
+last_changed_at: "2026-06-09T13:24:44-07:00"
 ---
 
 # The Knowledge Capability

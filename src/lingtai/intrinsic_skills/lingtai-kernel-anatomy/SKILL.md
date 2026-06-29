@@ -29,6 +29,7 @@ description: >
     5. If anatomy disagreed with code, update the anatomy before you leave
        the file. Reading and maintaining are the same act.
 version: 0.1.0
+last_changed_at: "2026-06-26T14:07:06-07:00"
 ---
 
 # LingTai Kernel Anatomy — the Convention

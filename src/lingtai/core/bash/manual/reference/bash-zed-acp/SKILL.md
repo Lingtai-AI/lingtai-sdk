@@ -5,6 +5,7 @@ description: >
   validate, or document `ACP servers` as a long-running shell subprocess or LingTai
   daemon harness candidate.
 version: 0.1.0
+last_changed_at: "2026-06-13T04:41:27-07:00"
 ---
 
 # Zed / ACP agent bridge

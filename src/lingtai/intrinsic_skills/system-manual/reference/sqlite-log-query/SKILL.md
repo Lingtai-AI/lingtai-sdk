@@ -14,6 +14,7 @@ description: >
   companion scripts and assets as SQLite trace tooling grows.
 version: 1.2.0
 tags: [lingtai, system-manual, sqlite, log.sqlite, runtime-logs, trace, jsonl, daemon, trajectory, mining, event-log, improvement, pitfalls, observability, cheap-model]
+last_changed_at: "2026-06-24T23:45:17-07:00"
 ---
 
 # SQLite Log Query

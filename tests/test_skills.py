@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+from datetime import date, datetime
 import json
 import sqlite3
 import time
@@ -12,6 +13,36 @@ from lingtai.agent import Agent
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
 
+
+
+def _parse_skill_frontmatter(skill_md: Path) -> dict:
+    content = skill_md.read_text(encoding="utf-8")
+    assert content.startswith("---\n"), f"missing frontmatter: {skill_md}"
+    end = content.find("\n---\n", 4)
+    assert end != -1, f"missing closing frontmatter delimiter: {skill_md}"
+    import yaml
+
+    data = yaml.safe_load(content[4:end])
+    assert isinstance(data, dict), f"frontmatter is not a mapping: {skill_md}"
+    return data
+
+
+def _timestamp_text(value) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return "" if value is None else str(value).strip().strip('"\'')
+
+
+def _assert_iso_timestamp(value, path: Path):
+    text = _timestamp_text(value)
+    assert text, f"missing last_changed_at: {path}"
+    datetime.fromisoformat(text.replace("Z", "+00:00"))
+    assert "T" in text, f"last_changed_at must include time: {path}"
+    assert text.endswith("Z") or "+" in text[10:] or "-" in text[10:], (
+        f"last_changed_at must include timezone: {path}"
+    )
 
 
 def _mk_agent(tmp_path: Path, skills_cfg: dict | None = None):
@@ -32,6 +63,42 @@ def _write_skill(folder: Path, name: str, desc: str = "test skill"):
     (folder / "SKILL.md").write_text(
         f"---\nname: {name}\ndescription: {desc}\n---\n\nBody of {name}.\n"
     )
+
+
+def test_lingtai_owned_skill_frontmatter_has_last_changed_at():
+    root = Path(__file__).resolve().parents[1]
+    skill_files = sorted((root / "src" / "lingtai").rglob("SKILL.md"))
+    assert skill_files, "expected LingTai-owned source skills"
+    for skill_md in skill_files:
+        fm = _parse_skill_frontmatter(skill_md)
+        _assert_iso_timestamp(fm.get("last_changed_at"), skill_md)
+
+
+def test_skills_validator_can_require_last_changed_at(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    validator_path = root / "src" / "lingtai" / "core" / "skills" / "manual" / "scripts" / "validate.py"
+    spec = importlib.util.spec_from_file_location("skill_validate", validator_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    skill = tmp_path / "skill"
+    _write_skill(skill, "demo-skill", "demo skill for validator")
+    passed, messages = module.validate_frontmatter(skill, require_last_changed_at=True)
+    assert not passed
+    assert any("last_changed_at" in msg for msg in messages)
+
+    (skill / "SKILL.md").write_text(
+        "---\n"
+        "name: demo-skill\n"
+        "description: demo skill for validator\n"
+        "last_changed_at: \"2026-06-29T08:00:00Z\"\n"
+        "---\n\n"
+        "Body.\n",
+        encoding="utf-8",
+    )
+    passed, messages = module.validate_frontmatter(skill, require_last_changed_at=True)
+    assert passed, messages
 
 
 # ---------------------------------------------------------------------------

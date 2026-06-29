@@ -9,6 +9,7 @@ description: >
   local checks without exposing secrets.
 version: 0.1.0
 tags: [doctor, diagnostics, mcp, addons, heartbeat, migration, recovery]
+last_changed_at: "2026-06-12T14:27:46-07:00"
 ---
 
 # LingTai Doctor

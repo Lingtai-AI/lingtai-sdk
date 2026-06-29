@@ -5,6 +5,7 @@ description: >
   cleanup: what the manual does not cover, reclaim persistence, and safe cleanup
   of old daemon artifacts.
 version: 1.0.0
+last_changed_at: "2026-06-01T01:56:31-07:00"
 ---
 
 # Daemon Cleanup Reference

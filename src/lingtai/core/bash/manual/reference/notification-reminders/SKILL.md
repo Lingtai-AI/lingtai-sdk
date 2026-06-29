@@ -5,6 +5,7 @@ description: >
   `.notification/cron.json`: payload shape, atomic writer, shell example, and the
   rest checklist for agents leaving work pending.
 version: 1.0.0
+last_changed_at: "2026-06-20T13:05:49-07:00"
 ---
 
 # Notification Reminder Reference

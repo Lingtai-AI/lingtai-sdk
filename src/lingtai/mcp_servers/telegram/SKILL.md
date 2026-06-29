@@ -8,6 +8,7 @@ description: |
   and error surfacing. Pulled on demand via action='manual'; you do not need to
   call it before every send.
 version: 1.0.0
+last_changed_at: "2026-06-26T14:00:36-07:00"
 ---
 
 # Telegram MCP — usage manual (progressive disclosure)

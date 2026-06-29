@@ -1,6 +1,12 @@
 ---
 name: summarize-manual
-description: Detailed operational guide for system(action="summarize"): what tool-result summarization is, why it implements progressive disclosure, when to summarize urgently versus during idle cleanup, how to write good summaries, how to recover the original tool result by tool_call_id, and how summarize differs from molt.
+description: >-
+  Detailed operational guide for system(action="summarize"): what tool-result
+  summarization is, why it implements progressive disclosure, when to summarize
+  urgently versus during idle cleanup, how to write good summaries, how to
+  recover the original tool result by tool_call_id, and how summarize differs
+  from molt.
+last_changed_at: "2026-06-29T08:16:06Z"
 ---
 
 # Summarize Manual

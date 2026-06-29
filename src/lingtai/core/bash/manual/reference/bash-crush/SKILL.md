@@ -5,6 +5,7 @@ description: >
   validate, or document `crush` as a long-running shell subprocess or LingTai
   daemon harness candidate.
 version: 0.1.0
+last_changed_at: "2026-06-13T04:32:46-07:00"
 ---
 
 # Charm Crush CLI

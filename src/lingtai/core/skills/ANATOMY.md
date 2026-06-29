@@ -22,7 +22,7 @@ Skills capability — per-agent skill catalog and skill-manual surface. This is 
 ## Components
 
 - `skills/__init__.py` — the capability implementation. `get_description` (`__init__.py:296-297`), `get_schema` (`__init__.py:300-311`), `setup` (`__init__.py:314-348`), `_reconcile` (`__init__.py:205-289`), and scanner helpers (`__init__.py:53-198`).
-- `skills/manual/` — `skills-manual` skill documentation, template assets, and validator script.
+- `skills/manual/` — `skills-manual` skill documentation, template assets, and validator script. The validator can optionally require `last_changed_at` for LingTai-maintained skill bundles.
 
 ## Connections
 
@@ -49,3 +49,4 @@ The `skills` tool exposes one action:
 
 - The `.library/` directory name and `.library_shared/` convention are intentionally preserved in this rename-only change; they are storage compatibility names, not the user-facing capability name.
 - New callers should use `skills({"action":"info"})`; old `library({"action":"info"})` is not registered because private durable memory is now `knowledge` and `library` is not registered.
+- LingTai-maintained `SKILL.md` files carry `last_changed_at` in frontmatter, initialized from git history for metadata-only backfills and updated on substantive skill edits.

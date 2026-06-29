@@ -6,6 +6,7 @@ description: >
   script hygiene, macOS launchd, Linux systemd timers, crontab fallback, and the
   launchd process-tree reaping gotcha.
 version: 1.0.0
+last_changed_at: "2026-06-01T01:47:09-07:00"
 ---
 
 # Scheduled Work Reference

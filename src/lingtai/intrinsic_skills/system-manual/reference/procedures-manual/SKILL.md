@@ -13,6 +13,7 @@ description: >
   guidance grows.
 version: 1.2.0
 tags: [lingtai, system-manual, procedures, progressive-disclosure, responsiveness, deliverables, issue-reporting]
+last_changed_at: "2026-06-27T15:15:34-07:00"
 ---
 
 # Procedures Manual
