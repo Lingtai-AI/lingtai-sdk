@@ -4,10 +4,10 @@ Usage: Agent(capabilities=["write"]) or capabilities=["file"]
 """
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ...i18n import t
+from .._file_paths import resolve_workdir_path
 
 if TYPE_CHECKING:
     from lingtai_kernel.base_agent import BaseAgent
@@ -38,8 +38,7 @@ def setup(agent: "BaseAgent") -> None:
         content = args.get("content", "")
         if not path:
             return {"status": "error", "message": "file_path is required"}
-        if not Path(path).is_absolute():
-            path = str(agent._working_dir / path)
+        path = resolve_workdir_path(agent, path)
         try:
             agent._file_io.write(path, content)
             return {"status": "ok", "path": path, "bytes": len(content.encode("utf-8"))}

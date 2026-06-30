@@ -4,10 +4,10 @@ Usage: Agent(capabilities=["glob"]) or capabilities=["file"]
 """
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ...i18n import t
+from .._file_paths import resolve_workdir_path
 
 if TYPE_CHECKING:
     from lingtai_kernel.base_agent import BaseAgent
@@ -38,8 +38,7 @@ def setup(agent: "BaseAgent") -> None:
         if not pattern:
             return {"status": "error", "message": "pattern is required"}
         search_dir = args.get("path", str(agent._working_dir))
-        if not Path(search_dir).is_absolute():
-            search_dir = str(agent._working_dir / search_dir)
+        search_dir = resolve_workdir_path(agent, search_dir)
         try:
             matches = agent._file_io.glob(pattern, root=search_dir)
             result: dict = {"matches": matches, "count": len(matches)}

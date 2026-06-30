@@ -121,6 +121,42 @@ def test_grep_via_capability(tmp_path):
     agent.stop(timeout=1.0)
 
 
+def test_file_capability_relative_paths_resolve_under_workdir(tmp_path):
+    """Relative file tool paths are rooted under the agent working directory."""
+    agent = Agent(
+        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
+        capabilities=["file"],
+    )
+    target = agent.working_dir / "nested" / "target.py"
+    try:
+        write_result = agent._tool_handlers["write"](
+            {"file_path": "nested/target.py", "content": "needle\nold\n"}
+        )
+        assert write_result == {
+            "status": "ok",
+            "path": str(target),
+            "bytes": len("needle\nold\n".encode("utf-8")),
+        }
+        assert target.read_text() == "needle\nold\n"
+
+        read_result = agent._tool_handlers["read"]({"file_path": "nested/target.py"})
+        assert "needle" in read_result["content"]
+
+        edit_result = agent._tool_handlers["edit"](
+            {"file_path": "nested/target.py", "old_string": "old", "new_string": "new"}
+        )
+        assert edit_result["status"] == "ok"
+        assert target.read_text() == "needle\nnew\n"
+
+        glob_result = agent._tool_handlers["glob"]({"pattern": "*.py", "path": "nested"})
+        assert str(target) in glob_result["matches"]
+
+        grep_result = agent._tool_handlers["grep"]({"pattern": "needle", "path": "nested"})
+        assert any(match["file"] == str(target) for match in grep_result["matches"])
+    finally:
+        agent.stop(timeout=1.0)
+
+
 def test_base_agent_has_no_file_intrinsics(tmp_path):
     """BaseAgent should NOT have file intrinsics after phase 2."""
     from lingtai_kernel.base_agent import BaseAgent

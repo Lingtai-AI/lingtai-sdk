@@ -4,10 +4,10 @@ Usage: Agent(capabilities=["edit"]) or capabilities=["file"]
 """
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ...i18n import t
+from .._file_paths import resolve_workdir_path
 
 if TYPE_CHECKING:
     from lingtai_kernel.base_agent import BaseAgent
@@ -39,8 +39,7 @@ def setup(agent: "BaseAgent") -> None:
         path = args.get("file_path", "")
         if not path:
             return {"status": "error", "message": "file_path is required"}
-        if not Path(path).is_absolute():
-            path = str(agent._working_dir / path)
+        path = resolve_workdir_path(agent, path)
         old = args.get("old_string", "")
         new = args.get("new_string", "")
         replace_all = args.get("replace_all", False)

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from lingtai_kernel.tool_result_artifacts import PREVENTIVE_MAX_CHARS
 
 from ...i18n import t
+from .._file_paths import resolve_workdir_path
 
 if TYPE_CHECKING:
     from lingtai_kernel.base_agent import BaseAgent
@@ -132,8 +133,7 @@ def setup(agent: "BaseAgent") -> None:
         path = args.get("file_path", "")
         if not path:
             return {"status": "error", "message": "file_path is required"}
-        if not Path(path).is_absolute():
-            path = str(agent._working_dir / path)
+        path = resolve_workdir_path(agent, path)
         offset = args.get("offset", 1)
         limit = args.get("limit", 2000)
         max_chars = args.get("max_chars")
