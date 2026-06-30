@@ -12,49 +12,8 @@ from lingtai_kernel.config import AgentConfig
 from lingtai_kernel.llm.base import FunctionSchema, ToolCall
 from lingtai_kernel.tool_call_guard import GuardDecision, ToolCallGuard
 
-
-def _make_agent(tmp_path, capabilities=None):
-    """Create a minimal Agent with mock LLM service."""
-    from lingtai.agent import Agent
-    svc = MagicMock()
-    svc.provider = "mock"
-    svc.model = "mock-model"
-    svc.create_session = MagicMock()
-    svc.make_tool_result = MagicMock()
-    agent = Agent(
-        svc,
-        working_dir=tmp_path / "daemon-agent",
-        capabilities=capabilities or ["daemon"],
-        config=AgentConfig(),
-    )
-    return agent
-
-
-def _make_run_dir(
-    agent,
-    em_id="em-test",
-    *,
-    task="test task",
-    tools=None,
-    system_prompt="You are a daemon.",
-    call_parameters=None,
-):
-    """Helper: build a DaemonRunDir matching the new _run_emanation signature."""
-    from lingtai.core.daemon.run_dir import DaemonRunDir
-    tools = ["file"] if tools is None else tools
-    return DaemonRunDir(
-        parent_working_dir=agent._working_dir,
-        handle=em_id,
-        task=task,
-        tools=tools,
-        model="mock-model",
-        max_turns=30,
-        timeout_s=300.0,
-        parent_addr=agent._working_dir.name,
-        parent_pid=12345,
-        system_prompt=system_prompt,
-        call_parameters=call_parameters,
-    )
+from tests._daemon_helpers import make_daemon_agent as _make_agent
+from tests._daemon_helpers import make_daemon_run_dir as _make_run_dir
 
 
 def _reuse_parent_service(monkeypatch, agent):

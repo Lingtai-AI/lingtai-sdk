@@ -5,6 +5,7 @@ fakes — no real subprocesses, no LLM mocks, no DaemonManager. The integrated
 behavior (closure -> helper swap inside the backend runners) is covered by the
 existing ``tests/test_daemon.py`` cancellation/timeout tests.
 """
+import subprocess
 import threading
 
 from lingtai.core.daemon import runtime
@@ -35,6 +36,37 @@ class _FakeProc:
 
     def __init__(self, stderr_lines):
         self.stderr = iter(stderr_lines)
+
+
+class _TimeoutThenExitProc:
+    """Popen stand-in that forces TERM->KILL escalation once."""
+
+    pid = 4242
+
+    def __init__(self):
+        self.wait_timeouts: list[float] = []
+
+    def wait(self, timeout):
+        self.wait_timeouts.append(timeout)
+        if len(self.wait_timeouts) == 1:
+            raise subprocess.TimeoutExpired(cmd="fake", timeout=timeout)
+        return 0
+
+
+# --------------------------------------------------------------------------
+# kill_process_group
+# --------------------------------------------------------------------------
+
+
+def test_kill_process_group_uses_configured_timeouts(monkeypatch):
+    proc = _TimeoutThenExitProc()
+    signals: list[tuple[int, int]] = []
+    monkeypatch.setattr(runtime.os, "killpg", lambda pgid, sig: signals.append((pgid, sig)))
+
+    runtime.kill_process_group(proc, term_timeout=2.0, kill_timeout=1.0)
+
+    assert signals == [(4242, runtime.signal.SIGTERM), (4242, runtime.signal.SIGKILL)]
+    assert proc.wait_timeouts == [2.0, 1.0]
 
 
 # --------------------------------------------------------------------------

@@ -14,24 +14,8 @@ fresh manager (empty registry, simulating post-refresh) and assert that
 erroring.
 """
 import json
-from unittest.mock import MagicMock
 
-from lingtai_kernel.config import AgentConfig
-
-
-def _make_agent(tmp_path, capabilities=None):
-    from lingtai.agent import Agent
-    svc = MagicMock()
-    svc.provider = "mock"
-    svc.model = "mock-model"
-    svc.create_session = MagicMock()
-    svc.make_tool_result = MagicMock()
-    return Agent(
-        svc,
-        working_dir=tmp_path / "daemon-agent",
-        capabilities=capabilities or ["daemon"],
-        config=AgentConfig(),
-    )
+from tests._daemon_helpers import make_daemon_agent as _make_agent
 
 
 def _make_completed_run_dir(agent, em_id="em-5", result="final report text"):
