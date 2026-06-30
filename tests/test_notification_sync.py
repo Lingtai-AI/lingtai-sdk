@@ -34,6 +34,7 @@ from lingtai_kernel.notifications import (
     collect_notifications,
     publish,
     clear,
+    save_large_result_acks,
 )
 
 
@@ -119,7 +120,30 @@ def test_publish_atomic_no_tmp_residue(tmp_path: Path) -> None:
     publish(tmp_path, "email", {"x": 1})
     notif_dir = tmp_path / ".notification"
     assert (notif_dir / "email.json").is_file()
-    assert not (notif_dir / "email.json.tmp").exists()
+    leftover = [p for p in notif_dir.iterdir() if p.name.endswith(".tmp")]
+    assert leftover == []
+
+
+def test_publish_preserves_compact_json_bytes(tmp_path: Path) -> None:
+    payload = {"message": "\u7075\u53f0", "count": 1}
+    publish(tmp_path, "email", payload)
+
+    raw = (tmp_path / ".notification" / "email.json").read_bytes()
+    assert raw == json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    assert not raw.endswith(b"\n")
+
+
+def test_large_result_acks_preserve_compact_json_bytes(tmp_path: Path) -> None:
+    ref_ids = {"ref-\u7075", "ref-a"}
+    save_large_result_acks(tmp_path, ref_ids)
+
+    raw = (tmp_path / ".notification" / "large_result_acks.json").read_bytes()
+    assert raw == json.dumps(sorted(ref_ids), ensure_ascii=False).encode("utf-8")
+    assert not raw.endswith(b"\n")
+    leftover = [
+        p for p in (tmp_path / ".notification").iterdir() if p.name.endswith(".tmp")
+    ]
+    assert leftover == []
 
 
 def test_clear_idempotent(tmp_path: Path) -> None:
@@ -156,7 +180,7 @@ def test_concurrent_publish_atomicity(tmp_path: Path) -> None:
 
     # No .tmp residue.
     notif_dir = tmp_path / ".notification"
-    leftover = list(notif_dir.glob("*.tmp"))
+    leftover = [p for p in notif_dir.iterdir() if p.name.endswith(".tmp")]
     assert leftover == [], f"Stale tmp files: {leftover}"
 
 

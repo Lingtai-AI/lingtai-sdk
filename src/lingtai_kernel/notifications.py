@@ -25,6 +25,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ._fsutil import atomic_write_json
 from .workdir import workdir_layout
 
 
@@ -133,9 +134,7 @@ def save_large_result_acks(workdir: Path, ref_ids: set[str]) -> None:
             pass
         return
     ack_path.parent.mkdir(exist_ok=True)
-    tmp = ack_path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(sorted(ref_ids), ensure_ascii=False), encoding="utf-8")
-    tmp.rename(ack_path)
+    atomic_write_json(ack_path, sorted(ref_ids), ensure_ascii=False, indent=None)
 
 
 def ack_large_result_refs(workdir: Path, ref_ids: set[str]) -> None:
@@ -292,9 +291,7 @@ def publish(workdir: Path, tool_name: str, payload: dict) -> None:
     notif_dir = layout.notification_dir
     notif_dir.mkdir(exist_ok=True)
     target = layout.notification_file(tool_name)
-    tmp = target.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    tmp.rename(target)
+    atomic_write_json(target, payload, ensure_ascii=False, indent=None)
 
 
 def clear(workdir: Path, tool_name: str) -> None:

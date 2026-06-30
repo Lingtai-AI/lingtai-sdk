@@ -13,6 +13,7 @@ from lingtai_kernel.services.logging import (
 )
 from lingtai_kernel.token_ledger import (
     append_token_entry,
+    count_main_api_calls,
     is_daemon_entry,
     sum_token_ledger,
 )
@@ -64,6 +65,39 @@ def test_sum_ignores_corrupt_lines(tmp_path):
     }
 
 
+def test_token_ledger_readers_skip_non_dict_records(tmp_path):
+    """Shared JSONL iteration can yield non-dicts; ledger readers ignore them."""
+    path = tmp_path / "token_ledger.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                "[1, 2, 3]",
+                json.dumps(
+                    {
+                        "source": "main",
+                        "input": 5,
+                        "output": 3,
+                        "thinking": 2,
+                        "cached": 1,
+                    }
+                ),
+                "not json",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert count_main_api_calls(path) == 1
+    assert sum_token_ledger(path) == {
+        "input_tokens": 5,
+        "output_tokens": 3,
+        "thinking_tokens": 2,
+        "cached_tokens": 1,
+        "api_calls": 1,
+    }
+
+
 def test_append_creates_parent_dirs(tmp_path):
     """append_token_entry creates parent directories if missing."""
     path = tmp_path / "logs" / "token_ledger.jsonl"
@@ -74,6 +108,29 @@ def test_append_creates_parent_dirs(tmp_path):
     entry = json.loads(lines[0])
     assert entry["input"] == 100
     assert "ts" in entry
+
+
+def test_append_token_entry_preserves_legacy_jsonl_bytes(tmp_path):
+    """Token ledger rows remain compact ASCII-escaped JSON plus one newline."""
+    path = tmp_path / "token_ledger.jsonl"
+    append_token_entry(
+        path,
+        input=1,
+        output=2,
+        thinking=3,
+        cached=4,
+        model="\u6a21\u578b-\u7075\u53f0",
+        endpoint="https://\u4f8b\u5b50.example",
+        extra={"source": "main"},
+    )
+
+    raw = path.read_bytes()
+    assert raw.endswith(b"\n")
+    line = raw.decode("utf-8").removesuffix("\n")
+    entry = json.loads(line)
+    assert line == json.dumps(entry)
+    assert "\\u7075\\u53f0" in line
+    assert "\u7075\u53f0" not in line
 
 
 def test_append_standard_token_ledger_mirrors_to_sqlite(tmp_path):

@@ -31,6 +31,7 @@ from ...i18n import t
 if TYPE_CHECKING:
     from ...agent import Agent
 
+from lingtai_kernel._fsutil import atomic_write_json
 from lingtai_kernel.llm.base import FunctionSchema
 from lingtai_kernel.loop_guard import LoopGuard
 from lingtai_kernel.meta_block import build_meta
@@ -791,15 +792,8 @@ class DaemonManager:
                     f"{parent_pid} is no longer alive after daemon manager startup."
                 ),
             }
-            tmp_path = daemon_json_path.with_suffix(
-                daemon_json_path.suffix + ".tmp"
-            )
             try:
-                tmp_path.write_text(
-                    json.dumps(state, indent=2, ensure_ascii=False),
-                    encoding="utf-8",
-                )
-                os.replace(tmp_path, daemon_json_path)
+                atomic_write_json(daemon_json_path, state, ensure_ascii=False, indent=2)
             except OSError:
                 continue
 
@@ -2902,9 +2896,7 @@ class DaemonManager:
 
     @staticmethod
     def _atomic_write_daemon_json(path: Path, state: dict) -> None:
-        tmp_path = path.with_suffix(path.suffix + ".tmp")
-        tmp_path.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp_path, path)
+        atomic_write_json(path, state, ensure_ascii=False, indent=2)
 
     @staticmethod
     def _looks_like_daemon_run_dir(run_path: Path) -> bool:

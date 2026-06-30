@@ -9,12 +9,12 @@ without itself touching the filesystem.
 from __future__ import annotations
 
 import json
-import os
 import secrets
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from lingtai_kernel._fsutil import append_jsonl, atomic_write_json
 from lingtai_kernel.token_ledger import append_token_entry
 
 
@@ -228,15 +228,12 @@ class DaemonRunDir:
         return round(time.monotonic() - self._started_monotonic, 3)
 
     def _atomic_write_json(self, path: Path, data: dict) -> None:
-        """Write JSON to a tempfile then os.replace — readers never see partial state."""
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, path)
+        """Write JSON atomically — readers never see partial state."""
+        atomic_write_json(path, data, ensure_ascii=False, indent=2)
 
     def _append_jsonl(self, path: Path, entry: dict) -> None:
-        """Append one JSON line. Single-writer per file — POSIX O_APPEND atomic for sub-PIPE_BUF lines."""
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        """Append one JSON line."""
+        append_jsonl(path, entry, ensure_ascii=False)
 
     def _safe(self, op: str, fn) -> None:
         """Run `fn`; swallow OSError (best-effort policy for mutation writes).

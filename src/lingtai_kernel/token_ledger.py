@@ -42,9 +42,10 @@ same immutable log.
 """
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from pathlib import Path
+
+from ._fsutil import append_jsonl, iter_jsonl_records
 
 
 def _mirror_token_entry_to_sqlite(path: Path, entry: dict, source_offset: int) -> None:
@@ -131,7 +132,6 @@ def append_token_entry(
     attribution.
     """
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
     entry: dict = {}
     if extra:
         entry.update(extra)
@@ -146,11 +146,7 @@ def append_token_entry(
         entry["model"] = model
     if endpoint is not None:
         entry["endpoint"] = endpoint
-    payload = (json.dumps(entry) + "\n").encode("utf-8")
-    with open(path, "ab") as f:
-        source_offset = f.tell()
-        f.write(payload)
-        f.flush()
+    source_offset = append_jsonl(path, entry)
     _mirror_token_entry_to_sqlite(path, entry, source_offset)
 
 
@@ -174,17 +170,9 @@ def count_main_api_calls(path: Path | str) -> int:
 
     Returns 0 if the file is missing.
     """
-    path = Path(path)
-    if not path.is_file():
-        return 0
     n = 0
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            entry = json.loads(line)
-        except json.JSONDecodeError:
+    for entry in iter_jsonl_records(path):
+        if not isinstance(entry, dict):
             continue
         if entry.get("source") == "main":
             n += 1
@@ -223,7 +211,6 @@ def sum_token_ledger(path: Path | str, *, scope: str = "all") -> dict:
         raise ValueError(
             f"unknown scope {scope!r}; expected 'all' or 'main_agent'"
         )
-    path = Path(path)
     totals = {
         "input_tokens": 0,
         "output_tokens": 0,
@@ -231,15 +218,8 @@ def sum_token_ledger(path: Path | str, *, scope: str = "all") -> dict:
         "cached_tokens": 0,
         "api_calls": 0,
     }
-    if not path.is_file():
-        return totals
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            entry = json.loads(line)
-        except json.JSONDecodeError:
+    for entry in iter_jsonl_records(path):
+        if not isinstance(entry, dict):
             continue
         if scope == "main_agent" and is_daemon_entry(entry):
             continue

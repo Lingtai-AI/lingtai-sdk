@@ -75,6 +75,25 @@ def test_initial_daemon_json_fields(tmp_path):
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", data["started_at"])
 
 
+def test_daemon_json_preserves_legacy_json_bytes(tmp_path):
+    rd = _make_run_dir(tmp_path, task="\u7814\u7a76\u7075\u53f0")
+
+    raw = rd.daemon_json_path.read_bytes()
+    data = json.loads(raw)
+    assert raw == json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")
+    assert not raw.endswith(b"\n")
+    assert "\u7814\u7a76\u7075\u53f0".encode("utf-8") in raw
+
+
+def test_daemon_jsonl_preserves_legacy_utf8_bytes(tmp_path):
+    rd = _make_run_dir(tmp_path)
+    entry = {"event": "note", "text": "\u7075\u53f0"}
+
+    rd._append_jsonl(rd.events_path, entry)
+
+    line = rd.events_path.read_text(encoding="utf-8").splitlines()[-1]
+    assert line == json.dumps(entry, ensure_ascii=False)
+    assert "\u7075\u53f0" in line
 
 
 def test_initial_daemon_json_records_group_id(tmp_path):
