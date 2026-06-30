@@ -5,8 +5,9 @@ description: >
   channel whitelist, `.notification/<channel>.json` files, envelope shape,
   the `notification` tool (check / dismiss_channel / dismiss_event / dismiss_ref),
   generic vs producer-specific dismiss, protected channels, stale-version and
-  force semantics, and large-result reminder summarize/preferred-dismiss
-  behavior.
+  force semantics, and how large results are ranked via agent_meta
+  (`current_tool_result_chars`) and summarized — with legacy-compatible
+  dismiss for any persisted `large_tool_result` events.
 version: 0.2.0
 tags: [lingtai, notifications, channels, dismiss, large-result, force, stale, nudge]
 last_changed_at: "2026-06-27T14:31:30-07:00"
@@ -122,42 +123,50 @@ Generic dismiss refuses to clear a channel whose on-disk version changed after
 the delivered notification version, returning `reason="stale_channel_version"`.
 Read the current state first, or pass `force=true` to knowingly clear a stale
 mirror. `force=true` also bypasses a producer-registered generic-dismiss guard.
-`force` never touches producer-owned state, and (see below) never bypasses the
-large-result reminder guard.
+`force` never touches producer-owned state.
 
-## Large-result reminders — dismissal and summarization
+## Large results — ranking and summarization
 
-System events with `source="large_tool_result"` remind you that a tool result
-exceeds the large-result threshold and is consuming context budget. The
-**preferred** discharge is summarization:
+Large tool results are **not** pushed as notifications. The kernel does not
+raise `source="large_tool_result"` system events. Instead, the largest formal
+tool results currently in context are ranked under
+`_meta.agent_meta.current_tool_result_chars`:
+
+- `top_results` — up to the largest few in-context formal results
+  (`id`, `tool_name`, `chars`; no preview), sorted by char count.
+- `threshold` — the configured large-result hint size in chars.
+- `over_threshold_count` — how many in-context formal results exceed it.
+
+This ranking is the candidate list for proactive summarization. When a result
+has served its purpose, digest it, then compact it:
 
 ```text
 system(action="summarize", items=[{"tool_call_id": "toolu_...", "summary": "..."}])
 ```
 
-A successful summarize of that `tool_call_id` records a compact runtime-history
-replacement and auto-clears the matching `large_tool_result:<tool_call_id>`
-reminder. Provider-context replacement waits for delayed reconstruction; a failed
-summarize item leaves its reminder in place.
+Pick the `tool_call_id`(s) from `current_tool_result_chars.top_results`. A
+successful summarize records a compact runtime-history replacement; the
+provider-context replacement waits for delayed reconstruction. See the
+`summarize-manual` for the full progressive-disclosure workflow.
 
-**Dismissal as an escape hatch.** When summarization is not possible — e.g.
-for stale or pre-molt `tool_call_id`s that can no longer be found in the current
-session — you may dismiss the reminder:
+**Legacy compatibility — pre-existing `large_tool_result` events.** New large
+results never create notifications, but a `large_tool_result` system event may
+still be present if it was persisted before this change or carried across a
+molt. Such a stale event can be discharged two ways:
 
 ```text
+system(action="summarize", items=[{"tool_call_id": "<id>", ...}])  # also clears a matching legacy reminder
 notification(action="dismiss_ref", ref_id="large_tool_result:<tool_call_id>")
 notification(action="dismiss_event", event_id="<event_id>")
 ```
 
-A dismiss acknowledges the ref_id so the same old result does not immediately
-re-trigger a reminder on the next rescan. New large results with new
-`tool_call_id`s still produce reminders. The original large result payload
-remains unchanged in chat history and in `events.jsonl`.
-
-Whole-channel system dismiss (`dismiss_channel channel="system"`) that covers
-large-result events also acks them before clearing. Use summarization whenever
-the result is still accessible and relevant; dismissal is for cleanup of stale
-or irrelevant reminders.
+A successful summarize of a still-accessible `tool_call_id` also auto-clears a
+matching legacy `large_tool_result:<tool_call_id>` reminder if one exists.
+Dismissal is the escape hatch for stale or pre-molt refs that can no longer be
+summarized; it clears only the notification surface, leaving the original
+result unchanged in chat history and `events.jsonl`. Whole-channel system
+dismiss (`dismiss_channel channel="system"`) also covers any such legacy
+events.
 
 ### Progressive disclosure — digesting tool results
 
@@ -167,9 +176,10 @@ you have read and digested the raw payload: future context keeps the conclusion,
 key evidence, paths/IDs, validation state, risks, and next steps, while the full
 original remains recoverable from `events.jsonl`.
 
-Large-result metadata and reminders are a strong prompt to summarize because the
-raw payload is already harming context hygiene. Smaller results may also be
-summarized whenever the future agent no longer needs the full raw output.
+A result ranked high in `current_tool_result_chars.top_results` is a strong
+prompt to summarize because the raw payload is already harming context hygiene.
+Smaller results may also be summarized whenever the future agent no longer needs
+the full raw output.
 
 When digesting any tool result, write an index-style summary:
 

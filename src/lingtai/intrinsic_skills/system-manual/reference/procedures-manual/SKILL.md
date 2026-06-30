@@ -256,7 +256,7 @@ mechanics here. For the checklist, templates, and summary rules, go to
 | Runtime model, lifecycle, communication, memory layers, substrate expansion | `system-manual` → `reference/substrate-manual/SKILL.md` |
 | Procedures expansion, routing logic, deliverable/reporting discipline | `system-manual` → `reference/procedures-manual/SKILL.md` |
 | SQLite, log.sqlite, runtime trace inspection, `lingtai-agent log doctor/query/rebuild` | `system-manual` → `reference/sqlite-log-query/SKILL.md` |
-| Tool-result summarization, large-result reminders, original-result recovery, summarize vs molt | `system-manual` → `reference/summarize-manual/SKILL.md` |
+| Tool-result summarization, large-result ranking via agent_meta, original-result recovery, summarize vs molt | `system-manual` → `reference/summarize-manual/SKILL.md` |
 | Molt, pad tending, session journaling, post-wipe recovery | `psyche-manual` |
 | Spawning/managing avatars | `avatar-manual` |
 | Internal email protocol | `email-manual` |

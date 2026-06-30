@@ -85,8 +85,10 @@ selects that topic.
     `instructions`, model-visible notification payload, the notification tool
     verbs (check / dismiss_channel / dismiss_event / dismiss_ref), generic
     versus producer-specific dismiss, protected channels, stale-version/force
-    semantics, and large-result reminders (prefer system summarize; dismiss can
-    acknowledge stale refs). The `system` tool owns no notification verb.
+    semantics, and large results (ranked via agent_meta
+    `current_tool_result_chars`, compacted with system summarize; dismiss can
+    acknowledge any legacy `large_tool_result` refs). The `system` tool owns no
+    notification verb.
 - name: runtime-update-checks
   location: reference/runtime-update-checks/SKILL.md
   description: |
@@ -109,9 +111,9 @@ selects that topic.
 |---|---|
 | Expanded substrate; body/extensions; bash vs daemon vs avatar vs MCP; lifecycle states; ACTIVE/IDLE/ASLEEP/SUSPENDED; same-channel communication; basic notifications; memory layers; molt model; idle/soul; preset tiers; `system` operations | `reference/substrate-manual/SKILL.md` |
 | Expanded procedures; progressive disclosure; writing skills/knowledge; action discipline; responsiveness; skill routing; HTML deliverables; artifact sharing; issue reporting; when to read which manual | `reference/procedures-manual/SKILL.md` |
-| Tool-result summarization; large-result reminders; progressive disclosure of raw outputs; original-result recovery; summarize vs molt | `reference/summarize-manual/SKILL.md` |
+| Tool-result summarization; large-result ranking via agent_meta; progressive disclosure of raw outputs; original-result recovery; summarize vs molt | `reference/summarize-manual/SKILL.md` |
 | SQLite; `log.sqlite`; LingTai runtime logs; JSONL traces; `lingtai-agent log doctor`; `lingtai-agent log query`; `lingtai-agent log rebuild`; events/chat_entries schema; daemon/chat-history trace indexing; WAL/live-read caveats; SQL recipes; trajectory/anomaly mining; improvement digests; cheap-model strategy | `reference/sqlite-log-query/SKILL.md` |
-| Notifications; the `notification` tool; check/dismiss_channel/dismiss_event/dismiss_ref; `.notification/<channel>.json`; channel allowlist; top-level `instructions`; protected channels; generic vs producer dismiss; stale-version/force; large-result reminder summarize/dismiss behavior | `reference/notification-manual/SKILL.md` |
+| Notifications; the `notification` tool; check/dismiss_channel/dismiss_event/dismiss_ref; `.notification/<channel>.json`; channel allowlist; top-level `instructions`; protected channels; generic vs producer dismiss; stale-version/force; large-result ranking via agent_meta and legacy `large_tool_result` dismiss | `reference/notification-manual/SKILL.md` |
 | Runtime/kernel state; `nudge` notification channel; `.notification/nudge.json`; `kind: kernel_version`; running vs installed vs latest LingTai kernel; editable/dev/source installs; daily update checks; safe `system(action='refresh')`; ask the human before downloading/updating | `reference/runtime-update-checks/SKILL.md` |
 | Goal notifications; `.notification/goal.json`; active goal source of truth; goal `instructions`; idle goal reminder; cancel/complete goal | `reference/goal-manual/SKILL.md` |
 | Molt mechanics, pad tending, session journals, post-wipe recovery | `psyche-manual` |

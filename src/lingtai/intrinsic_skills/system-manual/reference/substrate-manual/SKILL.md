@@ -120,7 +120,8 @@ truncated, ambiguous, lacks an exact anchor, includes media/attachments, or
 contains human instructions. Read the producer channel.
 
 For channel allowlist, envelope shape, protected channels, stale-version/force
-semantics, and large-result reminder summarize/dismiss behavior, read
+semantics, and how large results are ranked via agent_meta and summarized (plus
+legacy `large_tool_result` dismiss), read
 `reference/notification-manual/SKILL.md`.
 
 ### Three context-compression / continuation modes

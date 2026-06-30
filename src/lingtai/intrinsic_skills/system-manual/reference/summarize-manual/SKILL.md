@@ -20,9 +20,10 @@ result remains in logs for fallback, and the active provider continuation may
 still carry the old raw block until delayed reconstruction applies the compacted
 history.
 
-Use this manual when runtime guidance tells you to summarize, when a
-`large_tool_result` reminder appears, when tool output has served its immediate
-purpose, or when you need to explain how summarize differs from molt.
+Use this manual when runtime guidance tells you to summarize, when a result is
+ranked large under `_meta.agent_meta.current_tool_result_chars.top_results`,
+when tool output has served its immediate purpose, or when you need to explain
+how summarize differs from molt.
 
 ## 0 · The three modes (a priori, a posteriori, molt)
 
@@ -134,8 +135,9 @@ progressive-disclosure entry point.
 
 ### Urgent cadence: summarize the bulky result now
 
-Use this when a tool result is long, noisy, or raises a `large_tool_result`
-reminder.
+Use this when a tool result is long or noisy — typically one that ranks high in
+`_meta.agent_meta.current_tool_result_chars.top_results` (above its `threshold`,
+counted in `over_threshold_count`).
 
 1. Read or inspect the result first.
 2. Decide what future-you needs from it.
