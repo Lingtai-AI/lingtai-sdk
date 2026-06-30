@@ -474,6 +474,11 @@ def maybe_summarize_result(
         "apriori_summary_generated",
         original_visible_chars=original_visible_chars,
         summary_chars=len(summary_text),
+        # Record the actual model-visible summary text so event-log replay and
+        # the TUI can render the summary itself, not just its char count. This
+        # is the compact summary the model sees — recording it is safe (the raw
+        # is preserved separately by tool_call_id and is NOT logged here).
+        generated_summary=summary_text,
     )
     return build_summary_replacement(
         tool_name=tool_name,

@@ -353,6 +353,70 @@ def test_error_result_not_summarized():
     assert out is raw  # exact error text preserved for recovery
 
 
+# --- lifecycle event: success carries the model-visible summary text ---------
+
+def test_generated_event_carries_summary_text_and_failures_do_not():
+    """The ``apriori_summary_generated`` success event records the actual
+    model-visible summary text (so event-log replay / TUI can render it), while
+    the cap/error/empty paths emit no success event and never invent one. The
+    raw payload is never carried in the success event.
+    """
+    events = []
+
+    def logger_fn(event, **fields):
+        events.append((event, fields))
+
+    def _events(event):
+        return [f for e, f in events if e == event]
+
+    # Success path: event carries generated_summary + count, not the raw.
+    out = maybe_summarize_result(
+        {"stdout": "RAWNEEDLE-" + "y" * 50},
+        args={"summary": True, "_reasoning": "r"},
+        tool_name="bash",
+        tool_call_id="t_ok",
+        summarizer_fn=lambda sp, up, tn, cid: "SUMMARY: 50 ys",
+        logger_fn=logger_fn,
+    )
+    assert out["generated_summary"] == "SUMMARY: 50 ys"
+    gen = _events("apriori_summary_generated")
+    assert len(gen) == 1
+    assert gen[0]["generated_summary"] == "SUMMARY: 50 ys"
+    assert gen[0]["summary_chars"] == len("SUMMARY: 50 ys")
+    assert gen[0]["tool_call_id"] == "t_ok"
+    assert "RAWNEEDLE" not in str(gen[0])
+
+    # Failure path: fail-closed, no success event, no invented summary.
+    events.clear()
+    maybe_summarize_result(
+        {"stdout": "raw"},
+        args={"summary": True, "_reasoning": "r"},
+        tool_name="bash",
+        tool_call_id="t_boom",
+        summarizer_fn=lambda sp, up, tn, cid: (_ for _ in ()).throw(RuntimeError("down")),
+        logger_fn=logger_fn,
+    )
+    assert _events("apriori_summary_generated") == []
+    failed = _events("apriori_summary_failed")
+    assert len(failed) == 1
+    assert "generated_summary" not in failed[0]
+
+    # Empty-output path: same — no success event, no invented summary.
+    events.clear()
+    maybe_summarize_result(
+        {"stdout": "raw"},
+        args={"summary": True, "_reasoning": "r"},
+        tool_name="bash",
+        tool_call_id="t_empty2",
+        summarizer_fn=lambda sp, up, tn, cid: "   ",
+        logger_fn=logger_fn,
+    )
+    assert _events("apriori_summary_generated") == []
+    empty = _events("apriori_summary_empty")
+    assert len(empty) == 1
+    assert "generated_summary" not in empty[0]
+
+
 # --- orchestrator: summarizer failure is fail-closed (never leaks raw) ------
 
 def test_summarizer_exception_fails_closed():

@@ -59,6 +59,14 @@ def _raw_logged(events, *, needle):
     return False
 
 
+def _event_fields(events, event_type):
+    """Return the fields dict of the first event of *event_type*, or None."""
+    for et, fields in events:
+        if et == event_type:
+            return fields
+    return None
+
+
 def test_summary_false_returns_raw_and_logs_raw(tmp_path):
     raw = {"stdout": "RAWMARKER-" + "x" * 50}
     events = []
@@ -140,6 +148,16 @@ def test_summary_true_under_cap_replaces_with_summary_and_preserves_raw(tmp_path
     assert "t3" in loc["query"]
     assert content["summary_input_chars"] == content["original_visible_chars"]
     assert content["summary_input_truncated"] is False
+    # The success lifecycle event records the actual model-visible summary text
+    # (not just its char count) so event-log replay / TUI can render it. The raw
+    # is NOT carried in this event.
+    gen = _event_fields(events, "apriori_summary_generated")
+    assert gen is not None
+    assert gen["generated_summary"] == "GENSUMMARY: command printed 200 ys"
+    assert gen["summary_chars"] == len("GENSUMMARY: command printed 200 ys")
+    assert gen["tool_call_id"] == "t3"
+    assert gen["tool_name"] == "bash"
+    assert "RAWSECRET" not in str(gen)
 
 
 def test_summary_true_over_cap_refuses_without_llm_and_hides_raw(tmp_path):
@@ -177,6 +195,11 @@ def test_summary_true_over_cap_refuses_without_llm_and_hides_raw(tmp_path):
     assert content["summary_input_truncated"] is False
     # Raw still preserved in durable log.
     assert _raw_logged(events, needle="BIGRAW")
+    # The cap path never emits a success event and never invents a summary.
+    assert _event_fields(events, "apriori_summary_generated") is None
+    cap = _event_fields(events, "apriori_summary_cap_refused")
+    assert cap is not None
+    assert "generated_summary" not in cap
 
 
 # --- factory: degrades to None without a one-shot session gateway ------------
