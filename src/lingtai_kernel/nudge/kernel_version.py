@@ -79,18 +79,25 @@ def check(agent) -> None:
         return
 
     if info.installed_version != info.running_version:
-        # Only emit the version-mismatch nudge once per version pair.
-        # Without this guard, the check re-emits every 60 seconds;
-        # when the agent dismisses the notification (deleting nudge.json),
-        # the next tick re-creates it, changing the notification fingerprint
-        # and triggering an endless wake loop ("nudge storm") that starves
-        # real work — including incoming email processing.
+        # Emit the local-refresh mismatch nudge at most once per UTC day for a
+        # given version pair. The fast 60s probe keeps first emission prompt,
+        # but once the agent dismisses the notification (deleting nudge.json)
+        # we must not re-create it on the next tick: re-creating changes the
+        # notification fingerprint and triggers an endless wake loop ("nudge
+        # storm") that starves real work — including incoming email processing.
+        # The daily cadence still lets a persistent mismatch resurface once the
+        # next UTC day begins, matching the package-update path.
+        today = _today_utc()
         mismatch_key = f"{info.running_version}->{info.installed_version}"
         persistent = _load_persistent_state(agent)
         kernel_state = persistent.setdefault(_KIND, {})
-        if kernel_state.get("emitted_for_mismatch") == mismatch_key:
+        if (
+            kernel_state.get("emitted_for_mismatch") == mismatch_key
+            and kernel_state.get("mismatch_emitted_date") == today
+        ):
             return
         kernel_state["emitted_for_mismatch"] = mismatch_key
+        kernel_state["mismatch_emitted_date"] = today
         _save_persistent_state(agent, persistent)
 
         upsert(
@@ -112,7 +119,8 @@ def check(agent) -> None:
                 "installed": info.installed_version,
                 "latest": None,
                 "source": "installed-distribution",
-                "cadence": "fast-local-check",
+                "cadence": "at-most-once-per-utc-day",
+                "checked_at_date": today,
                 "suggested_action": "read-runtime-update-skill-then-refresh-if-safe",
                 "skill": _SKILL_HINT,
             },
@@ -132,7 +140,9 @@ def check(agent) -> None:
 
     # Versions match — clear any stale mismatch tracking so a future
     # mismatch (e.g. another upgrade) will emit the nudge again.
-    if kernel_state.pop("emitted_for_mismatch", None) is not None:
+    cleared_mismatch = kernel_state.pop("emitted_for_mismatch", None) is not None
+    cleared_mismatch = kernel_state.pop("mismatch_emitted_date", None) is not None or cleared_mismatch
+    if cleared_mismatch:
         from . import remove
         remove(agent, _KIND)
         _save_persistent_state(agent, persistent)

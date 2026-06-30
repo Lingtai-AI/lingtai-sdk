@@ -44,7 +44,7 @@ Common fields:
 | `installed` | Version visible from the installed `lingtai` distribution on disk. |
 | `latest` | Latest package version found by the daily packaged-runtime check, or `null` for local refresh nudges. |
 | `source` | `installed-distribution` for local refresh nudges, `pypi-json` for package-update nudges. |
-| `cadence` | `fast-local-check` or `at-most-once-per-utc-day`. |
+| `cadence` | `at-most-once-per-utc-day` for both local refresh and package-update nudges (re-emitted at most once per UTC day per version pair). |
 | `suggested_action` | The safe next-step hint; still verify context before acting. |
 
 After handling, clear the channel with:
