@@ -60,11 +60,11 @@ def test_build_meta_time_aware_utc_uses_z_suffix():
     assert meta["current_time"].endswith("Z")
 
 
-def test_build_meta_time_blind_emits_context_sentinel():
+def test_build_meta_time_blind_omits_context_without_warning():
     agent = _fake_agent(time_awareness=False)
     meta = build_meta(agent)
     assert "current_time" not in meta
-    assert meta["context"]["system_tokens"] == -1
+    assert "context" not in meta
 
 
 def test_build_meta_time_blind_regardless_of_timezone_awareness():
@@ -72,7 +72,7 @@ def test_build_meta_time_blind_regardless_of_timezone_awareness():
     agent = _fake_agent(time_awareness=False, timezone_awareness=True)
     meta = build_meta(agent)
     assert "current_time" not in meta
-    assert meta["context"]["system_tokens"] == -1
+    assert "context" not in meta
 
 
 def test_build_meta_includes_adapter_comment_when_chat_provides_one():
@@ -677,7 +677,7 @@ def _fake_agent_with_session(
     )
 
 
-def test_build_meta_emits_context_fields_when_decomp_ran():
+def test_build_meta_omits_numeric_context_fields_when_decomp_ran():
     agent = _fake_agent_with_session(
         system_prompt_tokens=5000,
         tools_tokens=500,
@@ -685,12 +685,8 @@ def test_build_meta_emits_context_fields_when_decomp_ran():
         context_limit=100000,
     )
     meta = build_meta(agent)
-    # system = system_prompt + tools = 5000 + 500 = 5500
-    assert meta["context"]["system_tokens"] == 5500
-    # history = 200
-    assert meta["context"]["history_tokens"] == 200
-    # usage = (5500 + 200) / 100000 = 0.057
-    assert abs(meta["context"]["usage"] - 0.057) < 1e-6
+    assert "context" not in meta
+    assert meta_block._current_context_usage(agent) == pytest.approx(0.057)
 
 
 def test_build_meta_carries_latest_token_usage_for_tool_meta_only():
@@ -920,8 +916,7 @@ def test_build_meta_folds_session_economy_into_token_usage_not_efficiency():
 
     meta = build_meta(agent)
 
-    assert meta["context"]["system_tokens"] == 1500
-    assert meta["context"]["history_tokens"] == 5500
+    assert "context" not in meta
     # There is NO token_efficiency block anywhere — the session economy now lives
     # inside the unified token_usage transit block (destined for tool_meta).
     assert "token_efficiency" not in meta
@@ -1069,14 +1064,13 @@ def test_token_usage_block_carries_short_guidance_ref():
     assert "guidance_ref" not in compact
 
 
-def test_build_meta_emits_sentinels_before_decomp_runs():
+def test_build_meta_omits_context_before_decomp_runs():
     # When decomposition has never run (dirty flag True) and no chat yet,
-    # we cannot compute any of the three fields honestly.
+    # we do not emit stale/unknown numeric context diagnostics in agent_meta.
     agent = _fake_agent_with_session(decomp_ran=False)
     meta = build_meta(agent)
-    assert meta["context"]["system_tokens"] == -1
-    assert meta["context"]["history_tokens"] == -1
-    assert meta["context"]["usage"] == -1.0
+    assert "context" not in meta
+    assert meta_block._current_context_usage(agent) == -1.0
 
 
 def test_build_meta_history_falls_back_to_interface_estimate_after_restore():
@@ -1093,12 +1087,13 @@ def test_build_meta_history_falls_back_to_interface_estimate_after_restore():
     # has not reported an input count yet.
     agent._session._latest_input_tokens = 0
     meta = build_meta(agent)
-    # history should come from interface.estimate_context_tokens(), not 0
-    assert meta["context"]["history_tokens"] == 50000
-    assert meta["context"]["system_tokens"] == 5500
+    # The local usage helper still falls back to interface.estimate_context_tokens(),
+    # but the numeric breakdown is no longer duplicated in agent_meta.
+    assert "context" not in meta
+    assert meta_block._current_context_usage(agent) == pytest.approx(0.555)
 
 
-def test_build_meta_time_blind_still_emits_context_fields():
+def test_build_meta_time_blind_still_omits_numeric_context_fields():
     agent = _fake_agent_with_session(
         time_awareness=False,
         system_prompt_tokens=5000,
@@ -1107,8 +1102,8 @@ def test_build_meta_time_blind_still_emits_context_fields():
     )
     meta = build_meta(agent)
     assert "current_time" not in meta
-    assert meta["context"]["system_tokens"] == 5500
-    assert meta["context"]["history_tokens"] == 200
+    assert "context" not in meta
+    assert meta_block._current_context_usage(agent) == pytest.approx(0.057)
 
 
 def test_render_meta_time_blind_with_context_present_emits_empty_time_slot():
@@ -1139,12 +1134,11 @@ def test_build_meta_history_tokens_does_not_double_count_system_and_tools():
         history_tokens=200,
     )
     meta = build_meta(agent)
-    # system_tokens = 5000 + 500 = 5500
-    assert meta["context"]["system_tokens"] == 5500
-    # history_tokens = history only = 200
-    assert meta["context"]["history_tokens"] == 200
-    # usage = (5500 + 200) / 100000 = 0.057
-    assert abs(meta["context"]["usage"] - 0.057) < 1e-6
+    # The numeric context breakdown is no longer duplicated in agent_meta, but
+    # the local warning/reconstruction estimate must still avoid double-counting
+    # system+tools. usage = (5500 + 200) / 100000 = 0.057.
+    assert "context" not in meta
+    assert meta_block._current_context_usage(agent) == pytest.approx(0.057)
 
 
 def test_build_meta_usage_matches_get_context_pressure_after_restore():
@@ -1174,14 +1168,13 @@ def test_build_meta_usage_matches_get_context_pressure_after_restore():
     agent._session._latest_input_tokens = 0
     meta = build_meta(agent)
 
-    # history_tokens must be history-only, not the full estimate
-    assert meta["context"]["history_tokens"] == history
-    assert meta["context"]["system_tokens"] == sys_prompt + tools
+    # The numeric context breakdown is no longer duplicated in agent_meta.
+    assert "context" not in meta
 
-    # meta usage% must equal what get_context_pressure() would return:
+    # The local usage helper must still match get_context_pressure():
     # pressure = estimate_context_tokens() / limit = (sys+tools+history) / limit
     expected_pressure = (sys_prompt + tools + history) / limit
-    assert abs(meta["context"]["usage"] - expected_pressure) < 1e-9
+    assert meta_block._current_context_usage(agent) == pytest.approx(expected_pressure)
 
 
 # ---------------------------------------------------------------------------
@@ -2170,9 +2163,9 @@ def test_build_meta_attaches_context_molt_only_when_streak_armed():
     agent._uptime_anchor = None
 
     meta = build_meta(agent)
-    assert meta["context"]["usage"] == pytest.approx(0.9)
-    # Streak not yet armed -> no molt warning even though usage is 0.9.
-    assert "molt" not in meta["context"]
+    assert meta_block._current_context_usage(agent) == pytest.approx(0.9)
+    # Streak not yet armed -> no context block is emitted even though usage is 0.9.
+    assert "context" not in meta
 
     # Arm the streak; same high usage now surfaces the warning.
     fake_session.context_pressure_warning_active = True
