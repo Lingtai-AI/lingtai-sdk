@@ -417,6 +417,43 @@ def test_build_tool_surface_requires_explicit_email_tool(tmp_path):
     assert "email" in dispatch
 
 
+def test_build_tool_surface_preset_requires_explicit_email_tool(tmp_path):
+    """Preset-path daemon must still gate email behind explicit ``tools`` (#584).
+
+    Mirrors the default-path contract test above but exercises the
+    ``preset_surface`` branch of ``_build_tool_surface``: a result-only
+    ``tools=[]`` daemon running under a preset must not receive the internal
+    ``email`` tool, while ``tools=["email"]`` explicitly opts in.
+    """
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+
+    # Minimal preset surface: a single tool the preset's child LLM owns. The
+    # mere presence of ``preset_surface`` selects the preset-driven branch of
+    # ``_build_tool_surface`` rather than the default parent-surface path.
+    preset_schema = FunctionSchema(
+        name="bash",
+        description="Preset-provided bash",
+        parameters={"type": "object", "properties": {}},
+    )
+    preset_surface = ({"bash": preset_schema}, {"bash": lambda args: {}})
+
+    # A preset-driven daemon that does not request email (result-only) must not
+    # receive communication tools.
+    schemas, dispatch = mgr._build_tool_surface([], preset_surface=preset_surface)
+    names = {s.name for s in schemas}
+    assert "email" not in names
+    assert "email" not in dispatch
+
+    # Explicitly requesting email on the preset path opts in.
+    schemas, dispatch = mgr._build_tool_surface(
+        ["email"], preset_surface=preset_surface
+    )
+    names = {s.name for s in schemas}
+    assert "email" in names
+    assert "email" in dispatch
+
+
 def test_build_emanation_prompt_includes_oneshot_system_prompt(tmp_path):
     """Parent-provided daemon prompt is appended before the task."""
     agent = _make_agent(tmp_path, ["file", "daemon"])
