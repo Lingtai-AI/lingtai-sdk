@@ -20,8 +20,8 @@ from lingtai_kernel.config import AgentConfig
 
 def make_daemon_agent(
     tmp_path: Path,
+    capabilities: Any | None = None,
     *,
-    capabilities: list[str] | None = None,
     working_dir_name: str = "daemon-agent",
 ) -> Agent:
     """Create the minimal mock-service Agent used by daemon tests."""
@@ -43,6 +43,7 @@ def make_daemon_run_dir(
     *,
     parent_working_dir: Path | None = None,
     handle: str = "em-test",
+    em_id: str | None = None,
     task: str = "test task",
     tools: Iterable[str] | None = ("file",),
     model: str = "mock-model",
@@ -52,8 +53,11 @@ def make_daemon_run_dir(
     parent_pid: int = 12345,
     system_prompt: str = "You are a daemon.",
     backend: str = "lingtai",
+    call_parameters: dict[str, Any] | None = None,
 ) -> DaemonRunDir:
     """Create a DaemonRunDir with explicit, daemon-test-oriented defaults."""
+    if em_id is not None:
+        handle = em_id
     if parent_working_dir is None:
         if agent is None:
             raise ValueError("make_daemon_run_dir requires agent or parent_working_dir")
@@ -72,6 +76,7 @@ def make_daemon_run_dir(
         parent_pid=parent_pid,
         system_prompt=system_prompt,
         backend=backend,
+        call_parameters=call_parameters,
     )
 
 

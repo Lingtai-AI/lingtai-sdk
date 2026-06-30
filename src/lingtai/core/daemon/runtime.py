@@ -26,12 +26,17 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from .run_dir import DaemonRunDir
 
 
-def kill_process_group(proc: subprocess.Popen) -> None:
+def kill_process_group(
+    proc: subprocess.Popen,
+    *,
+    term_timeout: float = 5.0,
+    kill_timeout: float = 3.0,
+) -> None:
     """Terminate the entire process group for *proc*, then force-kill if needed.
 
     Requires *proc* to have been started with ``start_new_session=True`` so
     that its PGID equals its own PID.  Sends SIGTERM to the group, waits up
-    to 5 seconds, then escalates to SIGKILL for any survivors.
+    to ``term_timeout`` seconds, then escalates to SIGKILL for any survivors.
 
     Uses ``proc.pid`` directly as the PGID (since ``start_new_session=True``
     guarantees PGID == PID) to avoid a ``getpgid`` round-trip that could
@@ -47,14 +52,14 @@ def kill_process_group(proc: subprocess.Popen) -> None:
     except (ProcessLookupError, OSError):
         pass
     try:
-        proc.wait(timeout=5)
+        proc.wait(timeout=term_timeout)
     except subprocess.TimeoutExpired:
         try:
             os.killpg(pgid, signal.SIGKILL)
         except (ProcessLookupError, OSError):
             pass
         try:
-            proc.wait(timeout=3)
+            proc.wait(timeout=kill_timeout)
         except subprocess.TimeoutExpired:
             pass
 

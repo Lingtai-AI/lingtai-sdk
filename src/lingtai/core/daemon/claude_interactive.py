@@ -28,13 +28,13 @@ import queue
 import re
 import select
 import shlex
-import signal
 import subprocess
 import threading
 import time
 from typing import Callable
 
 from .run_dir import DaemonRunDir
+from .runtime import kill_process_group
 
 
 @dataclass(slots=True)
@@ -584,25 +584,6 @@ class ClaudeInteractiveBridge:
         self._prompt_sent = True
         self._write_state(claude_interactive_prompt_sent=True)
 
-    def _kill_process_group(self, proc: subprocess.Popen) -> None:
-        try:
-            os.killpg(proc.pid, signal.SIGTERM)
-        except (ProcessLookupError, OSError):
-            pass
-        try:
-            proc.wait(timeout=2)
-            return
-        except subprocess.TimeoutExpired:
-            pass
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except (ProcessLookupError, OSError):
-            pass
-        try:
-            proc.wait(timeout=1)
-        except subprocess.TimeoutExpired:  # pragma: no cover - defensive
-            pass
-
     def _command(self, settings_json: str) -> list[str]:
         cmd = ["claude"]
         if self.resume_session_id:
@@ -663,7 +644,7 @@ class ClaudeInteractiveBridge:
             with self.raw_pty_log_path.open("ab") as raw_log:
                 while True:
                     if self.cancel_event.is_set():
-                        self._kill_process_group(proc)
+                        kill_process_group(proc, term_timeout=2.0, kill_timeout=1.0)
                         break
 
                     self._handle_hook_events(master_fd)
@@ -682,7 +663,7 @@ class ClaudeInteractiveBridge:
                             self._respond_to_terminal_probes(master_fd, data)
                             self._handle_auth_or_trust_prompt(master_fd, data)
                             if self._prompt_warning:
-                                self._kill_process_group(proc)
+                                kill_process_group(proc, term_timeout=2.0, kill_timeout=1.0)
                                 break
 
                     # After Stop, Claude's turn is complete.  Give the process a
@@ -692,7 +673,7 @@ class ClaudeInteractiveBridge:
                         if proc.poll() is not None:
                             break
                         if time.monotonic() - stop_seen_at > 0.25:
-                            self._kill_process_group(proc)
+                            kill_process_group(proc, term_timeout=2.0, kill_timeout=1.0)
                             break
 
                     # A fast fake (and occasionally a fast real failure) can
@@ -712,7 +693,7 @@ class ClaudeInteractiveBridge:
                 try:
                     proc.wait(timeout=1)
                 except subprocess.TimeoutExpired:
-                    self._kill_process_group(proc)
+                    kill_process_group(proc, term_timeout=2.0, kill_timeout=1.0)
         finally:
             self._hook_done.set()
             # Wake the nonblocking FIFO reader if it is sitting in select/read.

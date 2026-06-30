@@ -2,22 +2,7 @@
 import threading
 from unittest.mock import MagicMock, patch
 
-from lingtai_kernel.config import AgentConfig
-
-
-def _make_agent(tmp_path, capabilities=None):
-    from lingtai.agent import Agent
-    svc = MagicMock()
-    svc.provider = "mock"
-    svc.model = "mock-model"
-    svc.create_session = MagicMock()
-    svc.make_tool_result = MagicMock()
-    return Agent(
-        svc,
-        working_dir=tmp_path / "daemon-agent",
-        capabilities=capabilities or ["daemon"],
-        config=AgentConfig(),
-    )
+from tests._daemon_helpers import make_daemon_agent as _make_agent
 
 
 def _stub_emanate_internals(mgr):
