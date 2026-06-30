@@ -96,8 +96,9 @@ files, not standalone top-level skills.
     parent still uses `system_prompt` to say when and how those tools should be
     used (for example: read-only file access, no network, write only to one
     report path, or ask a named peer before guessing). `email` is
-    daemon-eligible communication and is available by default; other tool names
-    still matter for file/bash/web/etc. access.
+    daemon-eligible communication, but it is not granted by default; include
+    `tools: ["email"]` only when the daemon should be able to use internal mail.
+    Other tool names still matter for file/bash/web/etc. access.
   - `skills` answers **which workflows the daemon should know about**. It is an
     optional list of strings. Each string may be either a skill directory
     containing `SKILL.md` or a direct `SKILL.md` path; relative paths resolve
@@ -120,13 +121,13 @@ files, not standalone top-level skills.
   it may read/write; if it receives web/MCP tools, say what external calls are
   allowed; if it can communicate, say who it may contact and what context it may
   share; if `skills` or `mcp` are selected, say when to read/apply/call them.
-- `email` is available by default because a daemon is still part of the local
-  agent network: it may need to report to peers, ask a sibling for context, or
-  hand off a result. Availability is not authorization to broadcast. The parent
-  should specify communication rules in `system_prompt`: allowed recipients,
-  purpose, tone, thread/reply discipline, information boundaries, whether the
-  daemon may ask questions or only report, how to report back to the parent, and
-  when not to send mail.
+- `email` is daemon-eligible but opt-in. Grant it only with `tools: ["email"]`
+  when a daemon truly needs to communicate in the local agent network: reporting
+  to peers, asking a sibling for context, or handing off a result. Availability
+  is not authorization to broadcast. The parent should specify communication
+  rules in `system_prompt`: allowed recipients, purpose, tone, thread/reply
+  discipline, information boundaries, whether the daemon may ask questions or
+  only report, how to report back to the parent, and when not to send mail.
 - LingTai-backend daemon tool calls go through the kernel `ToolExecutor` /
   `ToolCallGuard` path before dispatch, so guarded side effects are not allowed
   to bypass normal proposal/execution policy just because they run in a daemon.

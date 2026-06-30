@@ -68,7 +68,7 @@ The `daemon` tool exposes five actions:
 daemon/__init__.py
   ├── DaemonManager.__init__        — stores agent ref, config ceilings, emanation registry
   ├── handle()                      — top-level dispatcher (emanate/list/ask/check/reclaim)
-  ├── _daemon_intrinsic_surface()   — exposes daemon-eligible intrinsics (currently auto-included `email`)
+  ├── _daemon_intrinsic_surface()   — exposes daemon-eligible intrinsics (currently only explicitly requested `email`)
   ├── _build_tool_surface()         — filters requested tools against blacklist, expands groups, merges preset/MCP/email surfaces; preset emanations also keep the NARROW parent host floor (`_parent_host_tool_floor()`: bash + file primitives only) so saved presets that omit core caps don't make requested host tools unknown — optional/provider parent tools (vision/web_search) are NOT borrowed and stay unknown unless the preset supplies them
   ├── _instantiate_preset_capabilities() — sets up preset tool surface in a sandbox
   ├── _build_emanation_prompt()     — composes the base prompt plus optional per-task oneshot system_prompt

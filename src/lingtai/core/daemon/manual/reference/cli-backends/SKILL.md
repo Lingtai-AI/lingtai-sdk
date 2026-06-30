@@ -109,9 +109,10 @@ registered MCP clients for this run and exposes their tools in the daemon tool
 surface; clients are closed when the run finishes. CLI backends do not receive
 native config injection in this PR, but they do receive the same YAML context and
 may load it if their runtime supports MCP. Secret `env`/`headers` values are
-redacted in prompts. The daemon-eligible `email` intrinsic is available by
-default so an emanation can communicate in the local agent network when the task
-requires it; other intrinsics remain unavailable to keep daemon lightweight and
+redacted in prompts. The daemon-eligible `email` intrinsic is available only
+when explicitly requested in the task `tools` list, so result-only/no-tool
+emanations cannot communicate in the local agent network unless the parent opted
+in. Other intrinsics remain unavailable to keep daemon lightweight and
 non-recursive. As with file/bash/web/MCP tools, technical availability is not a
 policy by itself: the parent should use `system_prompt` to say when and how the
 daemon may use any available tool, including who it may contact and what context
