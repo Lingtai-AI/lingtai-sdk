@@ -104,7 +104,7 @@ def test_summary_false_is_noop():
         args={"summary": False},
         tool_name="bash",
         tool_call_id="t1",
-        summarizer_fn=lambda sp, up, tn: "should not be called",
+        summarizer_fn=lambda sp, up, tn, cid: "should not be called",
     )
     assert out is raw
 
@@ -116,13 +116,15 @@ def test_missing_summary_is_noop():
         args={},
         tool_name="bash",
         tool_call_id="t1",
-        summarizer_fn=lambda sp, up, tn: "should not be called",
+        summarizer_fn=lambda sp, up, tn, cid: "should not be called",
     )
     assert out is raw
 
 
-def test_no_summarizer_wired_is_noop():
-    raw = {"stdout": "x" * 1000}
+def test_no_summarizer_wired_fails_closed():
+    # summary=true but no summarizer wired → fail closed to a summary-layer
+    # error (NOT the raw). The raw must never reach the wire under summary=true.
+    raw = {"stdout": "RAWNOWIRE-" + "x" * 1000}
     out = maybe_summarize_result(
         raw,
         args={"summary": True},
@@ -130,7 +132,14 @@ def test_no_summarizer_wired_is_noop():
         tool_call_id="t1",
         summarizer_fn=None,
     )
-    assert out is raw
+    assert out is not raw
+    assert is_apriori_summary(out)
+    assert out["status"] == "summary_unavailable"
+    # Raw is not leaked into the model-visible error.
+    assert "RAWNOWIRE" not in str(out)
+    # The locator points at the preserved raw by tool_call_id.
+    assert "t1" in out["retrieval_hint"]
+    assert "events.jsonl" in out["retrieval_hint"]
 
 
 # --- orchestrator: summary=true under cap → generated replacement -----------
@@ -138,7 +147,7 @@ def test_no_summarizer_wired_is_noop():
 def test_summary_true_under_cap_generates_replacement():
     captured = {}
 
-    def fake_summarizer(system_prompt, user_prompt, tool_name):
+    def fake_summarizer(system_prompt, user_prompt, tool_name, tool_call_id):
         captured["system_prompt"] = system_prompt
         captured["user_prompt"] = user_prompt
         captured["tool_name"] = tool_name
@@ -171,7 +180,7 @@ def test_summary_true_under_cap_generates_replacement():
 def test_summary_true_over_cap_refuses_without_llm():
     called = {"n": 0}
 
-    def fake_summarizer(system_prompt, user_prompt, tool_name):
+    def fake_summarizer(system_prompt, user_prompt, tool_name, tool_call_id):
         called["n"] += 1
         return "should not happen"
 
@@ -199,7 +208,7 @@ def test_error_result_not_summarized():
         args={"summary": True, "_reasoning": "r"},
         tool_name="read",
         tool_call_id="t_err",
-        summarizer_fn=lambda sp, up, tn: "nope",
+        summarizer_fn=lambda sp, up, tn, cid: "nope",
     )
     assert out is raw  # exact error text preserved for recovery
 
@@ -207,7 +216,7 @@ def test_error_result_not_summarized():
 # --- orchestrator: summarizer failure is fail-closed (never leaks raw) ------
 
 def test_summarizer_exception_fails_closed():
-    def boom(system_prompt, user_prompt, tool_name):
+    def boom(system_prompt, user_prompt, tool_name, tool_call_id):
         raise RuntimeError("provider down")
 
     raw = {"stdout": "secret raw content"}
@@ -232,7 +241,7 @@ def test_summarizer_empty_output_fails_closed():
         args={"summary": True, "_reasoning": "r"},
         tool_name="bash",
         tool_call_id="t_empty",
-        summarizer_fn=lambda sp, up, tn: "   ",
+        summarizer_fn=lambda sp, up, tn, cid: "   ",
     )
     assert is_apriori_summary(out)
     assert out["status"] == "summary_unavailable"
@@ -253,6 +262,6 @@ def test_already_summarized_passes_through():
         args={"summary": True, "_reasoning": "r"},
         tool_name="bash",
         tool_call_id="t1",
-        summarizer_fn=lambda sp, up, tn: "again",
+        summarizer_fn=lambda sp, up, tn, cid: "again",
     )
     assert out is already

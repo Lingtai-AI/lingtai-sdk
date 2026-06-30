@@ -64,7 +64,7 @@ def test_summary_false_returns_raw_and_logs_raw(tmp_path):
     events = []
     ex = _make_executor(
         dispatch_fn=lambda tc: raw,
-        summarizer_fn=lambda sp, up, tn: "SHOULD NOT RUN",
+        summarizer_fn=lambda sp, up, tn, cid: "SHOULD NOT RUN",
         events=events,
         tmp_path=tmp_path,
     )
@@ -83,7 +83,7 @@ def test_summary_absent_returns_raw(tmp_path):
     events = []
     ex = _make_executor(
         dispatch_fn=lambda tc: raw,
-        summarizer_fn=lambda sp, up, tn: "SHOULD NOT RUN",
+        summarizer_fn=lambda sp, up, tn, cid: "SHOULD NOT RUN",
         events=events,
         tmp_path=tmp_path,
     )
@@ -97,7 +97,7 @@ def test_summary_true_under_cap_replaces_with_summary_and_preserves_raw(tmp_path
     raw = {"stdout": "RAWSECRET-" + "y" * 200}
     seen = {}
 
-    def summarizer(system_prompt, user_prompt, tool_name):
+    def summarizer(system_prompt, user_prompt, tool_name, tool_call_id):
         seen["user_prompt"] = user_prompt
         seen["tool_name"] = tool_name
         return "GENSUMMARY: command printed 200 ys"
@@ -137,7 +137,7 @@ def test_summary_true_over_cap_refuses_without_llm_and_hides_raw(tmp_path):
     raw = {"stdout": "BIGRAW-" + "z" * (APRIORI_SUMMARY_CAP + 100)}
     called = {"n": 0}
 
-    def summarizer(system_prompt, user_prompt, tool_name):
+    def summarizer(system_prompt, user_prompt, tool_name, tool_call_id):
         called["n"] += 1
         return "should not happen"
 
@@ -174,19 +174,31 @@ class _NoGenerateService:
         return {}
 
 
+class _Usage:
+    def __init__(self, input_tokens, output_tokens, thinking_tokens=0, cached_tokens=0):
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+        self.thinking_tokens = thinking_tokens
+        self.cached_tokens = cached_tokens
+
+
 class _WithGenerateService:
     model = "m"
+    _base_url = "https://example.test"
 
     class _Resp:
         text = "ok"
+        usage = _Usage(123, 45, 6, 7)
 
     def generate(self, prompt, *, system_prompt=None, **kw):
         return self._Resp()
 
 
 class _AgentStub:
-    def __init__(self, service):
+    def __init__(self, service, *, working_dir=None, agent_name="stub"):
         self.service = service
+        self._working_dir = working_dir
+        self.agent_name = agent_name
 
 
 def test_summarizer_factory_none_without_generate():
@@ -197,4 +209,60 @@ def test_summarizer_factory_none_without_generate():
 def test_summarizer_factory_closure_calls_generate():
     fn = turn._build_apriori_summarizer_fn(_AgentStub(_WithGenerateService()))
     assert fn is not None
-    assert fn("sys", "user", "bash") == "ok"
+    assert fn("sys", "user", "bash", "tcid") == "ok"
+
+
+def _read_ledger_rows(ledger_path):
+    import json
+
+    rows = []
+    for line in ledger_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line:
+            rows.append(json.loads(line))
+    return rows
+
+
+def test_apriori_summary_writes_main_ledger_row(tmp_path):
+    """A successful a-priori summarizer call writes exactly one main-ledger row
+    tagged source=summarize_apriori, with input/output matching response.usage,
+    correlatable by tool_call_id, and NOT a daemon row."""
+    from lingtai_kernel.token_ledger import is_daemon_entry
+
+    agent = _AgentStub(_WithGenerateService(), working_dir=tmp_path)
+    fn = turn._build_apriori_summarizer_fn(agent)
+    assert fn is not None
+
+    out = fn("sys", "user", "grep", "toolu_ledger")
+    assert out == "ok"
+
+    ledger_path = tmp_path / "logs" / "token_ledger.jsonl"
+    rows = _read_ledger_rows(ledger_path)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["source"] == turn.APRIORI_SUMMARY_LEDGER_SOURCE == "summarize_apriori"
+    assert row["input"] == 123
+    assert row["output"] == 45
+    assert row["thinking"] == 6
+    assert row["cached"] == 7
+    assert row["tool_name"] == "grep"
+    assert row["tool_call_id"] == "toolu_ledger"
+    assert row.get("model") == "m"
+    # It lands in the MAIN agent ledger, not a daemon ledger.
+    assert not is_daemon_entry(row)
+
+
+def test_apriori_summary_ledger_failure_does_not_break_summary(tmp_path):
+    """A ledger write failure must not break the summary path (fail-open on
+    accounting); the closure still returns the summary text."""
+
+    class _BadWorkingDir:
+        # ``working_dir / "logs" / ...`` raises, simulating a ledger failure.
+        def __truediv__(self, other):
+            raise OSError("ledger path explode")
+
+    agent = _AgentStub(_WithGenerateService(), working_dir=_BadWorkingDir())
+    fn = turn._build_apriori_summarizer_fn(agent)
+    assert fn is not None
+    # Despite the ledger write blowing up, the summary text is returned.
+    assert fn("sys", "user", "bash", "tcid") == "ok"

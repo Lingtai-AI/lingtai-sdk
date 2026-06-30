@@ -231,7 +231,7 @@ def maybe_summarize_result(
     args: dict,
     tool_name: str,
     tool_call_id: str | None,
-    summarizer_fn: Callable[[str, str, str], str] | None,
+    summarizer_fn: Callable[[str, str, str, str | None], str] | None,
     logger_fn: Callable[..., None] | None = None,
 ) -> Any:
     """Return a summary replacement for *result* when ``summary=true``, else *result*.
@@ -241,8 +241,12 @@ def maybe_summarize_result(
 
     Contract:
     - ``summary != true`` → returns *result* unchanged (current behavior).
-    - No ``summarizer_fn`` wired (e.g. service without one-shot generate) →
-      returns *result* unchanged; the feature is a no-op rather than an error.
+    - ``summary == true`` but no ``summarizer_fn`` wired (e.g. service without a
+      one-shot generate gateway) → **fails closed**: returns a summary-layer
+      error (with the raw-retrieval locator), NOT the raw result. ``summary=true``
+      is a request to keep the raw out of context; honoring it must not depend on
+      whether a summarizer happens to be configured. The raw is already durably
+      logged before this point, so it remains retrievable by ``tool_call_id``.
     - Already an a-priori summary (defensive) → returned unchanged.
     - Error results (the tool itself failed) are NOT summarized: the agent needs
       the exact error text to recover. Returned unchanged.
@@ -252,8 +256,6 @@ def maybe_summarize_result(
     Only dict/str results are summarizable; other shapes pass through.
     """
     if not summary_requested(args):
-        return result
-    if summarizer_fn is None:
         return result
     if is_apriori_summary(result):
         return result
@@ -273,6 +275,26 @@ def maybe_summarize_result(
                 logger_fn(event, tool_name=tool_name, tool_call_id=tool_call_id, **fields)
             except Exception:
                 pass
+
+    # Fail closed when no summarizer is available. ``summary=true`` is a request
+    # NOT to place the raw result into context; if we cannot summarize, we must
+    # not silently fall back to dumping the raw payload. The raw is already
+    # durably logged (preserved by tool_call_id), so the agent can still
+    # retrieve it via the locator in the error replacement.
+    if summarizer_fn is None:
+        _log(
+            "apriori_summary_no_summarizer",
+            original_visible_chars=original_visible_chars,
+        )
+        return build_summary_error(
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            original_visible_chars=original_visible_chars,
+            error=(
+                "a-priori summary requested but no summarizer gateway is "
+                "configured on this agent; raw not placed in context"
+            ),
+        )
 
     if original_visible_chars > APRIORI_SUMMARY_CAP:
         _log(
@@ -294,7 +316,9 @@ def maybe_summarize_result(
     prompt = _build_summarizer_prompt(reason, raw_text)
 
     try:
-        summary_text = summarizer_fn(SUMMARIZER_SYSTEM_PROMPT, prompt, tool_name)
+        summary_text = summarizer_fn(
+            SUMMARIZER_SYSTEM_PROMPT, prompt, tool_name, tool_call_id
+        )
     except Exception as exc:  # fail-closed: never leak raw on summarizer failure
         _log(
             "apriori_summary_failed",

@@ -78,7 +78,7 @@ class ToolExecutor:
         tool_call_guard: ToolCallGuard | None = None,
         summarize_notification_threshold: int | None = None,
         reconstruction_event_fn: Callable[[], dict | None] | None = None,
-        summarizer_fn: Callable[[str, str, str], str] | None = None,
+        summarizer_fn: Callable[[str, str, str, str | None], str] | None = None,
     ) -> None:
         self._dispatch_fn = dispatch_fn
         self._make_tool_result_fn = make_tool_result_fn
@@ -104,8 +104,9 @@ class ToolExecutor:
         # ``summary=true``, ``_maybe_apriori_summary`` replaces the raw visible
         # payload with an LLM-generated summary AFTER the raw is durably logged
         # and BEFORE it reaches the wire. ``summarizer_fn(system_prompt,
-        # user_prompt, tool_name) -> str``. When None, ``summary=true`` is an
-        # inert no-op (raw behavior preserved).
+        # user_prompt, tool_name, tool_call_id) -> str``. When None,
+        # ``summary=true`` fails closed to a summary-layer error (the raw is
+        # never dumped into context); see ``maybe_summarize_result``.
         self._summarizer_fn = summarizer_fn
 
     def _tool_trace_id(self, tc: ToolCall) -> str:
