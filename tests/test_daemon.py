@@ -441,13 +441,18 @@ def test_cli_backend_serializes_task_mcp_context(tmp_path, monkeypatch):
     assert "## Parent-provided MCP registrations" in captured["prompt"]
 
 
-def test_build_tool_surface_includes_email_intrinsic_by_default(tmp_path):
-    """Email is the narrow daemon-eligible intrinsic and is available by default."""
+def test_build_tool_surface_requires_explicit_email_tool(tmp_path):
+    """Result-only tools=[] daemons must not receive communication tools."""
     agent = _make_agent(tmp_path, ["daemon"])
     mgr = agent.get_capability("daemon")
 
     schemas, dispatch = mgr._build_tool_surface([])
 
+    names = {s.name for s in schemas}
+    assert "email" not in names
+    assert "email" not in dispatch
+
+    schemas, dispatch = mgr._build_tool_surface(["email"])
     names = {s.name for s in schemas}
     assert "email" in names
     assert "email" in dispatch
