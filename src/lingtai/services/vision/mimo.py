@@ -16,9 +16,7 @@ identical. This service wraps that with a sane MiMo-specific default.
 """
 from __future__ import annotations
 
-import base64
-
-from . import VisionService, _read_image
+from . import VisionService, _image_url_messages
 
 
 _MIMO_BASE_URL = "https://api.xiaomimimo.com/v1"
@@ -51,23 +49,9 @@ class MiMoVisionService(VisionService):
 
     def analyze_image(self, image_path: str, prompt: str | None = None) -> str:
         """Analyze an image using MiMo's vision-capable models."""
-        image_bytes, mime_type = _read_image(image_path)
-        question = prompt or "Describe this image."
-
-        b64 = base64.b64encode(image_bytes).decode("utf-8")
-        data_url = f"data:{mime_type};base64,{b64}"
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": data_url}},
-                    {"type": "text", "text": question},
-                ],
-            }
-        ]
         raw = self._client.chat.completions.create(
             model=self._model,
-            messages=messages,
+            messages=_image_url_messages(image_path, prompt),
             max_completion_tokens=self._max_tokens,
         )
         if raw.choices:

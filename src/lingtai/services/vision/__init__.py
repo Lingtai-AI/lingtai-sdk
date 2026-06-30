@@ -11,6 +11,7 @@ Usage:
 """
 from __future__ import annotations
 
+import base64
 from abc import ABC, abstractmethod
 
 
@@ -58,6 +59,24 @@ def _read_image(image_path: str) -> tuple[bytes, str]:
     image_bytes = path.read_bytes()
     mime_type = _MIME_BY_EXT.get(path.suffix.lower(), "image/png")
     return image_bytes, mime_type
+
+
+def _image_url_messages(image_path: str, prompt: str | None = None) -> list[dict[str, object]]:
+    """Build OpenAI-compatible chat messages for image_url vision providers."""
+    image_bytes, mime_type = _read_image(image_path)
+    question = prompt or "Describe this image."
+
+    b64 = base64.b64encode(image_bytes).decode("utf-8")
+    data_url = f"data:{mime_type};base64,{b64}"
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": data_url}},
+                {"type": "text", "text": question},
+            ],
+        }
+    ]
 
 
 def create_vision_service(provider: str, *, api_key: str | None = None, **kwargs) -> VisionService:

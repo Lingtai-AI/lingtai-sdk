@@ -113,8 +113,10 @@ def setup(
         if provider == "duckduckgo":
             search_service = create_search_service("duckduckgo")
         else:
-            from .._media_host import resolve_media_host
-            extra_kwargs: dict = {"api_host": resolve_media_host(agent)}
+            extra_kwargs: dict[str, Any] = {}
+            if provider == "minimax":
+                from .._media_host import resolve_media_host
+                extra_kwargs["api_host"] = resolve_media_host(agent)
             if provider == "zhipu":
                 from .._zhipu_mode import resolve_z_ai_mode
                 extra_kwargs["z_ai_mode"] = resolve_z_ai_mode(agent)

@@ -21,6 +21,20 @@ def _make_openai_service(monkeypatch, raw_response):
     return OpenAIVisionService(api_key="sk-test", model="gpt-4o", base_url="http://127.0.0.1:34891")
 
 
+def _make_mimo_service(monkeypatch, raw_response):
+    """Build a MiMoVisionService whose client returns `raw_response`."""
+    completions = MagicMock()
+    completions.create.return_value = raw_response
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    openai_cls = MagicMock(return_value=client)
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=openai_cls))
+
+    from lingtai.services.vision.mimo import MiMoVisionService
+
+    svc = MiMoVisionService(api_key="sk-test", model="mimo-v2.5")
+    return svc, completions
+
+
 def test_openai_vision_raises_clear_error_on_string_response(monkeypatch, tmp_path):
     """Bug G: a raw `str` body (proxy served HTML/non-JSON) raises a clear RuntimeError.
 
@@ -68,6 +82,39 @@ def test_openai_vision_returns_content_on_valid_response(monkeypatch, tmp_path):
     svc = _make_openai_service(monkeypatch, raw)
 
     assert svc.analyze_image(str(img)) == "a candlestick chart"
+
+
+def test_mimo_vision_returns_content_on_valid_response(monkeypatch, tmp_path):
+    """A well-formed MiMo ChatCompletion returns its message content."""
+    img = tmp_path / "chart.png"
+    img.write_bytes(b"\x89PNG fake")
+
+    message = SimpleNamespace(content="a candlestick chart")
+    choice = SimpleNamespace(message=message)
+    raw = SimpleNamespace(choices=[choice])
+    svc, completions = _make_mimo_service(monkeypatch, raw)
+
+    assert svc.analyze_image(str(img), prompt="what is shown?") == "a candlestick chart"
+    kwargs = completions.create.call_args.kwargs
+    assert kwargs["model"] == "mimo-v2.5"
+    assert kwargs["max_completion_tokens"] == 1024
+    content = kwargs["messages"][0]["content"]
+    assert content[0]["type"] == "image_url"
+    assert content[0]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert content[1] == {"type": "text", "text": "what is shown?"}
+
+
+def test_mimo_vision_returns_empty_string_on_empty_choices(monkeypatch, tmp_path):
+    """Empty MiMo choices keep the existing empty-string behavior."""
+    img = tmp_path / "chart.png"
+    img.write_bytes(b"\x89PNG fake")
+
+    svc, completions = _make_mimo_service(monkeypatch, SimpleNamespace(choices=[]))
+
+    assert svc.analyze_image(str(img)) == ""
+    content = completions.create.call_args.kwargs["messages"][0]["content"]
+    assert content[0]["type"] == "image_url"
+    assert content[1] == {"type": "text", "text": "Describe this image."}
 
 
 def test_anthropic_vision_service_accepts_base_url(monkeypatch):

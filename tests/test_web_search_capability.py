@@ -88,6 +88,34 @@ def test_create_search_service_unknown():
         create_search_service("nonexistent", api_key="key")
 
 
+def test_create_search_service_minimax_passes_api_host():
+    """Factory should pass api_host only to the MiniMax service."""
+    with patch("lingtai.services.websearch.minimax.MiniMaxSearchService") as mock_cls:
+        svc = create_search_service(
+            "minimax",
+            api_key="sk-test",
+            api_host="https://mini.example",
+        )
+
+    assert svc is mock_cls.return_value
+    mock_cls.assert_called_once_with(api_key="sk-test", api_host="https://mini.example")
+
+
+def test_create_search_service_zhipu_passes_explicit_mode():
+    """Factory should pass the explicit Zhipu endpoint mode."""
+    with patch("lingtai.services.websearch.zhipu.ZhipuSearchService") as mock_cls:
+        svc = create_search_service("zhipu", api_key="sk-test", z_ai_mode="ZHIPU")
+
+    assert svc is mock_cls.return_value
+    mock_cls.assert_called_once_with(api_key="sk-test", z_ai_mode="ZHIPU")
+
+
+def test_create_search_service_rejects_unknown_kwargs():
+    """The factory API is intentionally narrow; provider kwargs must be explicit."""
+    with pytest.raises(TypeError):
+        create_search_service("zhipu", api_key="sk-test", unknown=True)
+
+
 def test_web_search_with_provider_kwarg(tmp_path):
     """web_search capability with provider= should create service via factory."""
     agent = Agent(
@@ -133,6 +161,67 @@ def test_web_search_setup_api_key_env_overrides_raw_key(monkeypatch):
         )
 
     assert mock_factory.call_args.kwargs["api_key"] == "sk-from-env"
+
+
+def test_web_search_setup_omits_api_host_for_gemini():
+    """Gemini search ignores api_host, so setup should not resolve or pass it."""
+    agent = MagicMock()
+    agent._config.language = "en"
+
+    with (
+        patch("lingtai.capabilities.web_search.create_search_service") as mock_factory,
+        patch("lingtai.capabilities._media_host.resolve_media_host") as mock_media_host,
+    ):
+        mock_factory.return_value = MagicMock(spec=SearchService)
+        setup(agent, provider="gemini", api_key="sk-test")
+
+    assert mock_factory.call_args.args == ("gemini",)
+    assert mock_factory.call_args.kwargs["api_key"] == "sk-test"
+    assert "api_host" not in mock_factory.call_args.kwargs
+    mock_media_host.assert_not_called()
+
+
+def test_web_search_setup_passes_api_host_for_minimax():
+    """MiniMax search still receives the resolved MCP host."""
+    agent = MagicMock()
+    agent._config.language = "en"
+
+    with (
+        patch("lingtai.capabilities.web_search.create_search_service") as mock_factory,
+        patch(
+            "lingtai.capabilities._media_host.resolve_media_host",
+            return_value="https://mini.example",
+        ) as mock_media_host,
+    ):
+        mock_factory.return_value = MagicMock(spec=SearchService)
+        setup(agent, provider="minimax", api_key="sk-test")
+
+    assert mock_factory.call_args.args == ("minimax",)
+    assert mock_factory.call_args.kwargs["api_host"] == "https://mini.example"
+    mock_media_host.assert_called_once_with(agent)
+
+
+def test_web_search_setup_passes_zhipu_mode_without_api_host():
+    """Zhipu search receives z_ai_mode but not the MiniMax api_host."""
+    agent = MagicMock()
+    agent._config.language = "en"
+
+    with (
+        patch("lingtai.capabilities.web_search.create_search_service") as mock_factory,
+        patch(
+            "lingtai.capabilities._zhipu_mode.resolve_z_ai_mode",
+            return_value="ZHIPU",
+        ) as mock_z_mode,
+        patch("lingtai.capabilities._media_host.resolve_media_host") as mock_media_host,
+    ):
+        mock_factory.return_value = MagicMock(spec=SearchService)
+        setup(agent, provider="zhipu", api_key="sk-test")
+
+    assert mock_factory.call_args.args == ("zhipu",)
+    assert mock_factory.call_args.kwargs["z_ai_mode"] == "ZHIPU"
+    assert "api_host" not in mock_factory.call_args.kwargs
+    mock_z_mode.assert_called_once_with(agent)
+    mock_media_host.assert_not_called()
 
 
 def test_inherited_web_search_env_key_registers(tmp_path, monkeypatch):

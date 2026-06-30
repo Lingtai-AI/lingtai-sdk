@@ -51,7 +51,7 @@ def create_search_service(
     api_key: str | None = None,
     model: str | None = None,
     api_host: str | None = None,
-    **kwargs,
+    z_ai_mode: str = "ZAI",
 ) -> SearchService:
     """Factory — create a SearchService for the given provider.
 
@@ -60,6 +60,8 @@ def create_search_service(
                   ``"openai"``, ``"gemini"``, ``"minimax"``).
         api_key: API key for the provider (required for all except duckduckgo).
         model: Optional model override.
+        api_host: MiniMax MCP host, required by the MiniMax provider.
+        z_ai_mode: Zhipu/Z.AI endpoint mode for the Zhipu provider.
 
     Returns:
         A configured SearchService instance.
@@ -108,7 +110,7 @@ def create_search_service(
 
     if name == "zhipu":
         from .zhipu import ZhipuSearchService
-        return ZhipuSearchService(api_key=_require_key(), z_ai_mode=kwargs.get("z_ai_mode", "ZAI"))
+        return ZhipuSearchService(api_key=_require_key(), z_ai_mode=z_ai_mode)
 
     raise ValueError(
         f"Unknown web search provider: {provider!r}. "

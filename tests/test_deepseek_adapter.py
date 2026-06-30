@@ -18,7 +18,6 @@ this design.
 """
 from __future__ import annotations
 
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from lingtai.llm.deepseek.adapter import DeepSeekAdapter, DeepSeekChatSession
@@ -29,31 +28,10 @@ from lingtai_kernel.llm.interface import (
     ToolCallBlock,
     ToolResultBlock,
 )
-
-
-def _make_raw_response(*, content=None, reasoning_content=None, tool_calls=None):
-    """Build a minimal fake OpenAI ChatCompletion-like object."""
-    msg = SimpleNamespace(
-        content=content,
-        reasoning_content=reasoning_content,
-        tool_calls=tool_calls or [],
-    )
-    choice = SimpleNamespace(message=msg)
-    return SimpleNamespace(
-        choices=[choice],
-        usage=SimpleNamespace(
-            prompt_tokens=100,
-            completion_tokens=50,
-            completion_tokens_details=SimpleNamespace(reasoning_tokens=10),
-        ),
-    )
-
-
-def _make_tool_call(id_, name, args_json="{}"):
-    return SimpleNamespace(
-        id=id_,
-        function=SimpleNamespace(name=name, arguments=args_json),
-    )
+from tests._chat_completion_helpers import (
+    make_raw_response as _make_raw_response,
+    make_tool_call as _make_tool_call,
+)
 
 
 def _build_session(client, iface=None):
