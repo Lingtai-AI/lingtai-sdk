@@ -1164,12 +1164,6 @@ class BaseAgent:
             skeletonize_notification_holder(self)
             self._notification_fp = fp
             self._notification_deferred_log_fp = ()
-            # Defensive cleanup for agents upgraded from the retired
-            # ACTIVE-state meta-prefix delivery path.
-            if hasattr(self, "_pending_notification_meta"):
-                self._pending_notification_meta = None
-            if hasattr(self, "_pending_notification_fp"):
-                self._pending_notification_fp = None
             return
 
         # --- Inject new block based on current state ---

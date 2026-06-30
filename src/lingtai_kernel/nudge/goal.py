@@ -12,7 +12,6 @@ import time
 from typing import Any
 
 from ..notifications import (
-    _invalidate_pending_notification_meta,
     _rewrite_system_events_locked,
     collect_notifications,
 )
@@ -160,7 +159,6 @@ def _clear_goal_reminders_locked(agent, *, keep_ref_id: str | None) -> None:
             pass
         return
 
-    _invalidate_pending_notification_meta(agent)
     try:
         agent._log(
             "goal_reminder_cleared",

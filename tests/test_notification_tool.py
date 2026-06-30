@@ -374,8 +374,6 @@ class _SummarizeAgent:
     _logs: list = field(default_factory=list)
     _summarize_notification_threshold: int = 3000
     _system_notification_lock: threading.Lock = field(default_factory=threading.Lock)
-    _pending_notification_meta: Any = None
-    _pending_notification_fp: Any = None
 
     def _log(self, event_type: str, **fields: Any) -> None:
         self._logs.append((event_type, fields))

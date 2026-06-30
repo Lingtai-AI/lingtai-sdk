@@ -283,7 +283,7 @@ class TestNotificationTrackingStateAfterMolt:
     """In-memory tracking is reset so notification files rehydrate post-molt."""
 
     def test_tracking_state_reset_after_agent_molt(self, tmp_path):
-        """After agent-initiated molt, all in-memory notification
+        """After agent-initiated molt, current in-memory notification
         tracking should reset while files stay on disk."""
         agent = _make_agent_with_psyche(tmp_path)
         agent.start()
@@ -297,8 +297,6 @@ class TestNotificationTrackingStateAfterMolt:
 
             # Set tracking state to verify reset behavior
             agent._notification_block_id = "block_123"
-            agent._pending_notification_meta = {"test": "meta"}
-            agent._pending_notification_fp = real_fp
             agent._notification_fp = real_fp
 
             # Set up mock chat
@@ -331,24 +329,17 @@ class TestNotificationTrackingStateAfterMolt:
             assert agent._notification_block_id is None, (
                 "_notification_block_id should be None after molt"
             )
-            # _pending_notification_meta should be reset to None
-            assert agent._pending_notification_meta is None, (
-                "_pending_notification_meta should be None after molt"
-            )
-            # _notification_fp and pending fp reset so the surviving file
-            # re-injects into the fresh wire on the next sync.
+            # _notification_fp resets so the surviving file re-injects into
+            # the fresh wire on the next sync.
             assert agent._notification_fp == (), (
                 "_notification_fp should reset after molt for rehydration"
-            )
-            assert agent._pending_notification_fp is None, (
-                "_pending_notification_fp should be None after molt"
             )
 
         finally:
             agent.stop()
 
     def test_tracking_state_reset_after_context_forget(self, tmp_path):
-        """After system-initiated context_forget, all in-memory
+        """After system-initiated context_forget, current in-memory
         notification tracking should reset while files stay on disk."""
         agent = _make_agent_with_psyche(tmp_path)
         agent.start()
@@ -363,8 +354,6 @@ class TestNotificationTrackingStateAfterMolt:
 
             # Set tracking state
             agent._notification_block_id = "block_456"
-            agent._pending_notification_meta = {"source": "email"}
-            agent._pending_notification_fp = real_fp
             agent._notification_fp = real_fp
 
             # Set up mock chat
@@ -379,20 +368,12 @@ class TestNotificationTrackingStateAfterMolt:
             assert agent._notification_block_id is None, (
                 "_notification_block_id should be None after context_forget"
             )
-            # _pending_notification_meta should be reset to None
-            assert agent._pending_notification_meta is None, (
-                "_pending_notification_meta should be None after context_forget"
-            )
-            # _notification_fp and pending fp reset so the surviving file
-            # re-injects into the fresh wire on the next sync.
+            # _notification_fp resets so the surviving file re-injects into
+            # the fresh wire on the next sync.
             assert agent._notification_fp == (), (
                 "_notification_fp should reset after context_forget"
-            )
-            assert agent._pending_notification_fp is None, (
-                "_pending_notification_fp should be None after context_forget"
             )
 
         finally:
             agent.stop()
-
 

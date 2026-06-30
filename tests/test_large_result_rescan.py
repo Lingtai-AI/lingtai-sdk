@@ -917,8 +917,6 @@ def test_stale_large_result_event_can_be_dismissed(tmp_path):
         _working_dir: Path
         _logs: list = field(default_factory=list)
         _notification_fp: tuple = ()
-        _pending_notification_meta: str | None = None
-        _pending_notification_fp: tuple | None = None
         _system_notification_lock: threading.Lock = field(default_factory=threading.Lock)
 
         def _log(self, event_type: str, **fields: Any) -> None:

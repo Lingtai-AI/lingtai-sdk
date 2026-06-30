@@ -517,13 +517,11 @@ def test_molt_preserves_notification_dir(tmp_path: Path) -> None:
         _working_dir: Path = tmp_path
         _notification_fp: tuple = (("email.json", 1, 12),)
         _notification_block_id: str | None = "notif_xyz"
-        _pending_notification_meta: str | None = "stale"
         _appendix_ids_by_source: dict = field(default_factory=dict)
 
     agent = _MoltStub()
     # Only reset in-memory tracking; notification files survive molt.
     agent._notification_block_id = None
-    agent._pending_notification_meta = None
 
     # .notification/ directory and files should still exist
     assert (tmp_path / ".notification").is_dir()
@@ -533,7 +531,6 @@ def test_molt_preserves_notification_dir(tmp_path: Path) -> None:
     assert agent._notification_fp == (("email.json", 1, 12),)
     # Wire-level tracking is reset
     assert agent._notification_block_id is None
-    assert agent._pending_notification_meta is None
 
 
 # ---------------------------------------------------------------------------
@@ -569,7 +566,6 @@ def _make_idle_agent_with_pending_tail(tmp_path: Path, *, call_id: str = "tc-pen
             self._notification_fp = ()
             self._notification_deferred_log_fp = ()
             self._notification_block_id = None
-            self._pending_notification_meta = None
             self._chat_stub = chat
             self._logs = []
             self.agent_name = "stub"
@@ -625,7 +621,6 @@ def test_sync_idle_posts_wake_message(tmp_path: Path) -> None:
             self._notification_fp = ()
             self._notification_deferred_log_fp = ()
             self._notification_block_id = None
-            self._pending_notification_meta = None
             self._chat_stub = chat
             self._logs = []
             self.agent_name = "stub"
@@ -752,7 +747,6 @@ def test_sync_idle_injects_post_molt_after_molt_batch_deferred_stamp(tmp_path: P
             self._state = AgentState.IDLE
             self._notification_fp = ()
             self._notification_block_id = None
-            self._pending_notification_meta = None
             self._chat_stub = chat
             self._logs = []
             self.agent_name = "stub"
@@ -821,7 +815,6 @@ def test_sync_idle_injects_pair_with_synthesized_marker(tmp_path: Path) -> None:
             self._state = AgentState.IDLE
             self._notification_fp = ()
             self._notification_block_id = None
-            self._pending_notification_meta = None
             self._chat_stub = chat
             self._logs = []
             self.agent_name = "stub"
@@ -908,7 +901,6 @@ def test_sync_idle_skeletonizes_then_reinjects(tmp_path: Path) -> None:
             self._state = AgentState.IDLE
             self._notification_fp = ()
             self._notification_block_id = None
-            self._pending_notification_meta = None
             self._chat_stub = chat
             self._logs = []
             self.agent_name = "stub"
@@ -972,7 +964,6 @@ def test_sync_idle_empty_strips(tmp_path: Path) -> None:
             self._state = AgentState.IDLE
             self._notification_fp = ()
             self._notification_block_id = None
-            self._pending_notification_meta = None
             self._chat_stub = chat
             self._logs = []
             self.agent_name = "stub"
@@ -1029,7 +1020,6 @@ def test_sync_no_change_is_noop(tmp_path: Path) -> None:
             self._state = AgentState.IDLE
             self._notification_fp = ()
             self._notification_block_id = None
-            self._pending_notification_meta = None
             self._chat_stub = chat
             self._logs = []
             self.agent_name = "stub"
@@ -1142,9 +1132,8 @@ def test_sync_active_defers_without_committing_or_mutating_tool_result(tmp_path:
     assert agent._deferred_notifications_oldest_at is not None
 
 
-def test_sync_empty_state_clears_pending_meta(tmp_path: Path) -> None:
-    """If a pending ACTIVE payload exists and producer files vanish before
-    delivery, the empty-state sync must drop the stale pending payload."""
+def test_sync_empty_state_commits_empty_fingerprint(tmp_path: Path) -> None:
+    """If producer files vanish, empty-state sync commits the empty fingerprint."""
     from lingtai_kernel.base_agent import BaseAgent
     from lingtai_kernel.state import AgentState
 
@@ -1156,8 +1145,6 @@ def test_sync_empty_state_clears_pending_meta(tmp_path: Path) -> None:
             self._state = AgentState.ACTIVE
             self._notification_fp = (("soul.json", 1, 1),)
             self._notification_block_id = None
-            self._pending_notification_meta = '{"notifications": {"soul": {}}}'
-            self._pending_notification_fp = (("soul.json", 1, 1),)
             self._chat_stub = chat
             self._logs = []
             self.agent_name = "stub"
@@ -1189,8 +1176,6 @@ def test_sync_empty_state_clears_pending_meta(tmp_path: Path) -> None:
     agent._sync_notifications()
 
     assert agent._notification_fp == ()
-    assert agent._pending_notification_meta is None
-    assert agent._pending_notification_fp is None
 
 
 def test_session_manager_has_no_notification_inject_hook() -> None:
@@ -1338,7 +1323,6 @@ def test_sync_asleep_wakes_on_change(tmp_path: Path) -> None:
             self._state = AgentState.ASLEEP
             self._notification_fp = ()
             self._notification_block_id = None
-            self._pending_notification_meta = None
             self._chat_stub = chat
             self._logs = []
             self.agent_name = "stub"
@@ -1396,7 +1380,6 @@ def test_sync_asleep_no_change_stays_asleep(tmp_path: Path) -> None:
             self._state = AgentState.ASLEEP
             self._notification_fp = ()
             self._notification_block_id = None
-            self._pending_notification_meta = None
             self._chat_stub = chat
             self._logs = []
             self.agent_name = "stub"
@@ -1451,7 +1434,6 @@ def _make_asleep_inject_fail_agent(tmp_path: Path, chat, state_history):
             self._state = AgentState.ASLEEP
             self._notification_fp = ()
             self._notification_block_id = None
-            self._pending_notification_meta = None
             self._chat_stub = chat
             self._logs = []
             self.agent_name = "stub"
@@ -1893,7 +1875,6 @@ def _make_stub_agent_for_block_log(tmp_path: Path):
             self._state = AgentState.IDLE
             self._notification_fp = ()
             self._notification_block_id = None
-            self._pending_notification_meta = None
             self._chat_stub = chat
             self._logs: list = []
             self.agent_name = "stub"
@@ -2030,7 +2011,6 @@ def _make_poisoned_sync_agent(tmp_path: Path, state):
             self._notification_fp = (("email.json", 1, "old"),)
             self._notification_deferred_log_fp = ()
             self._notification_block_id = None
-            self._pending_notification_meta = None
             self._chat_stub = chat
             self._logs = []
             self.agent_name = "stub"

@@ -33,7 +33,7 @@ it remains a `system` action (context hygiene, not a notification verb).
   - `_dismiss_channel()` (`__init__.py:75-104`) — whole-channel clear. Rejects `event_id`/`ref_id` (those are atomic-event verbs). Delegates to `notifications.dismiss_channel(..., invoked_by="notification")`.
   - `_dismiss_event()` (`__init__.py:107-122`) — remove one `system` event by `event_id`; `channel` defaults to `system`. Delegates to the same helper with `event_id=...`.
   - `_dismiss_ref()` (`__init__.py:125-140`) — remove `system` event(s) by `ref_id`; `channel` defaults to `system`. Delegates with `ref_id=...`.
-  - All three dismiss verbs route into the single canonical `notifications.dismiss_channel`. The decision logic (allowlist, `post-molt` ack-reason, protected channels, generic-dismiss guard, stale-channel-version refusal, **`large_tool_result` undismissable guard**, atomic `event_id`/`ref_id` removal) lives there; `invoked_by="notification"` only affects which provenance log line is emitted.
+  - All three dismiss verbs route into the single canonical `notifications.dismiss_channel`. The decision logic (allowlist, `post-molt` ack-reason, protected channels, generic-dismiss guard, stale-channel-version refusal, `large_tool_result` acknowledge/remove handling, atomic `event_id`/`ref_id` removal) lives there; `invoked_by="notification"` only affects which provenance log line is emitted.
 
 - `schema.py` — tool registration. Exposes `action` (`check`/`dismiss_channel`/`dismiss_event`/`dismiss_ref`) plus the params `channel`, `force`, `event_id`, `ref_id`, `reason`. All param descriptions use **notification-owned `notification_tool.*` i18n keys** (en/zh/wen). There is no `items` param and no `summarize` action — summarize lives on `system`.
 
@@ -42,7 +42,7 @@ it remains a `system` action (context hygiene, not a notification verb).
 - `ALL_INTRINSICS["notification"]` (`intrinsics/__init__.py:8-16`) → `BaseAgent._wire_intrinsics()` (`base_agent/__init__.py:580`) binds `handle()` into every agent's tool surface. **Membership in `ALL_INTRINSICS` is the mandatory-include mechanism** — the wiring loop is unconditional, with no manifest gate, so this tool is always present like `system`.
 - Delegates into the kernel-root `notifications.dismiss_channel` (`notifications.py:477`). All #424 guards therefore hold through this tool by construction.
 - The live-payload stamp is performed by `meta_block.attach_active_notifications`, called from `base_agent/turn.py`; see the kernel-root `ANATOMY.md` "Notifications" section.
-- **`summarize` is not delegated here.** It stays on `system(action="summarize")` (`intrinsics/system/summarize.py`), which is the only sanctioned discharge for a `large_tool_result` reminder — a successful summarize calls `notifications.clear_large_result_reminders` to auto-clear the matching event. Notification dismiss verbs cannot clear those reminders.
+- **`summarize` is not delegated here.** It stays on `system(action="summarize")` (`intrinsics/system/summarize.py`), which is the preferred discharge for a `large_tool_result` reminder: a successful summarize calls `notifications.clear_large_result_reminders` to auto-clear the matching event. Notification dismiss verbs may still acknowledge and remove those reminders as an escape hatch for stale or pre-molt refs.
 
 ## Composition
 

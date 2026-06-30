@@ -1356,9 +1356,6 @@ def _make_stub_agent_with_workdir(tmp_path, iface):
     agent._chat.interface = iface
     agent._log = MagicMock()
     agent._save_chat_history = MagicMock()
-    # Real attributes so clear_large_result_reminders can null them.
-    agent._pending_notification_meta = "stale"
-    agent._pending_notification_fp = (("system.json", 1, 2),)
     return agent
 
 
@@ -1401,9 +1398,6 @@ def test_summarize_clears_matching_large_result_reminder(tmp_path):
     assert result["cleared_reminders"] == ["large_tool_result:toolu_big"]
     # The reminder event is gone (file removed since it was the only event).
     assert "system" not in collect_notifications(agent._working_dir)
-    # Pending notification caches invalidated.
-    assert agent._pending_notification_meta is None
-    assert agent._pending_notification_fp is None
 
 
 def test_summarize_clears_only_matching_reminder_preserves_others(tmp_path):

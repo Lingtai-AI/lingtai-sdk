@@ -74,8 +74,6 @@ def test_dismiss_channel_clears_existing_file(tmp_path: Path) -> None:
 
     assert res == {"status": "ok", "channel": "soul", "cleared": True, "forced": False}
     assert collect_notifications(tmp_path) == {}
-    assert agent._pending_notification_meta is None
-    assert agent._pending_notification_fp is None
     nd = _events(agent, "notification_dismiss")[0]
     assert nd["channel"] == "soul"
     assert nd["existed"] is True
@@ -92,8 +90,6 @@ def test_dismiss_channel_is_idempotent_when_absent(tmp_path: Path) -> None:
     assert res["status"] == "ok"
     assert res["cleared"] is False
     assert res["channel"] == "soul"
-    assert agent._pending_notification_meta is None
-    assert agent._pending_notification_fp is None
 
 
 def test_dismiss_mcp_dotted_channel(tmp_path: Path) -> None:
@@ -270,8 +266,6 @@ def test_stale_system_dismiss_refuses_and_preserves_newer_file(tmp_path: Path) -
     assert res["forced"] is False
     assert res["delivered_version"] != res["current_version"]
     assert collect_notifications(tmp_path)["system"]["header"] == "two"
-    assert agent._pending_notification_meta == "stale"
-    assert agent._pending_notification_fp == (("soul.json", 1, 2),)
     assert agent._notification_fp == delivered_fp
     refusal = _events(agent, "notification_dismiss_refused")[0]
     assert refusal["reason"] == "stale_channel_version"
@@ -294,8 +288,6 @@ def test_force_bypasses_stale_version_guard(tmp_path: Path) -> None:
     assert res["cleared"] is True
     assert res["forced"] is True
     assert "system" not in collect_notifications(tmp_path)
-    assert agent._pending_notification_meta is None
-    assert agent._pending_notification_fp is None
 
 
 def test_stale_other_channel_does_not_block_delivered_channel(tmp_path: Path) -> None:
@@ -329,8 +321,6 @@ def test_never_delivered_current_channel_refuses_without_force(tmp_path: Path) -
     assert res["delivered_version"] is None
     assert res["current_version"][0] == "nudge.json"
     assert "nudge" in collect_notifications(tmp_path)
-    assert agent._pending_notification_meta == "stale"
-    assert agent._pending_notification_fp == (("soul.json", 1, 2),)
 
 
 def test_system_compare_and_clear_uses_system_notification_lock(tmp_path: Path) -> None:

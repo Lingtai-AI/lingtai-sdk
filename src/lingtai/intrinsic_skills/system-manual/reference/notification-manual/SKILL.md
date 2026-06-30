@@ -5,8 +5,8 @@ description: >
   channel whitelist, `.notification/<channel>.json` files, envelope shape,
   the `notification` tool (check / dismiss_channel / dismiss_event / dismiss_ref),
   generic vs producer-specific dismiss, protected channels, stale-version and
-  force semantics, and the undismissable large-result reminders discharged only
-  by system(action="summarize").
+  force semantics, and large-result reminder summarize/preferred-dismiss
+  behavior.
 version: 0.2.0
 tags: [lingtai, notifications, channels, dismiss, large-result, force, stale, nudge]
 last_changed_at: "2026-06-27T14:31:30-07:00"

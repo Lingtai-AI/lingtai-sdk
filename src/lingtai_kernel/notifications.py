@@ -66,17 +66,6 @@ _PROTECTED_GENERIC_DISMISS: dict[str, str] = {
 # unsafe generic clears and point the agent at the producer-specific verb.
 _GENERIC_DISMISS_GUARDED: dict[str, str] = {}
 
-# System-notification event sources that must NOT be cleared via dismiss —
-# neither by whole-channel clear (force or not), nor by targeted event_id/ref_id
-# removal.  These reminders represent unfinished work whose only legitimate
-# clear path is the action that actually resolves the work.
-# NOTE: large_tool_result is intentionally absent here since PR #425 — those
-# reminders may now be dismissed/acknowledged as an escape hatch for stale or
-# pre-molt refs that can no longer be summarized.  Summarization remains the
-# preferred discharge; dismissal prevents re-notification loops for the same
-# tool_call_ids.
-_UNDISMISSABLE_SYSTEM_EVENT_SOURCES: frozenset[str] = frozenset()
-
 # Acknowledgement file inside .notification/ where dismissed large-result ref_ids
 # are persisted so the rescan does not immediately recreate them.
 _LARGE_RESULT_ACK_FILE = ".notification/large_result_acks.json"
@@ -90,14 +79,6 @@ _LARGE_RESULT_DISMISS_NOTE = (
     "reminder surface; the original large result remains in chat history and "
     "events.jsonl."
 )
-
-
-def _is_undismissable_system_event(ev: object) -> bool:
-    """Return True iff *ev* is a system event that dismiss must not remove."""
-    return (
-        isinstance(ev, dict)
-        and ev.get("source") in _UNDISMISSABLE_SYSTEM_EVENT_SOURCES
-    )
 
 
 def _is_large_result_event(ev: object) -> bool:
@@ -395,8 +376,6 @@ def clear_large_result_reminders(agent, tool_call_ids) -> list[str]:
         removed = _do_clear()
 
     if removed:
-        # Pending ACTIVE-state payloads may reference the now-removed events.
-        _invalidate_pending_notification_meta(agent)
         _safe_log(
             agent,
             "large_result_reminder_cleared_by_summarize",
@@ -411,14 +390,6 @@ def _safe_log(agent, event_type: str, **fields) -> None:
         agent._log(event_type, **fields)
     except Exception:
         pass
-
-
-def _invalidate_pending_notification_meta(agent) -> None:
-    """Drop pending ACTIVE-state notification metadata after a surface rewrite."""
-    if hasattr(agent, "_pending_notification_meta"):
-        agent._pending_notification_meta = None
-    if hasattr(agent, "_pending_notification_fp"):
-        agent._pending_notification_fp = None
 
 
 def _rewrite_system_events_locked(
@@ -562,8 +533,6 @@ def _ack_and_remove_large_result_events(
         _rewrite_system_events_locked(agent, kept, payload=current_payload)
     except OSError:
         pass
-
-    _invalidate_pending_notification_meta(agent)
 
     _safe_log(
         agent,
@@ -824,11 +793,6 @@ def dismiss_channel(
             except Exception:
                 pass
 
-        # Any pending ACTIVE-state payload may contain the dismissed channel.
-        # Invalidate after a successful clear attempt; stale refusals above
-        # leave newer notification state intact for later delivery.
-        _invalidate_pending_notification_meta(agent)
-
         try:
             agent._log(
                 "notification_dismiss",
@@ -971,8 +935,6 @@ def dismiss_channel(
                 "channel": channel,
                 "message": str(e),
             }
-
-        _invalidate_pending_notification_meta(agent)
 
         try:
             if any(

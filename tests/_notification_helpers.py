@@ -21,17 +21,11 @@ from lingtai_kernel.notifications import notification_fingerprint, publish
 
 @dataclass
 class StubAgent:
-    """Minimal agent stub for the atomic dismiss/notification paths.
-
-    Pre-seeded with stale ``_pending_notification_*`` state so tests can assert
-    that a successful dismiss clears it.
-    """
+    """Minimal agent stub for the atomic dismiss/notification paths."""
 
     _working_dir: Path
     _logs: list[tuple[str, dict]] = field(default_factory=list)
     _notification_fp: tuple = ()
-    _pending_notification_meta: str | None = "stale"
-    _pending_notification_fp: tuple | None = (("soul.json", 1, 2),)
     _system_notification_lock: threading.Lock = field(default_factory=threading.Lock)
 
     def _log(self, event_type: str, **fields: Any) -> None:
