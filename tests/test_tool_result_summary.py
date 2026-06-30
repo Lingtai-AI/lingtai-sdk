@@ -50,6 +50,20 @@ def test_summarizer_system_prompt_untrusted_and_simple():
     assert "extract the useful information" in low
 
 
+def test_summarizer_system_prompt_requests_reasoning_spec_critique():
+    # The summarizer is asked to candidly critique, as plain text, whether the
+    # reasoning/retention spec was specific enough, and — when it is too poor —
+    # to suggest inspecting the preserved raw original. This is a natural-language
+    # instruction only — no fenced JSON, parser, or structured prompt_quality.
+    low = SUMMARIZER_SYSTEM_PROMPT.lower()
+    assert "critiqu" in low
+    assert "retention spec" in low or "reasoning" in low
+    # Raw-original fallback suggestion (Jason #3816): poor reasoning -> inspect raw.
+    assert "raw" in low and ("original" in low or "preserved" in low)
+    assert "prompt_quality" not in low
+    assert "```" not in SUMMARIZER_SYSTEM_PROMPT
+
+
 # --- replacement payload: non-canonical, raw preserved, locator -------------
 
 def test_replacement_is_non_canonical_with_locator():
@@ -288,6 +302,13 @@ def test_summary_true_under_cap_generates_replacement():
     assert "Find where foo is defined" in captured["user_prompt"]
     assert "UNTRUSTED" in captured["user_prompt"]
     assert "untrusted" in captured["system_prompt"].lower()
+    # The user prompt also asks for a brief critique of the reasoning/retention
+    # spec, as plain text — no structured prompt_quality field is introduced —
+    # and to suggest inspecting the raw original when the reason is too poor.
+    up_low = captured["user_prompt"].lower()
+    assert "critiqu" in up_low
+    assert "raw original" in up_low
+    assert "prompt_quality" not in str(out)
     # Raw content text is present in the prompt (so the LLM can summarize it),
     # but NOT in the model-visible replacement.
     assert "foo" in captured["user_prompt"]

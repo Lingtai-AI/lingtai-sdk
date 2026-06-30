@@ -98,6 +98,16 @@ If the summarizer call fails or returns nothing, you get a summary-layer error
 with the retrieval locator — never the raw payload. Rerun with `summary=false`
 if you actually need the raw.
 
+**Reasoning critique as feedback.** A generated `summary=true` result may end
+with a brief, plain-text critique of whether your `reasoning` (the retention
+spec) was specific enough to guide what to keep. Treat it as feedback: sharpen
+your `reasoning` on later `summary=true` calls so the summary keeps what you
+actually need. If the critique says the reasoning was too poor for the summary
+to be trusted, do not rely on the lossy summary — inspect the preserved raw
+original via the retrieval hint / `raw_locator` (by `tool_call_id`, see §4)
+before acting on it. This critique is ordinary summary prose, not a separate
+field — read it, don't parse it.
+
 ## 1 · The principle: progressive disclosure
 
 A raw tool result is the first layer: it is useful while you inspect it. After
