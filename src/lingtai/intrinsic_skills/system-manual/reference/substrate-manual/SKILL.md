@@ -135,7 +135,13 @@ canonical.
    way to handle a result you already know will be large and whose exact raw text
    you do not need; the summary is driven by your `reasoning` field. Hard cap:
    500,000 raw chars, above which no summary is generated and you get a refusal
-   pointing at the preserved raw. See `reference/summarize-manual/SKILL.md`.
+   pointing at the preserved raw. A priori is **lossy** and assumption-driven —
+   it compresses *before* you inspect, so use it only when you already know the
+   narrow facts to keep. It does **not** replace a posteriori for
+   high-information-density daemon outputs, reviews, long reports, or results
+   whose important facts you cannot name in advance; for those, leave
+   `summary=false`, consume, then summarize a posteriori. See
+   `reference/summarize-manual/SKILL.md`.
 2. **A posteriori — agent-guided** (`system(action="summarize")`, below): replace
    a result you have *already seen* and digested with your own summary.
 3. **Molt — context-pressure-triggered** (§5): the whole-conversation

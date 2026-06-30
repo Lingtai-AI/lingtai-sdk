@@ -100,7 +100,13 @@ three deliberate ways to keep it lean, ordered from local to whole-conversation:
    retain. Default is `false`; leave it false when you need exact
    line/file/diff/stderr text. If the raw exceeds 500,000 chars no summary is
    generated and you get a refusal pointing at the preserved raw — narrow and
-   rerun, or rerun with `summary=false`.
+   rerun, or rerun with `summary=false`. A priori is a **lossy**,
+   assumption-driven compression chosen *before* you inspect the result: use it
+   only when you already know the narrow facts to keep. It does **not** replace
+   a-posteriori `summarize`, especially for high-information-density daemon
+   outputs, reviews, long reports, or any result whose important facts you cannot
+   name in advance. For those, leave `summary=false`, consume the result, then
+   summarize a posteriori — or molt for whole-conversation pressure.
 2. **A posteriori — agent-guided.** Use `system(action="summarize")` after you
    have consumed a result and no longer need its raw text. Keep a useful
    agent-authored summary; the original remains recoverable from durable logs by

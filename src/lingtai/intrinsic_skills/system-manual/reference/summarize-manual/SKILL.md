@@ -70,6 +70,17 @@ When to leave it `false` (the default):
 - You need exact line/file/diff/stderr text — anything you will quote, diff,
   patch, or compare character-by-character. Leave `false` and read the raw.
 
+**A priori is lossy and does not replace a posteriori.** `summary=true` is an
+assumption-driven compression chosen *before* you inspect the result: the runtime
+discards everything outside what your `reasoning` named, with no chance for you to
+notice what mattered. Use it only when you already know the narrow facts to
+retain. It is **not** a substitute for a-posteriori `system(action="summarize")`,
+especially for high-information-density results — daemon outputs, code reviews,
+long reports, or anything whose important facts you cannot name in advance.
+Compressing those a priori silently drops the facts you did not know to ask for.
+For them, leave `summary=false`, consume the raw, then summarize a posteriori
+once you know what to keep — or molt when the whole conversation is the pressure.
+
 **Hard cap.** If the raw visible payload exceeds **500,000 characters**, the
 runtime does **not** call the summarizer LLM. Instead you receive a small
 summary-layer refusal that says the result exceeded the cap, that the raw is
