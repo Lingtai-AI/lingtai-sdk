@@ -63,6 +63,7 @@ def get_schema(lang: str = "en") -> dict:
             "offset": {"type": "integer", "description": t(lang, "read.offset"), "default": 1},
             "limit": {"type": "integer", "description": t(lang, "read.limit"), "default": 2000},
             "max_chars": {"type": "integer", "description": t(lang, "read.max_chars")},
+            "summary": {"type": "boolean", "description": t(lang, "tool.summary_option"), "default": False},
         },
         "required": ["file_path"],
     }

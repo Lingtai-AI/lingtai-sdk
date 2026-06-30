@@ -63,5 +63,6 @@
   "daemon.tasks.system_prompt": "可选一次性心令，仅附此 daemon 一务：定其身、约其行、明工具用法、协作边界与安危姿态。留白或省之，即用 daemon 默认之身。可导其行事之法，不可越工具、取消/时限、执行/核准之门。",
   "daemon.tasks.skills": "此 daemon 一务之可选 skill 上下文。字符串列；每项可为 skill 目录（内有 SKILL.md），亦可直指 SKILL.md。相对路径按父灵工作目录解之。daemon runtime 解析诸 skill frontmatter，渲为紧凑 YAML skill list 注入本次心令；以 system_prompt 明其何时/如何用之。",
   "daemon.tasks.mcp": "此 daemon 一务之可选一次性 MCP 注册。对象列；每项为完整 MCP 注册：{name, transport/type: stdio|http；stdio 用 command+args+env，http 用 url+headers}。诸注册以 YAML 序入 daemon 心令；LingTai 后端亦临时启为本务 MCP client，显其 tools。CLI 后端得同一序列化注册为上下文，若其运行时可载 MCP 则自用之。心令中 env/header 密值皆脱敏。",
-  "read.max_chars": "可选：此召 read 内容之字符额。默认十万；逾 runtime 硬限者裁至二十万。大卷设此参数前，先读 read-manual。"
+  "read.max_chars": "可选：此召 read 内容之字符额。默认十万；逾 runtime 硬限者裁至二十万。大卷设此参数前，先读 read-manual。",
+  "tool.summary_option": "可选。默认 false。设 true 时，此 tool 照常运行，原始结果完存于持久日志（可凭 tool_call_id 取回）；然结果入尔上下文前，先以尔 `reasoning` 字段所驱之 LLM 摘要代之——故 `reasoning` 当明言所欲存者。唯料输出甚巨（逾一万字符）且无需精确原文时，方设 true。需精确之行/文件/diff/stderr 原文者，留 false。摘要非权威；原始结果逾五十万字符，则不生摘要，尔得一拒辞，指向所存之原始结果。"
 }

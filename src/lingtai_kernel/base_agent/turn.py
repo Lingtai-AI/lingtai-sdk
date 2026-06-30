@@ -26,9 +26,16 @@ from ..meta_block import (
 )
 from ..sent_message_tracker import SEND_TOOLS, SEND_ACTIONS, CHECK_ACTIONS
 from ..time_veil import now_iso
+from ..token_ledger import append_token_entry
 from .worker_recovery import is_worker_interface_poisoned
 
 logger = get_logger()
+
+# Token-ledger ``source`` label for the one-shot a-priori (``summary=true``)
+# summarizer call. Flat snake_case to match the existing source taxonomy
+# (``notification_sync``, ``retroactive_compaction``, …); see
+# ``token_ledger.py`` module docstring.
+APRIORI_SUMMARY_LEDGER_SOURCE = "summarize_apriori"
 
 
 class EmptyLLMResponseError(RuntimeError):
@@ -1273,7 +1280,114 @@ def _make_tool_executor(agent, guard: LoopGuard) -> ToolExecutor:
             agent, "_summarize_notification_threshold", None
         ),
         reconstruction_event_fn=lambda: build_reconstruction_tool_meta(agent),
+        summarizer_fn=_build_apriori_summarizer_fn(agent),
     )
+
+
+def _record_apriori_summary_usage(agent, response, tool_name, tool_call_id) -> None:
+    """Append the a-priori summarizer call's token usage to the MAIN ledger.
+
+    The one-shot summarizer session is created with ``tracked=False`` and is
+    driven outside ``BaseAgent``'s main-loop ``session.send`` hook, so its
+    ``usage`` would otherwise be invisible to the agent's lifetime totals / cost
+    analytics. We attribute it with ``source="summarize_apriori"`` (see
+    ``APRIORI_SUMMARY_LEDGER_SOURCE``), plus ``tool_name``/``tool_call_id`` so
+    the row is correlatable with the durable tool_result event. This mirrors the
+    soul one-shot accounting in ``intrinsics/soul/consultation._write_soul_tokens``.
+
+    Fail-open on *accounting*: a ledger write failure must never break the
+    summary path (content-side fail-closed is handled by the orchestrator),
+    so all of this is wrapped in try/except — mirroring the main-loop hook in
+    ``base_agent/__init__.py``.
+    """
+    try:
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return
+        working_dir = getattr(agent, "_working_dir", None)
+        if working_dir is None:
+            return
+        service = getattr(agent, "service", None)
+        ledger_path = working_dir / "logs" / "token_ledger.jsonl"
+        model = getattr(service, "model", None)
+        endpoint = getattr(service, "_base_url", None)
+        append_token_entry(
+            ledger_path,
+            input=getattr(usage, "input_tokens", 0),
+            output=getattr(usage, "output_tokens", 0),
+            thinking=getattr(usage, "thinking_tokens", 0),
+            cached=getattr(usage, "cached_tokens", 0),
+            model=model,
+            endpoint=endpoint,
+            extra={
+                "source": APRIORI_SUMMARY_LEDGER_SOURCE,
+                "tool_name": tool_name,
+                "tool_call_id": tool_call_id,
+                "apriori_tool_result_summary": True,
+            },
+        )
+    except Exception as e:  # accounting must never break the summary path
+        name = getattr(agent, "agent_name", "?")
+        logger.warning(
+            f"[{name}] Failed to append a-priori summary token ledger: {e}"
+        )
+
+
+def _build_apriori_summarizer_fn(agent):
+    """Build the one-shot a-priori (``summary=true``) summarizer closure.
+
+    Returns ``None`` when the agent's service has no usable one-shot session
+    gateway. (The orchestrator then *fails closed* to a summary-layer error
+    rather than dumping the raw into context — see ``maybe_summarize_result``.)
+    The closure signature is
+    ``(system_prompt, user_prompt, tool_name, tool_call_id) -> str``; it returns
+    the model's text and records the call's token usage on the MAIN agent's
+    ledger. Errors propagate to the caller, which fails closed to a summary-layer
+    error (never leaking the raw payload).
+
+    Why ``create_session().send()`` and not ``service.generate()``:
+    ``generate`` routes through the adapter's one-shot path
+    (``chat.completions.create`` for the OpenAI-family adapters). On the
+    Codex/ChatGPT-OAuth provider that path targets
+    ``/backend-api/codex/chat/completions``, which is not a served Codex backend
+    endpoint and returns a Cloudflare challenge → ``PermissionDeniedError``
+    (observed live on PR #586). The supported one-shot path on this provider is
+    the same Responses session the main agent uses: ``create_session(...)`` (which
+    builds a ``CodexResponsesSession``) followed by ``session.send(...)``. This is
+    exactly how the kernel's other internal one-shot calls work — see
+    ``intrinsics/soul/inquiry.soul_inquiry`` and
+    ``intrinsics/soul/consultation``. Using it here makes the a-priori summary
+    work on every provider the main agent itself works on.
+    """
+    service = getattr(agent, "service", None)
+    if service is None or not callable(getattr(service, "create_session", None)):
+        return None
+
+    def _summarize(
+        system_prompt: str,
+        user_prompt: str,
+        tool_name: str,
+        tool_call_id: str | None = None,
+    ) -> str:
+        # Untracked one-shot session, no tools, scoped to the agent's own
+        # provider/model so it rides the same supported transport as the main
+        # agent. No ``interface`` → a fresh, empty conversation (the untrusted
+        # tool output and reason are carried entirely in ``user_prompt``).
+        config = getattr(agent, "_config", None)
+        provider = getattr(config, "provider", None)
+        model = getattr(config, "model", None) or getattr(service, "model", None)
+        session = service.create_session(
+            system_prompt=system_prompt,
+            tools=None,
+            model=model,
+            tracked=False,
+            provider=provider,
+        )
+        response = session.send(user_prompt)
+        _record_apriori_summary_usage(agent, response, tool_name, tool_call_id)
+        return getattr(response, "text", "") or ""
+
+    return _summarize
 
 
 def _check_external_send(agent, tool_calls, tool_results=None) -> None:

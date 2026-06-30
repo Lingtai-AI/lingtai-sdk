@@ -9,7 +9,11 @@ One agent's ledger is a *mixed* stream: ordinary main-chat turns
 (``source="main"``), soul fan-out (``source="soul"``), involuntary
 control-flow splices (``source="tc_wake"``, ``"heal"``,
 ``"notification_sync"``, ``"retroactive_compaction"``, ``"summarize"``),
-legacy untagged rows, and — on a *parent* agent's ledger — rows emitted by
+one-shot a-priori tool-result summarizer calls (``source="summarize_apriori"``;
+the ``summary=true`` tool option — written from
+``base_agent/turn._record_apriori_summary_usage``, carrying ``tool_name`` and
+``tool_call_id``), legacy untagged rows, and — on a *parent* agent's ledger —
+rows emitted by
 the daemons it spawned (``source="daemon"`` plus ``em_id``/``run_id``;
 written by ``lingtai.core.daemon.run_dir.RunDir.append_tokens``). The daemon
 rows in a parent ledger are **intentionally retained**: the parent paid for

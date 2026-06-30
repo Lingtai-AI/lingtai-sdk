@@ -63,5 +63,6 @@
   "daemon.tasks.system_prompt": "可选的一次性行为契约，只附加到此 daemon 任务：角色、约束、工具使用策略、协作边界与安全姿态。留空或省略表示使用默认 daemon 身份。它可以引导 daemon 的工作方式，但不能覆盖工具可用性、取消/超时限制或工具执行/审批 gate。",
   "daemon.tasks.skills": "此 daemon 任务的可选 skill 上下文。字符串数组；每项可以是 skill 目录（内含 SKILL.md），也可以是直接的 SKILL.md 文件路径。相对路径按父 agent 工作目录解析。daemon runtime 会解析每个 skill 的 frontmatter，并把紧凑 YAML skill list 注入本次 prompt；用 system_prompt 说明何时/如何应用这些 skills。",
   "daemon.tasks.mcp": "此 daemon 任务的可选一次性 MCP 注册。对象数组；每项为完整 MCP 注册对象：{name, transport/type: stdio|http，stdio 使用 command+args+env，http 使用 url+headers}。这些注册会以 YAML 序列化进 daemon prompt；LingTai backend 还会将其启动为本次任务专属 MCP client 并暴露其 tools。CLI backends 会收到同一份序列化注册作为上下文，如其运行时支持 MCP 可自行加载。prompt 中的 env/header secret 会被脱敏。",
-  "read.max_chars": "可选的单次读取字符预算。默认 100 000；超过 runtime 硬上限的值会被 clamp 到 200 000。大文件设置此参数前先读 read-manual。"
+  "read.max_chars": "可选的单次读取字符预算。默认 100 000；超过 runtime 硬上限的值会被 clamp 到 200 000。大文件设置此参数前先读 read-manual。",
+  "tool.summary_option": "可选。默认 false。为 true 时，该 tool 照常执行，原始结果会完整保存到持久日志（可按 tool_call_id 取回），但在结果进入你的上下文之前，会被一段由你的 `reasoning` 字段驱动的 LLM 生成摘要替换——所以请在 `reasoning` 中明确说明要保留什么。仅当预期输出很大（>10k 字符）且你不需要精确原文时才设为 true。需要精确的行/文件/diff/stderr 原文时请保持 false。摘要非权威；若原始结果超过 500,000 字符则不生成摘要，你会收到一条指向已保存原始结果的拒绝信息。"
 }

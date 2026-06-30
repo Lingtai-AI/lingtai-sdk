@@ -123,11 +123,41 @@ For channel allowlist, envelope shape, protected channels, stale-version/force
 semantics, and the undismissable large-result reminders, read
 `reference/notification-manual/SKILL.md`.
 
+### Three context-compression / continuation modes
+
+LingTai has three deliberate ways to keep context lean, from local to
+whole-conversation. All three preserve the raw original in durable logs; none is
+canonical.
+
+1. **A priori — reasoning-guided** (`summary=true` on `bash`/`read`/`grep`): the
+   tool runs normally and the raw is preserved, but the result is replaced by a
+   generated summary *before* it ever enters your context. This is the cheapest
+   way to handle a result you already know will be large and whose exact raw text
+   you do not need; the summary is driven by your `reasoning` field. Hard cap:
+   500,000 raw chars, above which no summary is generated and you get a refusal
+   pointing at the preserved raw. A priori is **lossy** and assumption-driven —
+   it compresses *before* you inspect, so use it only when you already know the
+   narrow facts to keep. It does **not** replace a posteriori for
+   high-information-density daemon outputs, reviews, long reports, or results
+   whose important facts you cannot name in advance; for those, leave
+   `summary=false`, consume, then summarize a posteriori. See
+   `reference/summarize-manual/SKILL.md`.
+2. **A posteriori — agent-guided** (`system(action="summarize")`, below): replace
+   a result you have *already seen* and digested with your own summary.
+3. **Molt — context-pressure-triggered** (§5): the whole-conversation
+   continuation / reset, the stronger boundary when per-result summarization
+   cannot keep context healthy.
+
+Pick a priori when you can predict bulk and don't need the raw; a posteriori when
+you've already consumed a result; molt when the conversation as a whole is the
+problem.
+
 ### `summarize`
 
-`summarize` is the system action for tool-result context hygiene: after you have
-consumed a completed prior tool result and no longer need the raw text visible,
-record a compact summary replacement for its raw payload regardless of length. The
+`summarize` is the a-posteriori system action for tool-result context hygiene:
+after you have consumed a completed prior tool result and no longer need the raw
+text visible, record a compact summary replacement for its raw payload regardless
+of length. The
 summary preserves the conclusion, evidence, anchors, validation, risks, and next
 steps while lowering active context. Runtime high-attention guidance for this
 behavior is carried in `_meta.guidance`, including the resident 0.75

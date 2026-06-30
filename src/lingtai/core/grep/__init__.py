@@ -25,6 +25,7 @@ def get_schema(lang: str = "en") -> dict:
             "path": {"type": "string", "description": t(lang, "grep.path")},
             "glob": {"type": "string", "description": t(lang, "grep.glob"), "default": "*"},
             "max_matches": {"type": "integer", "description": t(lang, "grep.max_matches"), "default": 200},
+            "summary": {"type": "boolean", "description": t(lang, "tool.summary_option"), "default": False},
         },
         "required": ["pattern"],
     }

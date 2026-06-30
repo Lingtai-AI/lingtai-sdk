@@ -23,6 +23,7 @@ from .tool_result_artifacts import (
     spill_oversized_result as _spill_oversized_result,
 )
 from .tool_call_guard import GuardDecision, ToolCallGuard, ToolProposal
+from .tool_result_summary import maybe_summarize_result as _maybe_summarize_result
 from .tool_timing import ToolTimer
 from .types import UnknownToolError
 
@@ -77,6 +78,7 @@ class ToolExecutor:
         tool_call_guard: ToolCallGuard | None = None,
         summarize_notification_threshold: int | None = None,
         reconstruction_event_fn: Callable[[], dict | None] | None = None,
+        summarizer_fn: Callable[[str, str, str, str | None], str] | None = None,
     ) -> None:
         self._dispatch_fn = dispatch_fn
         self._make_tool_result_fn = make_tool_result_fn
@@ -98,6 +100,14 @@ class ToolExecutor:
         # to the first dict result it stamps; the source is one-shot, so only
         # one result per reconstruction carries the event.
         self._reconstruction_event_fn = reconstruction_event_fn
+        # A-priori (reasoning-driven) summarizer. When a tool call sets
+        # ``summary=true``, ``_maybe_apriori_summary`` replaces the raw visible
+        # payload with an LLM-generated summary AFTER the raw is durably logged
+        # and BEFORE it reaches the wire. ``summarizer_fn(system_prompt,
+        # user_prompt, tool_name, tool_call_id) -> str``. When None,
+        # ``summary=true`` fails closed to a summary-layer error (the raw is
+        # never dumped into context); see ``maybe_summarize_result``.
+        self._summarizer_fn = summarizer_fn
 
     def _tool_trace_id(self, tc: ToolCall) -> str:
         """Return the stable trace id for one top-level tool-call execution.
@@ -614,6 +624,34 @@ class ToolExecutor:
             status="error", elapsed_ms=elapsed,
         )
 
+    def _maybe_apriori_summary(
+        self,
+        result: Any,
+        *,
+        args: dict,
+        tool_name: str,
+        tool_call_id: str | None,
+    ) -> Any:
+        """Apply the a-priori (``summary=true``) summary replacement.
+
+        Must be called AFTER the raw result is durably logged (so the raw is
+        preserved by ``tool_call_id``) and BEFORE ``_build_result_message``
+        turns it into the wire message. When ``summary`` is not true the raw
+        result is returned unchanged — current behavior is preserved exactly.
+        When ``summary=true`` but no summarizer is wired this **fails closed**:
+        it returns a summary-layer error/refusal carrying the raw-retrieval
+        locator and never places the raw payload into context (the raw stays
+        retrievable by ``tool_call_id``). See ``maybe_summarize_result``.
+        """
+        return _maybe_summarize_result(
+            result,
+            args=args,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            summarizer_fn=self._summarizer_fn,
+            logger_fn=self._log,
+        )
+
     def _build_result_message(
         self,
         tool_name: str,
@@ -913,6 +951,7 @@ class ToolExecutor:
             )
 
             if isinstance(result, dict) and result.get("intercept"):
+                # Intercept results carry kernel control flags; never summarize.
                 intercept_text = result.get("text", "")
                 result_msg = self._build_result_message(
                     tc.name, result, tool_call_id=tc_id, tool_trace_id=trace_id,
@@ -920,8 +959,15 @@ class ToolExecutor:
                 )
                 return result_msg, True, intercept_text
 
+            # A-priori summary: the raw result is already durably logged above
+            # (preserved by tool_call_id); replace the visible payload with the
+            # generated summary before it reaches the wire. No-op unless the call
+            # set summary=true and a summarizer is wired.
+            visible = self._maybe_apriori_summary(
+                result, args=args, tool_name=tc.name, tool_call_id=tc_id,
+            )
             result_msg = self._build_result_message(
-                tc.name, result, tool_call_id=tc_id, tool_trace_id=trace_id,
+                tc.name, visible, tool_call_id=tc_id, tool_trace_id=trace_id,
                 status=status, elapsed_ms=timer.elapsed_ms,
             )
 
@@ -1342,8 +1388,17 @@ class ToolExecutor:
                 result = results_map[i]
                 status = result.get("status", "success") if isinstance(result, dict) else "success"
                 _elapsed = elapsed_map.get(i, _elapsed_ms_from_result(result))
+                # A-priori summary: raw already durably logged in Phase 2; replace
+                # the visible payload before the wire. Intercept results are
+                # guarded out inside the summarizer, but keep error/intercept
+                # control checks below against the RAW result, not the summary.
+                visible = result
+                if not (isinstance(result, dict) and result.get("intercept")):
+                    visible = self._maybe_apriori_summary(
+                        result, args=args, tool_name=tc.name, tool_call_id=tc_id,
+                    )
                 result_msg = self._build_result_message(
-                    tc.name, result, tool_call_id=tc_id, tool_trace_id=trace_id,
+                    tc.name, visible, tool_call_id=tc_id, tool_trace_id=trace_id,
                     status=status, elapsed_ms=_elapsed,
                 )
                 tool_results.append((i, result_msg))

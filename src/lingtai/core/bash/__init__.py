@@ -206,6 +206,11 @@ def get_schema(lang: str = "en") -> dict:
                 "type": "string",
                 "description": t(lang, "bash.job_id"),
             },
+            "summary": {
+                "type": "boolean",
+                "description": t(lang, "tool.summary_option"),
+                "default": False,
+            },
         },
         "required": [],  # command required only for action=run; job_id for poll/cancel
     }
