@@ -70,7 +70,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 
 **`network.py`**: `build_network` :306 · `_discover_agents` :143 · `_build_avatar_edges` :168
 
-**`venv_resolve.py`**: `resolve_venv` :19 · `venv_python` :40 · `ensure_package` :94
+**`venv_resolve.py`**: `resolve_venv` :19 · `venv_python` :40
 
 > Config-resolution helpers (`load_jsonc`/`resolve_env`/`resolve_paths`/`_resolve_capabilities`) and preset-connectivity probing (`check_connectivity`/`check_many`) live in the kernel — import directly from `lingtai_kernel.config_resolve` / `lingtai_kernel.preset_connectivity`. The former wrapper-side compatibility shims were removed (no back-compat shims per repo policy).
 

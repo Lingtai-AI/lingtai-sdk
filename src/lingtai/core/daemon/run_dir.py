@@ -567,7 +567,6 @@ class DaemonRunDir:
     # Anything not in this map is reported with role=None (still listed).
     _MANIFEST_ROLES = {
         "daemon.json": "status",
-        "artifacts.json": "manifest",
         "result.txt": "result",
         ".prompt": "prompt",
         ".heartbeat": "heartbeat",
@@ -669,8 +668,10 @@ class DaemonRunDir:
                 except OSError:
                     continue
                 rel = fp.relative_to(run_path).as_posix()
-                # Skip atomic-write tempfiles — transient and never artifacts.
+                # Skip atomic-write tempfiles and the manifest itself.
                 if rel.endswith(".tmp"):
+                    continue
+                if rel == "artifacts.json":
                     continue
                 if rel in seen:
                     continue

@@ -128,6 +128,17 @@ def test_mark_done_writes_manifest_with_result(tmp_path):
     assert "artifacts.json" not in by_path
 
 
+def test_rebuild_manifest_skips_existing_manifest_file(tmp_path):
+    rd = _make_run_dir(tmp_path)
+    rd.mark_done("final report text")
+
+    rd.write_manifest()
+
+    m = json.loads(rd.manifest_path.read_text())
+    paths = {a["path"] for a in m["artifacts"]}
+    assert "artifacts.json" not in paths
+
+
 def test_mark_failed_writes_manifest(tmp_path):
     rd = _make_run_dir(tmp_path)
     rd.mark_failed(RuntimeError("boom"))
