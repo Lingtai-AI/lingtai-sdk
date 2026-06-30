@@ -25,6 +25,8 @@ from uuid import uuid4
 import logging
 import threading
 
+from .. import _skill
+
 if TYPE_CHECKING:
     from .service import TelegramService
 
@@ -44,84 +46,8 @@ def _load_notification_header_template() -> str:
 # catalog entry, while the full body stays behind action='manual'.
 # ---------------------------------------------------------------------------
 
-_SKILL_FILENAME = "SKILL.md"
-
-
-def _split_frontmatter(text: str) -> tuple[dict[str, str], str]:
-    """Split a SKILL.md into (frontmatter dict, body markdown).
-
-    Tiny dependency-free parser for the leading ``---`` YAML block. Handles the
-    flat ``key: value`` and ``key: |``/``key: >`` block-scalar forms used by our
-    skill frontmatter; it does not attempt to be a general YAML parser. Returns
-    an empty mapping and the original text when no frontmatter is present.
-    """
-    if not text.startswith("---"):
-        return {}, text
-    lines = text.splitlines(keepends=True)
-    # lines[0] is the opening '---'; find the closing fence.
-    end = None
-    for i in range(1, len(lines)):
-        if lines[i].rstrip("\n").strip() == "---":
-            end = i
-            break
-    if end is None:
-        return {}, text
-
-    fm_lines = [ln.rstrip("\n") for ln in lines[1:end]]
-    body = "".join(lines[end + 1:]).lstrip("\n")
-
-    meta: dict[str, str] = {}
-    key: str | None = None
-    block_parts: list[str] = []
-
-    def _flush() -> None:
-        if key is not None:
-            meta[key] = " ".join(" ".join(block_parts).split())
-
-    for raw in fm_lines:
-        if key is not None and (raw.startswith((" ", "\t")) or not raw.strip()):
-            # Continuation line of a block scalar (key: | / key: >).
-            block_parts.append(raw.strip())
-            continue
-        if ":" in raw and not raw.startswith((" ", "\t")):
-            _flush()
-            k, _, v = raw.partition(":")
-            key = k.strip()
-            block_parts = []
-            v = v.strip()
-            if v in ("|", ">", "|-", ">-", "|+", ">+"):
-                # Block scalar — value continues on indented lines below.
-                continue
-            block_parts.append(v.strip("'\""))
-    _flush()
-    return meta, body
-
-
-def _load_skill() -> tuple[dict[str, str], str, str]:
-    """Load the bundled SKILL.md → (frontmatter, body, path)."""
-    resource = resources.files(__package__).joinpath(_SKILL_FILENAME)
-    text = resource.read_text(encoding="utf-8")
-    frontmatter, body = _split_frontmatter(text)
-    return frontmatter, body, str(resource)
-
-
-_SKILL_FRONTMATTER, _SKILL_BODY, _SKILL_PATH = _load_skill()
-
-
-def _manual_action_description() -> str:
-    """Build the schema 'manual' action line from the skill frontmatter.
-
-    Injects the skill name + description (the frontmatter/catalog entry) so the
-    tool schema advertises the skill while the full body stays progressive-
-    disclosure behind action='manual'.
-    """
-    name = _SKILL_FRONTMATTER.get("name", "telegram-mcp-manual")
-    description = _SKILL_FRONTMATTER.get("description", "")
-    return (
-        f"manual: progressive-disclosure usage manual (skill '{name}') — "
-        "call this (no other args) to pull the full bundled SKILL.md. "
-        f"{description}"
-    ).strip()
+_SKILL_NAME = "telegram-mcp-manual"
+_SKILL_FRONTMATTER, _SKILL_BODY, _SKILL_PATH = _skill.load_skill(__package__)
 
 
 _NOTIFICATION_HEADER_TEMPLATE = _load_notification_header_template()
@@ -285,7 +211,7 @@ SCHEMA = {
                 "To receive messages from that user, their Telegram user ID must also be in allowed_users. "
                 "remove_contact: remove a contact (alias or chat_id). "
                 "accounts: list configured bot accounts. "
-                + _manual_action_description()
+                + _skill.manual_action_description(_SKILL_FRONTMATTER, _SKILL_NAME)
             ),
         },
         "account": {
@@ -1623,11 +1549,6 @@ class TelegramManager:
     # tool-side list; do not add assets/references fields here.
 
     def _manual(self) -> dict:
-        return {
-            "status": "ok",
-            "action": "manual",
-            "skill": _SKILL_FRONTMATTER.get("name", "telegram-mcp-manual"),
-            "metadata": dict(_SKILL_FRONTMATTER),
-            "path": _SKILL_PATH,
-            "manual": _SKILL_BODY,
-        }
+        return _skill.manual_payload(
+            _SKILL_FRONTMATTER, _SKILL_BODY, _SKILL_PATH, _SKILL_NAME
+        )

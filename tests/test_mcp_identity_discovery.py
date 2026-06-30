@@ -15,6 +15,7 @@ a (hypothetical) malformed identity file on disk contains them.
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,11 @@ from lingtai.core.mcp import (
     IDENTITY_SAFE_ACCOUNT_KEYS,
     read_identities,
 )
+from lingtai.mcp_servers import _identity
+from lingtai.mcp_servers.feishu.service import FeishuService
+from lingtai.mcp_servers.telegram.service import TelegramService
+from lingtai.mcp_servers.wechat.manager import WechatManager
+from lingtai.mcp_servers.whatsapp.manager import WhatsAppManager
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
 
@@ -68,6 +74,78 @@ def _mk_agent(tmp_path: Path, *, addons=None):
         capabilities={"mcp": {}},
         addons=addons,
     ), workdir
+
+
+def _provider_with_accounts(
+    cls, workdir_attr: str, workdir: Path, accounts: list[dict]
+):
+    provider = object.__new__(cls)
+    setattr(provider, workdir_attr, workdir)
+    provider.account_details = lambda: accounts
+    return provider
+
+
+# ---------------------------------------------------------------------------
+# Producer helpers used by curated messaging addons
+# ---------------------------------------------------------------------------
+
+def test_shared_identity_payload_top_level_keys_and_last_verified_at():
+    accounts = [
+        {"alias": "older", "last_verified_at": "2026-06-24T09:59:00+00:00"},
+        {"alias": "newer", "last_verified_at": "2026-06-24T10:01:00+00:00"},
+        {"alias": "unverified"},
+    ]
+
+    assert _identity.identity_payload(
+        "telegram",
+        accounts,
+        generated_at="2026-06-24T10:05:00+00:00",
+    ) == {
+        "schema": "lingtai.mcp.identity.v1",
+        "mcp": "telegram",
+        "generated_at": "2026-06-24T10:05:00+00:00",
+        "accounts": accounts,
+        "last_verified_at": "2026-06-24T10:01:00+00:00",
+    }
+
+
+@pytest.mark.parametrize(
+    ("cls", "workdir_attr", "name"),
+    [
+        (TelegramService, "_working_dir", "telegram"),
+        (FeishuService, "_working_dir", "feishu"),
+        (WechatManager, "_working_dir", "wechat"),
+        (WhatsAppManager, "working_dir", "whatsapp"),
+    ],
+)
+def test_curated_identity_provider_methods_keep_payload_path_and_write_contract(
+    tmp_path, cls, workdir_attr, name
+):
+    accounts = [
+        {"alias": "main", "last_verified_at": "2026-06-24T09:59:00+00:00"},
+        {"alias": "ops", "last_verified_at": "2026-06-24T10:02:00+00:00"},
+    ]
+    provider = _provider_with_accounts(cls, workdir_attr, tmp_path, accounts)
+
+    payload = provider.identity_payload()
+    assert payload["schema"] == "lingtai.mcp.identity.v1"
+    assert payload["mcp"] == name
+    assert payload["accounts"] is accounts
+    assert payload["last_verified_at"] == "2026-06-24T10:02:00+00:00"
+    datetime.fromisoformat(payload["generated_at"])
+
+    expected_path = tmp_path / "system" / "mcp_identities" / f"{name}.json"
+    assert provider.identity_path() == expected_path
+
+    written_path = provider.write_identity_file()
+    assert written_path == expected_path
+    text = written_path.read_text(encoding="utf-8")
+    assert text.endswith("\n")
+    written = json.loads(text)
+    assert written["schema"] == "lingtai.mcp.identity.v1"
+    assert written["mcp"] == name
+    assert written["accounts"] == accounts
+    assert written["last_verified_at"] == "2026-06-24T10:02:00+00:00"
 
 
 # ---------------------------------------------------------------------------

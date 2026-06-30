@@ -5,6 +5,7 @@ related_files:
   - src/lingtai/core/mcp/ANATOMY.md
   - src/lingtai/mcp_catalog.json
   - src/lingtai/mcp_servers/__init__.py
+  - src/lingtai/mcp_servers/_identity.py
   - src/lingtai/mcp_servers/_skill.py
   - src/lingtai/mcp_servers/cloud_mail/manager.py
   - src/lingtai/mcp_servers/feishu/manager.py
@@ -31,16 +32,16 @@ Curated MCP server package implementations shipped inside the `lingtai` Python d
 | File / folder | Role |
 |---|---|
 | `_skill.py` | Shared bundled-skill helper: re-exports the kernel-owned `split_frontmatter` from `lingtai_kernel._frontmatter` (one impl shared with the prompt-section catalog; kernel never imports the wrapper), `load_skill()` loads package `SKILL.md`, `manual_action_description()` injects frontmatter into the schema, and `manual_payload()` returns the manual body + absolute path without sidecar lists (`_skill.py:36-82`). |
-| `telegram/` | Telegram MCP. It predates `_skill.py` and keeps an inline SKILL.md loader/manual payload with the same minimal contract (`telegram/manager.py:40-118`, `telegram/manager.py:1616-1633`). |
-| `imap/`, `feishu/`, `wechat/`, `whatsapp/`, `cloud_mail/` | Curated MCPs using `_skill.py` for their `action="manual"` payloads (`imap/manager.py:322-333`, `feishu/manager.py:454-466`, `wechat/manager.py:504-516`, `whatsapp/manager.py:174-186`, `cloud_mail/manager.py:213-225`). |
+| `_identity.py` | Shared public-identity envelope/path/write helper for curated messaging MCPs: builds the `lingtai.mcp.identity.v1` document, computes `system/mcp_identities/<name>.json`, and performs the newline-terminated atomic JSON write. Provider-specific account fields and redaction stay in each provider. |
+| `telegram/`, `imap/`, `feishu/`, `wechat/`, `whatsapp/`, `cloud_mail/` | Curated MCPs using `_skill.py` for their `action="manual"` payloads (`telegram/manager.py`, `imap/manager.py`, `feishu/manager.py`, `wechat/manager.py`, `whatsapp/manager.py`, `cloud_mail/manager.py`). Messaging MCPs with runtime account identity also delegate their identity envelope/path/write policy to `_identity.py`. |
 | Per-package `SKILL.md` | The human/agent-facing bundled manual. If a manual has sidecars, the sidecar inventory and relative paths live in this markdown, not in the tool payload. |
 | `pyproject.toml` package-data entries | Ships every curated MCP `SKILL.md`; `reference/**/*` and `assets/**/*` are also packaged for future sidecar files (`pyproject.toml:81-86`). |
 
 ## Connections
 
 - Catalog/script launchers (`pyproject.toml:43-49`) start these servers as subprocess MCPs; agents activate them through the generic MCP capability (`src/lingtai/core/mcp/ANATOMY.md`).
-- Manager schemas include `manual` in each action enum and use either `_skill.manual_action_description()` or Telegram's inline equivalent to advertise the bundled skill without loading the full body into the resident schema (`_skill.py:44-58`, `telegram/manager.py:111-124`).
-- Tests pin the manual contract and package-data sidecar support in `tests/test_mcp_skill_manuals.py` and Telegram's legacy path in `tests/test_telegram_rich_formatting.py`.
+- Manager schemas include `manual` in each action enum and use `_skill.manual_action_description()` to advertise the bundled skill without loading the full body into the resident schema.
+- Tests pin the manual contract, package-data sidecar support, and Telegram parity in `tests/test_mcp_skill_manuals.py` and `tests/test_telegram_rich_formatting.py`.
 
 ## Composition
 
@@ -48,10 +49,9 @@ Parent: `src/lingtai/` wrapper package (`src/lingtai/ANATOMY.md`). Sibling wrapp
 
 ## State
 
-The package itself is mostly code + packaged manuals. Runtime state is per-agent and server-specific: e.g. message caches, contacts, inbox replay guards, or credential-derived identities live under the agent workdir or `.secrets/`, not in `src/lingtai/mcp_servers/`. The shared manual helper has no persistent state.
+The package itself is mostly code + packaged manuals. Runtime state is per-agent and server-specific: e.g. message caches, contacts, inbox replay guards, or credential-derived identities live under the agent workdir or `.secrets/`, not in `src/lingtai/mcp_servers/`. The shared manual and identity helpers have no persistent state of their own.
 
 ## Notes
 
 - **Manual sidecar minimal contract:** `action="manual"` returns the main `SKILL.md` body, parsed metadata, and the main `SKILL.md` absolute `path` only. Concrete `assets/` and `reference/` lists MUST NOT be returned as structured tool fields; `SKILL.md` is the single source of truth for what sidecars exist and how to follow their relative paths.
 - **Packaging discipline:** when adding manual sidecars, put their relative paths in `SKILL.md` and keep the package-data globs for `reference/**/*` / `assets/**/*` so wheels contain them (`pyproject.toml:81-86`).
-- **Telegram exception:** Telegram still has an inline copy of the helper logic for historical reasons; keep its comments/tests aligned with `_skill.py` until it is deliberately migrated.

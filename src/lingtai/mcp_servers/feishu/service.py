@@ -8,12 +8,10 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from .. import _identity
 from .account import FeishuAccount
 
 logger = logging.getLogger(__name__)
@@ -77,45 +75,16 @@ class FeishuService:
 
     def identity_payload(self) -> dict[str, Any]:
         """Build the non-secret MCP identity document for this service."""
-        now = datetime.now(timezone.utc).isoformat()
-        accounts = self.account_details()
-        verified = [
-            a.get("last_verified_at") for a in accounts if a.get("last_verified_at")
-        ]
-        payload: dict[str, Any] = {
-            "schema": "lingtai.mcp.identity.v1",
-            "mcp": "feishu",
-            "generated_at": now,
-            "accounts": accounts,
-        }
-        if verified:
-            payload["last_verified_at"] = max(str(v) for v in verified)
-        return payload
+        return _identity.identity_payload("feishu", self.account_details())
 
     def identity_path(self) -> Path:
-        return self._working_dir / "system" / "mcp_identities" / "feishu.json"
+        return _identity.identity_path(self._working_dir, "feishu")
 
     def write_identity_file(self) -> Path:
         """Atomically write public, non-secret MCP identity metadata."""
-        path = self.identity_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(
-            dir=str(path.parent),
-            prefix=f".{path.name}.",
-            suffix=".tmp",
+        return _identity.write_identity_file(
+            self.identity_path(), self.identity_payload()
         )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(self.identity_payload(), f, indent=2, ensure_ascii=False)
-                f.write("\n")
-            os.replace(tmp, path)
-        except Exception:
-            try:
-                os.unlink(tmp)
-            except FileNotFoundError:
-                pass
-            raise
-        return path
 
     def _contact_count(self, alias: str) -> int | None:
         contacts_path = self._working_dir / "feishu" / alias / "contacts.json"

@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import json
-import os
 import re
-import tempfile
 import threading
 from datetime import datetime, timezone
 from importlib import resources
@@ -15,7 +13,7 @@ from uuid import uuid4
 from .client import WhatsAppClient
 from .redaction import redact_account
 from .webhook import extract_events
-from .. import _skill
+from .. import _identity, _skill
 
 
 def _load_notification_header_template() -> str:
@@ -361,44 +359,18 @@ class WhatsAppManager:
 
     def identity_payload(self) -> dict[str, Any]:
         """Build the non-secret MCP identity document for this service."""
-        accounts = self.account_details()
-        verified = [
-            a.get("last_verified_at") for a in accounts if a.get("last_verified_at")
-        ]
-        payload: dict[str, Any] = {
-            "schema": "lingtai.mcp.identity.v1",
-            "mcp": "whatsapp",
-            "generated_at": _utcnow(),
-            "accounts": accounts,
-        }
-        if verified:
-            payload["last_verified_at"] = max(str(v) for v in verified)
-        return payload
+        return _identity.identity_payload(
+            "whatsapp", self.account_details(), generated_at=_utcnow()
+        )
 
     def identity_path(self) -> Path:
-        return self.working_dir / "system" / "mcp_identities" / "whatsapp.json"
+        return _identity.identity_path(self.working_dir, "whatsapp")
 
     def write_identity_file(self) -> Path:
         """Atomically write public, non-secret MCP identity metadata."""
-        path = self.identity_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(
-            dir=str(path.parent),
-            prefix=f".{path.name}.",
-            suffix=".tmp",
+        return _identity.write_identity_file(
+            self.identity_path(), self.identity_payload()
         )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(self.identity_payload(), f, indent=2, ensure_ascii=False)
-                f.write("\n")
-            os.replace(tmp, path)
-        except Exception:
-            try:
-                os.unlink(tmp)
-            except FileNotFoundError:
-                pass
-            raise
-        return path
 
     def ingest_webhook(self, alias: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
         events = extract_events(payload)

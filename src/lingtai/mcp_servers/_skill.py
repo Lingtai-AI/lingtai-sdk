@@ -6,10 +6,7 @@ body on demand (progressive disclosure), while the frontmatter ``name`` +
 ``description`` are injected into the tool schema's ``manual`` action line as a
 catalog entry. This module factors out the tiny frontmatter parser, the loader,
 the schema catalog line, and the ``action='manual'`` payload so every MCP can
-share one understandable implementation instead of copying Telegram's.
-
-The original Telegram MCP keeps its own inline copy of this logic for historical
-reasons; new/curated MCPs use this shared helper.
+share one understandable implementation.
 """
 
 from __future__ import annotations

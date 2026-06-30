@@ -3,8 +3,7 @@
 Each curated MCP ships a standard skill file (``SKILL.md``: YAML frontmatter +
 markdown body) in its package folder, exposes an ``action='manual'`` that returns
 the full body plus parsed metadata, and injects the frontmatter name/description
-into its tool schema as a progressive-disclosure catalog entry. This mirrors the
-Telegram MCP pattern (covered by tests/test_telegram_rich_formatting.py).
+into its tool schema as a progressive-disclosure catalog entry.
 
 The ``manual`` action is account-independent and reads only module-level
 constants, so we call it on a bare instance (``object.__new__``) without standing
@@ -19,6 +18,7 @@ import pytest
 
 from lingtai.mcp_servers import _skill
 
+from lingtai.mcp_servers.telegram import manager as telegram_mgr
 from lingtai.mcp_servers.feishu import manager as feishu_mgr
 from lingtai.mcp_servers.wechat import manager as wechat_mgr
 from lingtai.mcp_servers.imap import manager as imap_mgr
@@ -28,6 +28,7 @@ from lingtai.mcp_servers.whatsapp import manager as whatsapp_mgr
 
 # (module, package-folder name, manual-method name, expected skill name)
 _CASES = [
+    (telegram_mgr, "telegram", "_manual", "telegram-mcp-manual"),
     (feishu_mgr, "feishu", "_manual", "feishu-mcp-manual"),
     (wechat_mgr, "wechat", "_handle_manual", "wechat-mcp-manual"),
     (imap_mgr, "imap", "_manual", "imap-mcp-manual"),
@@ -36,6 +37,7 @@ _CASES = [
 ]
 
 _MANAGER_CLS = {
+    "telegram": "TelegramManager",
     "feishu": "FeishuManager",
     "wechat": "WechatManager",
     "imap": "IMAPMailManager",
