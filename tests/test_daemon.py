@@ -2743,6 +2743,115 @@ def test_ask_codex_silent_subprocess_enforces_timeout(tmp_path, monkeypatch):
     _run_silent_subprocess_ask_test(tmp_path, monkeypatch, "codex")
 
 
+def test_ask_stream_workers_reuse_shared_stderr_drainer(tmp_path, monkeypatch):
+    """The subprocess ask workers share the runtime stderr drainer.
+
+    This pins the narrow dedupe: helper thread names stay backend-specific,
+    the worker still joins the drain handle, and failure messages still use
+    the captured stderr tail.
+    """
+    from lingtai.core import daemon as daemon_mod
+
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    published: list[tuple] = []
+    monkeypatch.setattr(
+        mgr, "_publish_daemon_notification",
+        lambda em_id, *, status, text, run_dir=None:
+            published.append((em_id, status, text)),
+    )
+
+    drains = []
+    calls = []
+
+    class FakeDrain:
+        def __init__(self, lines):
+            self.lines = lines
+            self.joined = False
+            self.join_timeout = None
+
+        def join(self, timeout=2.0):
+            self.joined = True
+            self.join_timeout = timeout
+
+    def fake_spawn_stderr_drainer(proc, run_dir, *, thread_name):
+        drain = FakeDrain([f"{thread_name}: stderr tail"])
+        drains.append(drain)
+        calls.append((proc, run_dir, thread_name))
+        return drain
+
+    monkeypatch.setattr(
+        daemon_mod, "_spawn_stderr_drainer", fake_spawn_stderr_drainer,
+    )
+
+    cases = [
+        (
+            "em-claude",
+            "claude-code",
+            "daemon-claude-ask-stderr-em-claude",
+            lambda entry, proc, run_dir:
+                mgr._run_ask_claude_code_stream(
+                    "em-claude", entry, proc, run_dir,
+                ),
+        ),
+        (
+            "em-codex",
+            "codex",
+            "daemon-codex-ask-stderr-em-codex",
+            lambda entry, proc, run_dir:
+                mgr._run_ask_codex_stream("em-codex", entry, proc, run_dir),
+        ),
+        (
+            "em-opencode",
+            "opencode",
+            "daemon-opencode-ask-stderr-em-opencode",
+            lambda entry, proc, run_dir:
+                mgr._run_ask_opencode_stream(
+                    "em-opencode", entry, proc, run_dir, "opencode",
+                ),
+        ),
+        (
+            "em-cursor",
+            "cursor",
+            "daemon-cursor-ask-stderr-em-cursor",
+            lambda entry, proc, run_dir:
+                mgr._run_ask_cursor_stream("em-cursor", entry, proc, run_dir),
+        ),
+    ]
+
+    for em_id, backend, expected_thread_name, run_worker in cases:
+        proc = _FakeProc()
+        proc.finish(returncode=1)
+        run_dir = _make_run_dir(agent, em_id=em_id)
+        entry = {
+            "future": MagicMock(done=MagicMock(return_value=False)),
+            "task": "x",
+            "start_time": time.time(),
+            "cancel_event": threading.Event(),
+            "timeout_event": threading.Event(),
+            "followup_buffer": "",
+            "followup_lock": threading.Lock(),
+            "run_dir": run_dir,
+            "backend": backend,
+            "ask_in_flight": True,
+            "ask_future": None,
+        }
+        mgr._emanations[em_id] = entry
+
+        result = run_worker(entry, proc, run_dir)
+
+        assert result["status"] == "error"
+        assert expected_thread_name in result["message"]
+        assert entry["ask_in_flight"] is False
+
+    assert [thread_name for _, _, thread_name in calls] == [
+        case[2] for case in cases
+    ]
+    assert all(drain.joined for drain in drains)
+    assert all(drain.join_timeout == 2.0 for drain in drains)
+    assert len(published) == len(cases)
+
+
 def test_ask_worker_exception_is_logged(tmp_path, monkeypatch):
     """An unexpected exception in the ask worker must be logged via
     daemon_ask_worker_error and recorded into the run_dir as a cli_output
