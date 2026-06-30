@@ -161,8 +161,8 @@ def _clear(agent, args: dict) -> dict:
     """Force a full molt on another agent — karma-gated.
 
     Writes a .clear signal; the target's heartbeat loop picks it up and
-    invokes eigen.context_forget, which archives chat history and injects
-    a system-authored recovery summary pointing at pad/codex/inbox.
+    invokes psyche.context_forget, which archives chat history and injects
+    a system-authored recovery summary pointing at pad/knowledge/inbox.
     """
     from ...handshake import is_alive
     err = _check_karma_gate(agent, "clear", args)

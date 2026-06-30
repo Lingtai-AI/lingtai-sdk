@@ -1,7 +1,7 @@
 ---
 name: psyche-manual
 description: |
-  Router and operational guide for the psyche tool — molt, pad management, session journaling, and post-wipe recovery. Read this when: you are about to molt; you need to tend the four durable stores; you want guidance on writing a good summary or session journal; you wake up after a system-performed wipe with no summary; or you need to understand keep_tool_calls, keep_last, and pad.append. Routes consequential molt handoffs to assets/molt-template.md while keeping routine guidance compact.
+  Router and operational guide for the psyche tool — molt, pad management, session journaling, and post-wipe recovery. Read this when: you are about to molt; you need to tend the four durable stores; you want guidance on writing a good summary or session journal; you wake up after a system-performed wipe with a system-authored summary; or you need to understand keep_tool_calls, keep_last, and pad.append. Routes consequential molt handoffs to assets/molt-template.md while keeping routine guidance compact.
 version: 1.1.0
 last_changed_at: "2026-06-28T02:02:37-07:00"
 ---
@@ -76,7 +76,7 @@ detail belongs in the child.
 
 **The sub-entry `<YYYY-MM-DD>-molt-<molt-count>-<slug>/KNOWLEDGE.md` is the substance** — write it as the molt-history record of the segment, *before* you molt. Use `assets/session-journal-entry-template.md` from this skill directory for the frontmatter (including the `molt_count` field **and the required `type: session-journal` marker**) and section layout. This sub-entry's path is what you pass to `psyche(context, molt, session_journal_path=...)`, and the kernel validates the marker before letting the molt proceed (see §6). It is a journal, not a transcript — capture, in roughly this shape:
 
-**YAML frontmatter safety:** `name` and `description` are real YAML, not free-form text. Prefer the template's `description: >-` block scalar. If you write a one-line value containing a colon followed by a space (for example `description: Session record for codex molt 53: runtime relay`), YAML treats the second colon as a mapping separator and the molt gate rejects the file. Quote the value or use the block scalar, then retry the same `psyche(context, molt, session_journal_path=...)` call.
+**YAML frontmatter safety:** `name` and `description` are real YAML, not free-form text. Prefer the template's `description: >-` block scalar. If you write a one-line value containing a colon followed by a space (for example `description: Session record for runtime relay: cache handoff`), YAML treats the second colon as a mapping separator and the molt gate rejects the file. Quote the value or use the block scalar, then retry the same `psyche(context, molt, session_journal_path=...)` call.
 
 - **Top-of-entry timestamp + TL;DR** *(soft convention)* — open the body with a visible timestamp and a one- or two-line gist before the sections, so the next you can date and grasp the entry at a glance; the molt gate validates only frontmatter, never this
 - **What the segment was about** — the original ask, the framing
@@ -202,12 +202,13 @@ When this reminder appears, batch already-digested noisy history before summariz
 
 ## 8. Post-Wipe Recovery
 
-If you wake up after a *system-performed* molt (triggered by karma, signal file, or operator — NOT by context-pressure reminders), there is no summary, only a system notice. Your character and pad were reloaded, but conversation history is gone. To reconstruct:
+If you wake up after a *system-performed* molt (triggered by karma, `.clear`, or operator — NOT by context-pressure reminders), the post-molt notification points at a system-authored summary in `system/summaries/`. Your character and pad were reloaded, and recent conversation may be gone except for any entries the system explicitly kept. To reconstruct:
 
-1. `email(check)` — see what arrived while you were down
-2. Check `knowledge/session-journal/KNOWLEDGE.md` — your session history index
-3. `skills(action="info")` — confirm which skills you have
-4. `bash({"command": "tail -n 200 logs/events.jsonl | grep ..."})` — surgical reads if needed
+1. Read the `summary_path` from the post-molt notification
+2. `email(check)` — see what arrived while you were down
+3. Check `knowledge/session-journal/KNOWLEDGE.md` — your session history index
+4. `skills(action="info")` — confirm which skills you have
+5. `bash({"command": "tail -n 200 logs/events.jsonl | grep ..."})` — surgical reads if needed
 
 Reconstruct your situation from these sources.
 

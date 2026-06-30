@@ -1,6 +1,6 @@
-"""Tests for eigen intrinsic — agent pad management (edit/load).
+"""Tests for psyche intrinsic — agent pad management (edit/load).
 
-Migrated from memory intrinsic tests. Tests the pad object within eigen.
+Migrated from memory intrinsic tests. Tests the pad object within psyche.
 """
 from __future__ import annotations
 
@@ -114,7 +114,7 @@ def test_existing_system_files_not_overwritten(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Handler tests (edit / load via eigen)
+# Handler tests (edit / load via psyche)
 # ---------------------------------------------------------------------------
 
 

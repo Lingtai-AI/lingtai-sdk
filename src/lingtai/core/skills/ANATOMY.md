@@ -21,7 +21,7 @@ Skills capability — per-agent skill catalog and skill-manual surface. This is 
 
 ## Components
 
-- `skills/__init__.py` — the capability implementation. `get_description` (`__init__.py:296-297`), `get_schema` (`__init__.py:300-311`), `setup` (`__init__.py:314-348`), `_reconcile` (`__init__.py:205-289`), and scanner helpers (`__init__.py:53-198`).
+- `skills/__init__.py` — the capability implementation. `get_description` (`__init__.py:166-167`), `get_schema` (`__init__.py:170-181`), `setup` (`__init__.py:184-219`), `_reconcile` (`__init__.py:75-159`), and path/scanner helpers (`__init__.py:50-68`).
 - `skills/manual/` — `skills-manual` skill documentation, template assets, and validator script. The validator can optionally require `last_changed_at` for LingTai-maintained skill bundles.
 
 ## Connections
@@ -40,10 +40,10 @@ The `skills` tool exposes one action:
 
 ## State
 
-- Skill storage remains `<agent>/.library/` for compatibility: `intrinsic/` is CLI-managed and `custom/` is agent-authored (`__init__.py:217-220`).
+- Skill storage remains `<agent>/.library/` for compatibility: `intrinsic/` is CLI-managed and `custom/` is agent-authored (`__init__.py:87-90`).
 - Config path source is canonical `manifest.capabilities.skills.paths` (`../../init_schema.py:247-268`).
-- Prompt state is the `skills` section (`__init__.py:255-261`).
-- Health check expects `.library/intrinsic/capabilities/skills/SKILL.md` and reports `skills_manual`, with `library_manual` retained as a response compatibility key (`__init__.py:263-282`).
+- Prompt state is the `skills` section (`__init__.py:125-131`).
+- Health check expects `.library/intrinsic/capabilities/skills/SKILL.md` and reports `skills_manual`, with `library_manual` retained as a response compatibility key (`__init__.py:133-152`).
 
 ## Notes
 

@@ -523,10 +523,11 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0,
                     keep_last: int | None = None) -> dict:
     """Forced molt with a system-authored summary.
 
-    Called by base_agent from three paths:
+    Called by base_agent from the .clear signal path. The ``source`` value
+    records the forced-molt origin:
       - source="warning_ladder" (default): post-molt-warning exhaustion
       - source="aed": after max AED retries, before declaring ASLEEP
-      - source=<name>: a .forget signal file dropped externally (karma-gated)
+      - source=<name>: a .clear signal file dropped externally
 
     Same archive-and-rebuild machinery as agent-called molt, but the molt
     pair is synthesized end-to-end here: we mint a wire id, build a

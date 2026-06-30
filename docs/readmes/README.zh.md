@@ -31,7 +31,7 @@ pip install lingtai-kernel
 | 组件 | 用途 |
 |------|------|
 | **BaseAgent** | 内核调度器——生命周期、消息循环、工具派发 |
-| **四种内置工具** | mail（进程间通信）、system（生命周期）、eigen（手记/身份）、soul（内心声音） |
+| **四种内置工具** | mail（进程间通信）、system（生命周期）、psyche（手记/身份）、soul（内心声音） |
 | **LLM 协议** | `LLMService` 抽象基类、`ChatSession` 抽象基类、供应商无关类型 |
 | **服务** | 文件系统信件传输、JSONL 结构化日志 |
 | **WorkingDir** | 目录管理——锁、git、清单 |

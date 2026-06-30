@@ -4,7 +4,7 @@ Shallow (初生): Copy init.json to a new working dir, strip name, launch.
     The avatar gets the same LLM config + capabilities but no identity,
     no pad, no history.  A fresh life — but its own, not yours.
 
-Deep (二重身): Copy the entire working dir (system/, codex/, exports/)
+Deep (二重身): Copy identity files (system/), knowledge/, and exports/
     plus init.json to a new dir, strip name + history, launch.
     The avatar is a doppelgänger — same character, pad, knowledge —
     but starts a fresh conversation.

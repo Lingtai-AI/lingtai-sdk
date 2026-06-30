@@ -1,6 +1,7 @@
 ---
 related_files:
   - src/lingtai/ANATOMY.md
+  - src/lingtai/core/_catalog.py
   - src/lingtai/core/knowledge/CONTRACT.md
   - src/lingtai/core/knowledge/__init__.py
   - src/lingtai/core/knowledge/manual/SKILL.md
@@ -23,9 +24,11 @@ the regular `read` tool.
 
 ## Components
 
-- `knowledge/__init__.py` — the capability implementation. `_parse_frontmatter`,
-  `_scan`, `_build_catalog_yaml`, `_reconcile`, `get_description`, `get_schema`,
-  and `setup` live here.
+- `knowledge/__init__.py` — the capability implementation. It owns legacy JSON
+  migration, `_reconcile`, `get_description`, `get_schema`, and `setup`, and
+  imports shared Markdown-catalog scanning/rendering from `core/_catalog.py`.
+- `core/_catalog.py` — shared frontmatter parser, recursive Markdown catalog
+  scanner, and YAML catalog renderer used by both `knowledge` and `skills`.
 - `knowledge/CONTRACT.md` — public behavior contract: tool surface, on-disk
   layout, prompt injection, knowledge/skill directionality, anchored claims,
   and verification matrix.

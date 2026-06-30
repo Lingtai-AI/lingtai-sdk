@@ -32,7 +32,7 @@ Once spawned, it is **detached** — a new life. It has its own working director
 | Type | What it gets | When to use |
 |------|-------------|-------------|
 | `shallow` (default, 初生) | `init.json` only — blank slate | Most tasks. The avatar starts clean and learns what it needs. |
-| `deep` (二重身) | Full copy of your lingtai (character), pad, and codex | When the avatar needs to hit the ground running with your accumulated knowledge. |
+| `deep` (二重身) | Full copy of your lingtai (character), pad, and knowledge | When the avatar needs to hit the ground running with your accumulated knowledge. |
 
 ## 3. Naming Rules
 

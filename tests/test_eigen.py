@@ -1,4 +1,4 @@
-"""Tests for eigen intrinsic — core self-management (pad + context)."""
+"""Tests for psyche intrinsic — core self-management (pad + context)."""
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -16,7 +16,7 @@ from tests._molt_helpers import write_session_journal as _write_session_journal
 
 
 def test_psyche_pad_edit(tmp_path):
-    """eigen pad edit writes to system/pad.md."""
+    """psyche pad edit writes to system/pad.md."""
     agent = BaseAgent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
     )
@@ -48,7 +48,7 @@ def test_psyche_pad_edit_empty_clears(tmp_path):
 
 
 def test_psyche_pad_load(tmp_path):
-    """eigen pad load injects into system prompt."""
+    """psyche pad load injects into system prompt."""
     agent = BaseAgent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
     )
@@ -68,7 +68,7 @@ def test_psyche_pad_load(tmp_path):
 
 
 def test_psyche_pad_load_empty(tmp_path):
-    """eigen pad load with empty file deletes section."""
+    """psyche pad load with empty file deletes section."""
     agent = BaseAgent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
     )
@@ -116,7 +116,7 @@ def test_psyche_molt_uses_summary(tmp_path):
             [TextBlock(text="Hi there.")],
         )
         # Simulate the assistant turn that emitted the molt — it must be
-        # in the live interface before eigen runs (the wire layer records
+        # in the live interface before psyche runs (the wire layer records
         # assistant tool_calls before dispatching). _context_molt locates
         # this block by tc.id and replays it into the fresh session.
         journal_path = _write_session_journal(agent)
@@ -265,7 +265,7 @@ def test_eigen_unknown_action(tmp_path):
 
 
 def test_eigen_is_intrinsic_not_pad(tmp_path):
-    """eigen replaces pad in intrinsics."""
+    """psyche replaces pad in intrinsics."""
     agent = BaseAgent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
     )
@@ -279,7 +279,7 @@ def test_eigen_is_intrinsic_not_pad(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_eigen_name_sets_agent_name(tmp_path):
-    """eigen name action sets agent true name."""
+    """psyche name action sets agent true name."""
     agent = BaseAgent(service=make_mock_service(), working_dir=tmp_path / "test")
     assert agent.agent_name is None
     result = agent._intrinsics["psyche"]({"object": "name", "action": "set", "content": "悟空"})
@@ -290,7 +290,7 @@ def test_eigen_name_sets_agent_name(tmp_path):
 
 
 def test_eigen_name_rejects_second_set(tmp_path):
-    """eigen name action fails if already named."""
+    """psyche name action fails if already named."""
     agent = BaseAgent(service=make_mock_service(), working_dir=tmp_path / "test", agent_name="alice")
     result = agent._intrinsics["psyche"]({"object": "name", "action": "set", "content": "bob"})
     assert "error" in result
@@ -299,7 +299,7 @@ def test_eigen_name_rejects_second_set(tmp_path):
 
 
 def test_eigen_name_rejects_empty(tmp_path):
-    """eigen name action fails with empty name."""
+    """psyche name action fails with empty name."""
     agent = BaseAgent(service=make_mock_service(), working_dir=tmp_path / "test")
     result = agent._intrinsics["psyche"]({"object": "name", "action": "set", "content": ""})
     assert "error" in result

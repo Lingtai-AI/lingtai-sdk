@@ -54,9 +54,10 @@ The two capabilities are structurally isomorphic but physically separate:
 | Visibility | portable / shareable | private / agent-owned |
 | May reference local paths, mail ids, logs | no | yes |
 
-Two separate handlers register two separate tools. The scanner and frontmatter
-parser logic mirror each other but live in their own modules so each can evolve
-independently without leaking private semantics into the public skill catalog.
+Two separate handlers register two separate tools. Shared Markdown catalog
+mechanics live in `src/lingtai/core/_catalog.py`; each capability keeps its own
+tool, storage root, prompt section, and semantic contract so private knowledge
+does not leak into the public skill catalog.
 
 ## Tool surface
 

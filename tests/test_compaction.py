@@ -186,7 +186,7 @@ class TestEstimateContextTokens:
 
 
 
-# TestCheckAndCompact removed — check_and_compact was replaced by molt (eigen intrinsic).
+# TestCheckAndCompact removed — check_and_compact was replaced by molt (psyche intrinsic).
 # Compaction is now handled by SessionManager internally, not via LLMService method.
 
 
