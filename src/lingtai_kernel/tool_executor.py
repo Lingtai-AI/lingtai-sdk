@@ -636,9 +636,12 @@ class ToolExecutor:
 
         Must be called AFTER the raw result is durably logged (so the raw is
         preserved by ``tool_call_id``) and BEFORE ``_build_result_message``
-        turns it into the wire message. When ``summary`` is not true, or no
-        summarizer is wired, the raw result is returned unchanged — current
-        behavior is preserved exactly.
+        turns it into the wire message. When ``summary`` is not true the raw
+        result is returned unchanged — current behavior is preserved exactly.
+        When ``summary=true`` but no summarizer is wired this **fails closed**:
+        it returns a summary-layer error/refusal carrying the raw-retrieval
+        locator and never places the raw payload into context (the raw stays
+        retrievable by ``tool_call_id``). See ``maybe_summarize_result``.
         """
         return _maybe_summarize_result(
             result,
