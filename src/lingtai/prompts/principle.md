@@ -47,7 +47,7 @@ The system prompt is a layered operating contract. This opening section names th
 | `mcp` | Optional external-integration catalog: registered MCP services and their ownership/configuration boundaries. |
 | `skills` | Progressive-disclosure catalog of reusable procedures; load the relevant skill only when the task needs it. |
 | `knowledge` | Private durable memory catalog: project facts, decisions, journals, and local context that survive molt. |
-| `identity` | Mechanical runtime facts: name, address, birth, privileges, stamina, model/provider, and message surfaces. It is not the self-authored LingTai/character. |
+| `identity` | Mechanical runtime facts: name, address, birth, privileges, model/provider, and message surfaces. It is not the self-authored LingTai/character. |
 | `character` | The self-authored LingTai/灵台 section (called `character` in prompt order): specialties, working style, standing relationships, accomplishments, and hard-won rules. |
 | `pad` | Current working state: active tasks, plans, handoffs, and pinned references that should reload across molts. |
 

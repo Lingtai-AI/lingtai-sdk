@@ -75,7 +75,6 @@ def _build_manifest(agent) -> dict:
         "started_at": agent._started_at,
         "admin": agent._admin,
         "language": agent._config.language,
-        "stamina": agent._config.stamina,
         "state": agent._state.value,
         "soul_delay": agent._soul_delay,
         "soul_voice": getattr(agent._config, "soul_voice", "inner"),
@@ -193,7 +192,6 @@ def _status(agent) -> dict:
         mail_addr = agent._mail_service.address
 
     uptime = time.monotonic() - agent._uptime_anchor if agent._uptime_anchor is not None else 0.0
-    stamina_left = max(0.0, agent._config.stamina - uptime) if agent._uptime_anchor is not None else None
 
     usage = agent.get_token_usage()
 
@@ -260,15 +258,13 @@ def _status(agent) -> dict:
             "last_heartbeat": heartbeat if heartbeat > 0 else None,
             "heartbeat_age_seconds": heartbeat_age_seconds,
             "uptime_seconds": round(uptime, 1),
-            "stamina": agent._config.stamina,
-            "stamina_left": round(stamina_left, 1) if stamina_left is not None else None,
             "state": agent._state.value,
             "state_changed_at": state_changed_at,
             "last_progress_at": last_progress_at,
             "no_progress_seconds": no_progress_seconds,
         },
         keys=(
-            "current_time", "started_at", "uptime_seconds", "stamina", "stamina_left",
+            "current_time", "started_at", "uptime_seconds",
             "state_changed_at", "last_progress_at", "no_progress_seconds",
         ),
     )

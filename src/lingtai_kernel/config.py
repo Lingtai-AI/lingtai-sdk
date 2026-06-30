@@ -43,6 +43,11 @@ MOLT_PRESSURE_THRESHOLD = MOLT_NOTICE_THRESHOLD  # legacy alias; not a separate 
 MOLT_URGENCY_THRESHOLD = MOLT_NOTICE_THRESHOLD  # legacy alias; not a separate stage
 DEFAULT_SOUL_DELAY_SECONDS = 999999999.0
 
+# Hidden runtime housekeeping: an agent that remains IDLE for this long is moved
+# to ASLEEP. This is deliberately kernel-fixed and not surfaced in init.json,
+# prompts, status, or tool metadata.
+IDLE_SLEEP_TIMEOUT_SECONDS = 86400.0
+
 
 @dataclass
 class AgentConfig:
@@ -63,10 +68,10 @@ class AgentConfig:
     thinking_budget: int | None = None
     thinking: str = "high"  # reasoning/thinking tier passed to the main persistent LLM session
     data_dir: str | None = None  # for cache files (e.g., model context windows)
-    soul_delay: float = DEFAULT_SOUL_DELAY_SECONDS  # seconds idle before soul whispers; large value (> stamina) = effectively off
+    soul_delay: float = DEFAULT_SOUL_DELAY_SECONDS  # seconds idle before soul whispers; large value = effectively off
     language: str = "en"  # legacy language field retained for compatibility; prompt.py no longer injects prose from it
     activeness: str | None = "balanced"  # legacy responsiveness posture field; prompt.py no longer injects text from it
-    stamina: float = 86400.0  # agent stamina in seconds; set at birth, not changeable by the agent
+    stamina: float = IDLE_SLEEP_TIMEOUT_SECONDS  # legacy ignored constructor field; hidden idle timeout uses the kernel constant above
     time_awareness: bool = True  # experimental: False strips LLM-visible timestamps (perception nerf)
     timezone_awareness: bool = True  # when True, now_iso emits OS local time; when False, UTC
     context_limit: int | None = None  # max context tokens; None = use model default

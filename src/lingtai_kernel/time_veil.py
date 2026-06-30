@@ -12,7 +12,7 @@ TIME_KEYS: tuple[str, ...] = (
     "received_at", "sent_at", "deliver_at", "time",
     "scheduled_at", "last_sent_at", "estimated_finish",
     "current_time", "started_at", "uptime_seconds",
-    "stamina", "stamina_left", "ts", "date",
+    "ts", "date",
 )
 
 

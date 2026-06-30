@@ -54,7 +54,7 @@ def test_system_wired_in_agent(tmp_path):
 # ---------------------------------------------------------------------------
 # agent.status() — internal Python API; writes .status.json for TUI/portal.
 # The LLM-callable system(action="show") was removed; identity now ships in
-# the cached system prompt and stamina ships on every tool result via meta.
+# the cached system prompt and runtime metadata ships on every tool result via _meta.
 # These tests cover the status() shape contract that TUI/portal depend on.
 # ---------------------------------------------------------------------------
 

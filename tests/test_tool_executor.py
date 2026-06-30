@@ -900,10 +900,12 @@ def test_tool_executor_uses_meta_fn_for_stamping():
     assert not intercepted
     assert meta_calls["n"] == 1
     payload = results[0]["result"]
-    # meta keys are recorded under _runtime_pending (not flat, not a real
-    # _meta.agent_meta block — that is attached only at the turn boundary).
+    # current_time is promoted into permanent tool_meta; other runtime keys are
+    # recorded under _runtime_pending until the turn boundary promotes them into
+    # latest-only agent_meta.
     pending = payload["_runtime_pending"]
-    assert pending["current_time"] == "FAKE-TS"
+    assert "current_time" not in pending
+    assert payload["_meta"]["tool_meta"]["current_time"] == "FAKE-TS"
     assert pending["future_field"] == 1
     assert "elapsed_ms" in pending
     assert "agent_meta" not in payload.get("_meta", {})
@@ -983,9 +985,11 @@ def test_tool_executor_meta_fn_covers_parallel_path():
     assert meta_calls["n"] == 2
     for r in results:
         payload = r["result"]
-        # meta keys recorded under _runtime_pending
+        # current_time is promoted into permanent tool_meta; elapsed_ms remains
+        # pending for latest-only agent_meta.
         pending = payload["_runtime_pending"]
-        assert pending["current_time"] == "FAKE-TS"
+        assert "current_time" not in pending
+        assert payload["_meta"]["tool_meta"]["current_time"] == "FAKE-TS"
         assert "elapsed_ms" in pending
         assert "agent_meta" not in payload.get("_meta", {})
         assert "current_time" not in payload

@@ -599,7 +599,7 @@ def _run_loop(agent) -> None:
 
                 # Wake up
                 agent._asleep.clear()
-                agent._cancel_event.clear()  # clear stale sleep/stamina signal
+                agent._cancel_event.clear()  # clear stale sleep signal
                 agent._set_state(AgentState.ACTIVE, reason=f"woke from asleep: {msg.type}")
                 agent._log("wake", trigger=msg.type)
                 agent._reset_uptime()

@@ -1797,7 +1797,7 @@ def test_attach_active_runtime_stamps_latest_with_state_and_guidance():
     assert holder is block.content
     meta = block.content["_meta"]
     agent_meta = meta["agent_meta"]
-    assert agent_meta["current_time"] == "T"
+    assert "current_time" not in agent_meta
     assert agent_meta["elapsed_ms"] == 12
     # active_turn_tool_calls is sourced from the guard and lives under agent_meta.
     assert agent_meta["active_turn_tool_calls"] == 3
@@ -1858,7 +1858,7 @@ def test_attach_active_runtime_moves_to_latest_and_clears_prior():
     assert new_holder is second.content
     # previous loses its agent_meta/guidance (envelope dropped when empty)
     assert "_meta" not in first.content or "agent_meta" not in first.content["_meta"]
-    assert second.content["_meta"]["agent_meta"]["current_time"] == "T2"
+    assert "current_time" not in second.content["_meta"]["agent_meta"]
     assert second.content["_meta"]["agent_meta"]["active_turn_tool_calls"] == 2
 
 
@@ -1871,7 +1871,8 @@ def test_attach_active_runtime_picks_latest_dict_in_batch():
     holder = attach_active_runtime(agent, [earlier, middle, string_tail], prior_holder=None)
 
     assert holder is middle.content
-    assert middle.content["_meta"]["agent_meta"]["current_time"] == "M"
+    assert "current_time" not in middle.content["_meta"]["agent_meta"]
+    assert middle.content["_meta"]["agent_meta"]["elapsed_ms"] == 2
     # The earlier dict gets no agent_meta, and its pending scaffolding is stripped.
     assert "_meta" not in earlier.content
     assert "_runtime_pending" not in earlier.content
@@ -1918,7 +1919,7 @@ def test_attach_active_runtime_omits_counter_when_no_guard():
 
     assert holder is block.content
     agent_meta = block.content["_meta"]["agent_meta"]
-    assert agent_meta["current_time"] == "T"
+    assert "current_time" not in agent_meta
     assert "active_turn_tool_calls" not in agent_meta
 
 

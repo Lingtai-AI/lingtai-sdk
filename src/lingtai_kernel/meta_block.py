@@ -77,6 +77,7 @@ TOOL_META_COMMENT_KEY = "comment"
 TOOL_META_COMMENT_OVERFLOW_KEY = "overflow"
 TOOL_META_TOKEN_USAGE_KEY = "token_usage"
 TOOL_META_TOKEN_USAGE_PENDING_KEY = "_tool_meta_token_usage"
+TOOL_META_CURRENT_TIME_KEY = "current_time"
 
 
 def build_tool_meta_overflow_comment(tool_call_id: str | None) -> dict:
@@ -396,8 +397,8 @@ def build_meta_readme() -> dict:
     """
     return {
         TOOL_META_KEY: (
-            "Per-result tool/call metadata (id, timestamp, char_count, "
-            "elapsed_ms, optional token_usage). Present on every tool result; "
+            "Per-result tool/call metadata (id, timestamp, optional current_time, "
+            "char_count, elapsed_ms, optional token_usage). Present on every tool result; "
             "permanent. token_usage is the single unified token-diagnostics block "
             "(see meta_guidance.token_efficiency). It is one flat dict combining a "
             "provider-round token/cache snapshot — keys input, cache_miss, cache_rate, "
@@ -422,8 +423,8 @@ def build_meta_readme() -> dict:
             "state — distinct from agent_meta.context.molt."
         ),
         AGENT_META_KEY: (
-            "Agent/current-state snapshot (time, stamina, "
-            "active_turn_tool_calls, current_tool_result_chars, optional "
+            "Agent/current-state snapshot (elapsed_ms, active_turn_tool_calls, "
+            "current_tool_result_chars, optional "
             "adapter_comment). Numeric context/token diagnostics are deliberately "
             "not duplicated here: provider-round context_usage/window and session "
             "token totals live permanently in tool_meta.token_usage instead (see "
@@ -617,7 +618,7 @@ def build_meta_guidance(agent) -> str:
       * the active adapter's *static* runtime rules (from
         :func:`static_adapter_comment`), if any.
 
-    Dynamic per-result state (tool_meta, current_time/context/stamina,
+    Dynamic per-result state (tool_meta, latest context/molt hints,
     notifications, current_tool_result_chars, adapter epoch counters, cache
     ledger summary, …) is deliberately NOT rendered here — it stays in the tail
     ``_meta`` so this section can remain a stable, cache-friendly prefix.
@@ -1090,21 +1091,20 @@ def build_meta(agent) -> dict:
     Shape::
 
         {
-            "current_time": "<iso>",         # absent when time-blind
+            "current_time": "<iso>",         # transient; promoted into tool_meta
             "context": {
                 "molt": str,                 # optional natural-language sustained-pressure reminder
             },
-            "stamina_left_seconds": float,   # session time remaining; -1 if unstarted
             "current_tool_result_chars": dict, # total + top formal tool results >1000 chars
         }
 
-    Numeric context/token diagnostics are not duplicated in ``agent_meta``;
+    ``current_time`` is not promoted into ``agent_meta``; ``ToolExecutor`` moves
+    it into the permanent per-result ``tool_meta`` block when time awareness is
+    enabled. Numeric context/token diagnostics are not duplicated in ``agent_meta``;
     provider-round ``context_usage``/``window`` and session token stats live in
     ``tool_meta.token_usage``.  The ``context`` sub-object is emitted only when
     it carries the sustained-pressure ``molt`` reminder.
 
-    Sentinel handling remains for ``stamina_left_seconds`` — ``-1`` means the
-    agent hasn't called ``start()`` yet (no uptime anchor).
     """
     meta: dict = {}
     ts = now_iso(agent)
@@ -1123,18 +1123,6 @@ def build_meta(agent) -> dict:
     tool_meta_token_usage = build_tool_meta_token_usage(agent)
     if tool_meta_token_usage:
         meta[TOOL_META_TOKEN_USAGE_PENDING_KEY] = tool_meta_token_usage
-
-    # Stamina — transient runtime resource, can't sit in the cached system
-    # prompt. Surface here so the agent sees how much session time it has
-    # left on every tool result. Sentinel -1 when
-    # the agent hasn't started yet (uptime_anchor unset).
-    uptime_anchor = getattr(agent, "_uptime_anchor", None)
-    stamina = getattr(getattr(agent, "_config", None), "stamina", None)
-    if uptime_anchor is not None and stamina is not None:
-        uptime = _time.monotonic() - uptime_anchor
-        meta["stamina_left_seconds"] = round(max(0.0, stamina - uptime), 1)
-    else:
-        meta["stamina_left_seconds"] = -1
 
     meta["current_tool_result_chars"] = current_tool_result_chars(agent)
 
@@ -1624,6 +1612,10 @@ def attach_active_runtime(
 
     agent_meta: dict = dict(pending)
     agent_meta.pop(TOOL_META_TOKEN_USAGE_PENDING_KEY, None)
+    # Defensive backstop: normal ToolExecutor paths promote current_time into
+    # tool_meta before the turn boundary.  Hand-built tests or future producers
+    # should still not be able to reintroduce time into latest-only agent_meta.
+    agent_meta.pop(TOOL_META_CURRENT_TIME_KEY, None)
     calls = _active_turn_tool_calls(agent)
     if calls is not None:
         agent_meta["active_turn_tool_calls"] = calls

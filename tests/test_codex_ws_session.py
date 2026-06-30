@@ -1073,7 +1073,7 @@ def test_resident_meta_movement_does_not_break_incremental_delta():
         ToolResultBlock(
             id="call_1",
             name="do_x",
-            content={"ok": True, "_meta": {"agent_meta": {"stamina": 9}, "tool_meta": {"id": "call_1"}}},
+            content={"ok": True, "_meta": {"agent_meta": {"runtime_probe": 9}, "tool_meta": {"id": "call_1"}}},
         )
     ])  # assistant emits call_2
 
@@ -1087,7 +1087,7 @@ def test_resident_meta_movement_does_not_break_incremental_delta():
         ToolResultBlock(
             id="call_2",
             name="do_x",
-            content={"ok": True, "_meta": {"agent_meta": {"stamina": 8}, "tool_meta": {"id": "call_2"}}},
+            content={"ok": True, "_meta": {"agent_meta": {"runtime_probe": 8}, "tool_meta": {"id": "call_2"}}},
         )
     ])
 

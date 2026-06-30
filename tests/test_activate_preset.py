@@ -88,7 +88,7 @@ def test_activate_preset_substitutes_llm_and_capabilities(tmp_path):
 
 
 def test_activate_preset_preserves_other_manifest_fields(tmp_path):
-    """admin, soul, stamina, agent_name, etc. survive the swap."""
+    """admin, soul, agent_name, etc. survive; legacy stamina is removed."""
     wd, plib = _make_workdir_and_lib(tmp_path)
     a = _make_probe_agent(wd)
     a._activate_preset(str(plib / "minimax.json"))
@@ -98,7 +98,7 @@ def test_activate_preset_preserves_other_manifest_fields(tmp_path):
     assert m["agent_name"] == "alice"
     assert m["admin"]["karma"] is True
     assert m["soul"]["delay"] == 120
-    assert m["stamina"] == 3600
+    assert "stamina" not in m
 
 
 def test_activate_preset_unknown_raises_key_error(tmp_path):

@@ -504,7 +504,6 @@ class TelegramAccount:
         ctx = tokens_status.get("context", {})
         agent_state = runtime.get("state", agent_meta.get("state", "?"))
         uptime = runtime.get("uptime_seconds", 0)
-        stamina_left = runtime.get("stamina_left", 0)
         started_at = runtime.get("started_at") or started_at
 
         # ---- 4. Discover all agents and read token ledgers + lifecycle ----
@@ -634,8 +633,6 @@ class TelegramAccount:
             "suspended": "🔴", "stuck": "⚠️",
         }.get(str(agent_state).lower(), "❓")
         lines.append(f"  State: {state_emoji} {agent_state}")
-        if stamina_left > 0:
-            lines.append(f"  Stamina: {fmt_duration(stamina_left)} left")
         usage_pct = ctx.get("usage_pct", 0)
         total_t = ctx.get("total_tokens", 0)
         window = ctx.get("window_size", context_limit)

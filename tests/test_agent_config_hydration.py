@@ -6,7 +6,13 @@ from unittest.mock import MagicMock
 
 from lingtai.agent import Agent, build_agent_config
 from lingtai_kernel.base_agent import BaseAgent
-from lingtai_kernel.config import AgentConfig, MOLT_PRESSURE_THRESHOLD
+from lingtai_kernel.config import (
+    AgentConfig,
+    IDLE_SLEEP_TIMEOUT_SECONDS,
+    MOLT_PRESSURE_THRESHOLD,
+)
+from lingtai_kernel.base_agent.lifecycle import _maybe_sleep_after_idle_timeout
+from lingtai_kernel.state import AgentState
 
 
 def _service():
@@ -72,8 +78,40 @@ def test_bare_agent_config_and_base_agent_defaults(tmp_path):
     assert agent._config.molt_pressure == MOLT_PRESSURE_THRESHOLD
 
     manifest = json.loads((agent.working_dir / ".agent.json").read_text())
-    assert manifest["stamina"] == 86400.0
-    assert "24h" in agent._prompt_manager.read_section("identity")
+    assert "stamina" not in manifest
+    identity = agent._prompt_manager.read_section("identity")
+    assert "stamina_left_seconds" not in identity
+    assert "session lasts" not in identity
+
+
+def test_hidden_idle_timeout_moves_idle_agent_to_asleep(tmp_path, monkeypatch):
+    agent = BaseAgent(
+        service=_service(),
+        agent_name="idle-timeout-agent",
+        working_dir=tmp_path / "idle-timeout-agent",
+    )
+    saved: list[bool] = []
+    monkeypatch.setattr(agent, "_save_chat_history", lambda: saved.append(True))
+
+    agent._idle_since_monotonic = 100.0
+    _maybe_sleep_after_idle_timeout(
+        agent, now_mono=100.0 + IDLE_SLEEP_TIMEOUT_SECONDS - 0.5
+    )
+    assert agent._state == AgentState.IDLE
+    assert not agent._asleep.is_set()
+
+    _maybe_sleep_after_idle_timeout(
+        agent, now_mono=100.0 + IDLE_SLEEP_TIMEOUT_SECONDS
+    )
+    assert agent._state == AgentState.ASLEEP
+    assert agent._asleep.is_set()
+    assert saved == [True]
+
+    manifest = json.loads((agent.working_dir / ".agent.json").read_text())
+    assert "stamina" not in manifest
+    identity = agent._prompt_manager.read_section("identity")
+    assert "stamina_left_seconds" not in identity
+    assert "session lasts" not in identity
 
 
 def test_build_agent_config_overlays_explicit_values_and_ignores_stale_molt():
@@ -109,7 +147,8 @@ def test_build_agent_config_overlays_explicit_values_and_ignores_stale_molt():
 
     cfg = build_agent_config(manifest, max_rpm=0)
 
-    assert cfg.stamina == 7200.0
+    # Legacy manifest stamina is ignored by the runtime.
+    assert cfg.stamina == defaults.stamina
     assert cfg.max_aed_attempts == 5
     assert cfg.soul_delay == 7.0
     assert cfg.consultation_past_count == 2
@@ -142,7 +181,7 @@ def test_boot_omitted_defaults_update_artifacts_and_ignore_stale_molt(tmp_path):
     agent = _agent(tmp_path, init_data)
 
     pre_hydration = json.loads((tmp_path / ".agent.json").read_text())
-    assert pre_hydration["stamina"] == 86400.0
+    assert "stamina" not in pre_hydration
 
     agent._setup_from_init()
 
@@ -152,8 +191,10 @@ def test_boot_omitted_defaults_update_artifacts_and_ignore_stale_molt(tmp_path):
     assert not hasattr(agent._config, "molt_prompt")
 
     manifest = json.loads((tmp_path / ".agent.json").read_text())
-    assert manifest["stamina"] == 86400.0
-    assert "24h" in agent._prompt_manager.read_section("identity")
+    assert "stamina" not in manifest
+    identity = agent._prompt_manager.read_section("identity")
+    assert "stamina_left_seconds" not in identity
+    assert "session lasts" not in identity
 
 
 def test_refresh_omitted_defaults_converge_after_explicit_values(tmp_path):
@@ -162,8 +203,10 @@ def test_refresh_omitted_defaults_converge_after_explicit_values(tmp_path):
         _init_data({"stamina": 7200.0, "max_aed_attempts": 5}),
     )
     agent._setup_from_init()
-    assert agent._config.stamina == 7200.0
+    assert agent._config.stamina == 86400.0
     assert agent._config.max_aed_attempts == 5
+    refreshed_init = json.loads((tmp_path / "init.json").read_text())
+    assert "stamina" not in refreshed_init["manifest"]
 
     _write_init(
         tmp_path,
@@ -182,4 +225,4 @@ def test_refresh_omitted_defaults_converge_after_explicit_values(tmp_path):
     assert not hasattr(agent._config, "molt_prompt")
 
     manifest = json.loads((tmp_path / ".agent.json").read_text())
-    assert manifest["stamina"] == 86400.0
+    assert "stamina" not in manifest

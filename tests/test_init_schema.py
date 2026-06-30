@@ -80,11 +80,10 @@ def test_wrong_type_top_level():
         validate_init(data)
 
 
-def test_wrong_type_manifest_field():
+def test_legacy_manifest_stamina_wrong_type_is_ignored():
     data = _valid_init()
     data["manifest"]["stamina"] = "one hour"
-    with pytest.raises(ValueError, match="manifest.stamina.*(int|float|number)"):
-        validate_init(data)
+    validate_init(data)  # legacy ignored field
 
 
 def test_summarize_notification_threshold_rejects_negative():
@@ -121,12 +120,11 @@ def test_wrong_type_streaming():
         validate_init(data)
 
 
-def test_bool_rejected_for_numeric_field():
-    """bool is a subclass of int in Python — must be rejected for numeric fields."""
+def test_legacy_manifest_stamina_bool_is_ignored():
+    """stamina is a retired legacy manifest field and is no longer type-checked."""
     data = _valid_init()
     data["manifest"]["stamina"] = True
-    with pytest.raises(ValueError, match="manifest.stamina.*number.*bool"):
-        validate_init(data)
+    validate_init(data)
 
 
 # --- optional fields ---

@@ -124,7 +124,7 @@ def test_e2e_boot_with_alpha_then_swap_to_beta(tmp_path, monkeypatch):
     assert data2["manifest"]["agent_name"] == "test"  # identity preserved
     assert data2["manifest"]["admin"]["karma"] is True  # admin preserved
     assert data2["manifest"]["soul"]["delay"] == 120  # soul preserved
-    assert data2["manifest"]["stamina"] == 3600  # stamina preserved
+    assert "stamina" not in data2["manifest"]  # legacy runtime knob removed
     assert data2["manifest"]["preset"]["active"] == beta_path
     assert data2["manifest"]["preset"]["default"] == alpha_path  # original default preserved
 

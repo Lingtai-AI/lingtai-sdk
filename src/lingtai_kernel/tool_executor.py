@@ -17,6 +17,7 @@ from .meta_block import (
     TOOL_META_COMMENT_OVERFLOW_KEY,
     TOOL_META_TOKEN_USAGE_KEY,
     TOOL_META_TOKEN_USAGE_PENDING_KEY,
+    TOOL_META_CURRENT_TIME_KEY,
 )
 from .tool_result_artifacts import (
     PREVENTIVE_MAX_CHARS as _DEFAULT_MAX_RESULT_CHARS,
@@ -385,7 +386,10 @@ class ToolExecutor:
 
         Fields:
           id                  — tool_call_id (or "<unknown>")
-          timestamp           — ISO completion timestamp
+          timestamp           — UTC ISO completion timestamp
+          current_time        — optional agent-aware current time (local timezone
+                                when timezone_awareness=True); absent when
+                                time_awareness=False
           char_count          — current model-visible serialized size: the kernel
                                 ``_meta`` envelope and transient top-level
                                 scaffolding (``_runtime_pending``, ``_advisory``,
@@ -412,7 +416,11 @@ class ToolExecutor:
 
         pending = result.get("_runtime_pending")
         token_usage = None
+        current_time = None
         if isinstance(pending, dict):
+            candidate_time = pending.pop(TOOL_META_CURRENT_TIME_KEY, None)
+            if isinstance(candidate_time, str) and candidate_time:
+                current_time = candidate_time
             candidate = pending.pop(TOOL_META_TOKEN_USAGE_PENDING_KEY, None)
             if isinstance(candidate, dict):
                 token_usage = dict(candidate)
@@ -425,6 +433,8 @@ class ToolExecutor:
             "char_count": char_count,
             "elapsed_ms": int(elapsed_ms),
         }
+        if current_time:
+            tool_block[TOOL_META_CURRENT_TIME_KEY] = current_time
         if token_usage:
             tool_block[TOOL_META_TOKEN_USAGE_KEY] = token_usage
         if spilled_char_count is not None:

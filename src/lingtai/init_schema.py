@@ -82,7 +82,6 @@ MANIFEST_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     "capabilities": dict,
     "disable": list,
     "soul": dict,
-    "stamina": (int, float),
     "context_limit": (int, type(None)),
     # NOTE: molt_notice / molt_pressure / molt_urgency / molt_prompt are
     # deliberately NOT here. They were retired as agent-configurable fields —
@@ -115,6 +114,7 @@ MANIFEST_OPTIONAL: dict[str, type | tuple[type, ...]] = {
 # and agent.py (config reload ignores stale molt fields).
 MANIFEST_LEGACY_IGNORED: set[str] = {
     "molt_notice", "molt_pressure", "molt_urgency", "molt_prompt",
+    "stamina",
 }
 
 MANIFEST_KNOWN: set[str] = (

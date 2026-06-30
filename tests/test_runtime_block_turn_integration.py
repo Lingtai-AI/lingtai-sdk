@@ -135,7 +135,8 @@ def test_runtime_block_lands_on_latest_result_at_turn_boundary(tmp_path):
 
     holder = agent._runtime_live_holder
     assert holder is not None, "attach_active_runtime was not invoked at the boundary"
-    assert holder["_meta"]["agent_meta"]["current_time"] == "T1"
+    assert "current_time" not in holder["_meta"]["agent_meta"]
+    assert holder["echo"] == "T1"
     # The turn records the batch's calls on the guard (2 seeded + 1 this batch),
     # and the boundary stamps the live total under _meta.agent_meta.
     assert holder["_meta"]["agent_meta"]["active_turn_tool_calls"] == 3
@@ -159,7 +160,8 @@ def test_prior_runtime_block_is_stripped_when_newer_result_arrives(tmp_path):
     )
     _process_response(agent, first_response, ledger_source="test")
     first_holder = agent._runtime_live_holder
-    assert first_holder["_meta"]["agent_meta"]["current_time"] == "T1"
+    assert "current_time" not in first_holder["_meta"]["agent_meta"]
+    assert first_holder["echo"] == "T1"
 
     # Stage a second assistant turn with a fresh tool call, then process it.
     agent._chat.interface.add_assistant_message(
@@ -174,6 +176,7 @@ def test_prior_runtime_block_is_stripped_when_newer_result_arrives(tmp_path):
 
     second_holder = agent._runtime_live_holder
     assert second_holder is not first_holder
-    assert second_holder["_meta"]["agent_meta"]["current_time"] == "T2"
+    assert "current_time" not in second_holder["_meta"]["agent_meta"]
+    assert second_holder["echo"] == "T2"
     # The previous holder must have shed its agent_meta/guidance (latest-only).
     assert "_meta" not in first_holder or "agent_meta" not in first_holder["_meta"]

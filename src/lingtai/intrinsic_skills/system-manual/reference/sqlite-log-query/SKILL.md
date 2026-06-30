@@ -453,7 +453,7 @@ ORDER BY gap_seconds DESC
 LIMIT 30;
 ```
 
-**Context / stamina pressure:**
+**Context pressure / legacy stamina traces:**
 
 ```sql
 SELECT id, ts, type, substr(fields_json, 1, 400) AS fields
@@ -463,7 +463,7 @@ WHERE type LIKE '%context%'
    OR type LIKE '%molt%'
    OR type LIKE '%spill%'
    OR type LIKE '%overflow%'
-   OR type LIKE '%stamina%'
+   OR type LIKE '%stamina%'  -- legacy logs only
 ORDER BY ts DESC
 LIMIT 50;
 ```

@@ -22,10 +22,9 @@ a notification tool-call pair on the agent's behalf when changes arrive during
 IDLE/ASLEEP states (delivery plumbing, not an agent-callable action); the agent
 reads/clears via the ``notification`` tool.
 
-Identity, runtime, and stamina state surface via other channels:
+Identity and runtime state surface via other channels:
     - identity prompt section — every turn, cached prefix
-    - meta line `context.{system,history}_tokens` + `stamina_left_seconds`
-      on every tool result and text input
+    - per-result `_meta.tool_meta` / latest `_meta.agent_meta` on tool results
     - `.status.json` — written by the kernel; read with read({".status.json"})
       when the agent wants the deep dive
 

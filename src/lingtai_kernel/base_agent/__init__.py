@@ -111,16 +111,6 @@ _PROGRESS_EVENTS: dict[str, str | None] = {
 # ---------------------------------------------------------------------------
 
 
-def _format_stamina(seconds: float) -> str:
-    """Render stamina capacity as a human-friendly duration string."""
-    if seconds <= 0:
-        return "no fixed limit"
-    hours = seconds / 3600
-    if hours >= 1:
-        return f"{hours:.1f}h" if hours != int(hours) else f"{int(hours)}h"
-    minutes = seconds / 60
-    return f"{int(minutes)}min"
-
 
 def _build_identity_section(manifest_data: dict, mailbox_name: str | None = None) -> str:
     """Render the agent's identity as curated prose for the system prompt.
@@ -139,7 +129,6 @@ def _build_identity_section(manifest_data: dict, mailbox_name: str | None = None
     created = manifest_data.get("created_at") or ""
     started = manifest_data.get("started_at") or ""
     admin = manifest_data.get("admin") or {}
-    stamina = manifest_data.get("stamina") or 0
     soul_delay = manifest_data.get("soul_delay")
     molt_count = manifest_data.get("molt_count", 0)
 
@@ -188,12 +177,6 @@ def _build_identity_section(manifest_data: dict, mailbox_name: str | None = None
                 lines.append(f"You hold admin flags: {', '.join(flags)}.")
 
     # Resources.
-    if stamina:
-        lines.append(
-            f"Each session lasts up to {_format_stamina(stamina)} "
-            "of work before rest. Your `stamina_left_seconds` "
-            "appears on every tool result."
-        )
     if soul_delay is not None:
         lines.append(f"Your soul flow fires {soul_delay}s after you go idle.")
     if mailbox_name:
@@ -309,6 +292,7 @@ class BaseAgent:
         self._admin = admin or {}
         self._cancel_event = threading.Event()
         self._state = AgentState.IDLE
+        self._idle_since_monotonic: float | None = time.monotonic()
         self._started_at: str = ""
         self._last_usage = None  # UsageMetadata from last LLM call, for ledger
         self._created_at: str = ""
@@ -747,7 +731,7 @@ class BaseAgent:
         _start(self)
 
     def _reset_uptime(self) -> None:
-        """Reset the uptime anchor for stamina tracking."""
+        """Reset the uptime anchor for runtime uptime tracking."""
         from .lifecycle import _reset_uptime
         _reset_uptime(self)
 
@@ -776,10 +760,13 @@ class BaseAgent:
         else:
             self._idle.set()
 
-        # Soul timer: IDLE-only.  Start on entering IDLE, cancel on leaving.
+        # Soul timer + hidden idle-timeout bookkeeping: IDLE-only.  Start on
+        # entering IDLE, cancel/clear on leaving.
         if new_state == AgentState.IDLE:
+            self._idle_since_monotonic = time.monotonic()
             _start_soul_timer(self)
         elif old == AgentState.IDLE:
+            self._idle_since_monotonic = None
             _cancel_soul_timer(self)
 
         # Issue #164 — watchdog bookkeeping. A state transition is itself
@@ -1412,9 +1399,9 @@ class BaseAgent:
         field in the body lets the agent distinguish kernel-injected
         reads from voluntary calls when reading conversation history.
 
-        Both call.args and result.content carry meta blocks matching what
-        real tool calls produce (build_meta → current_time, context,
-        stamina_left_seconds, plus a monotonic injection_seq). This makes
+        Both call.args and result.content carry notification freshness fields
+        from build_meta (for example context.molt when active) plus a monotonic
+        injection_seq. This makes
         every synthesized pair tokenize uniquely even when the underlying
         notification payload repeats — a protection layer against the
         DeepSeek cache fast-path empty-response failure without needing a
@@ -1471,9 +1458,9 @@ class BaseAgent:
 
         call_id = f"notif_{int(time.time()*1000):x}_{secrets.token_hex(2)}"
 
-        # Meta block — same shape real tool results carry (current_time +
-        # context + stamina_left_seconds, via build_meta), embedded in BOTH
-        # call.args and result.content so every synthesized pair tokenizes
+        # Meta freshness fields — same build_meta current-state hints real tool
+        # results use for latest-only runtime state, embedded in BOTH call.args
+        # and result.content so every synthesized pair tokenizes
         # uniquely even when the notification payload repeats. The monotonic
         # injection_seq is added on top to guarantee novelty within the same
         # second (heal+retry tight loops, time-blind agents).
@@ -1484,6 +1471,10 @@ class BaseAgent:
             meta = build_meta(self)
         except (AttributeError, TypeError):
             meta = {}
+        # ``current_time`` is a permanent per-tool-result field under
+        # tool_meta.  Notification injections are synthesized pairs, not real
+        # tool results, and already have injection_seq for freshness/novelty.
+        meta.pop("current_time", None)
         meta["injection_seq"] = self._notification_inject_seq
 
         notifications_with_guidance = build_notification_payload(notifications)
@@ -1497,9 +1488,9 @@ class BaseAgent:
             "_meta": dict(notifications_with_guidance),
         }
         # Flatten build_meta fields into body top-level — these are the
-        # synthesized pair's own freshness/uniqueness fields (current_time,
-        # context, stamina_left_seconds, injection_seq), distinct from the
-        # four tool-result-metadata blocks under ``_meta``.
+        # synthesized pair's own freshness/uniqueness fields (context when
+        # active, injection_seq), distinct from the tool-result metadata blocks
+        # under ``_meta``.
         body.update(meta)
         # Store body as a dict (not a JSON string) so it can be mutated
         # in-place when this pair is skeletonized later.  All adapters
@@ -1543,7 +1534,7 @@ class BaseAgent:
         # notification(action="check") call/result pair, not a visible
         # synthesized diary/text-input row.
         # call.args carries injection_seq only — real tool calls don't have
-        # current_time/context/stamina in their args (those live in results).
+        # runtime freshness fields in their args (those live in results).
         # The seq is enough to defeat byte-equality on the assistant turn.
         call_block = ToolCallBlock(
             id=call_id,

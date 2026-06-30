@@ -2,7 +2,7 @@
 
 The agent's life support: starting, stopping, breathing, detecting signal
 files (.sleep, .suspend, .refresh, .prompt, .clear, .inquiry, .rules,
-.interrupt), enforcing stamina, managing AED timeout, and running periodic
+.interrupt), tracking uptime, managing AED timeout, and running periodic
 snapshots.
 """
 from __future__ import annotations
@@ -16,6 +16,8 @@ import time
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+
+from ..config import IDLE_SLEEP_TIMEOUT_SECONDS
 
 
 # Key source files to hash for the runtime fingerprint.  A small curated
@@ -199,7 +201,7 @@ def _start(agent) -> None:
 
 
 def _reset_uptime(agent) -> None:
-    """Reset the uptime anchor for stamina tracking (used on wake from asleep)."""
+    """Reset the uptime anchor used for runtime uptime reporting."""
     agent._uptime_anchor = time.monotonic()
 
 
@@ -480,6 +482,15 @@ def _heartbeat_loop(agent) -> None:
                 f"[{agent.agent_name}] nudge dispatch failed: {nudge_err}"
             )
 
+        try:
+            _maybe_sleep_after_idle_timeout(agent)
+        except Exception as idle_sleep_err:
+            agent._log("idle_sleep_timeout_failed", error=str(idle_sleep_err))
+            print(
+                f"[{agent.agent_name}] idle sleep timeout failed: "
+                f"{idle_sleep_err}"
+            )
+
         # --- Notification sync ---
         # Poll the `.notification/` directory for changes.  The sync
         # method is a no-op when the fingerprint is unchanged, so this
@@ -495,15 +506,6 @@ def _heartbeat_loop(agent) -> None:
             get_logger().warning(
                 f"[{agent.agent_name}] notification sync failed: {notif_err}"
             )
-
-        # Stamina enforcement — asleep when stamina expires
-        if agent._uptime_anchor is not None and agent._state not in (AgentState.ASLEEP, AgentState.SUSPENDED):
-            elapsed = time.monotonic() - agent._uptime_anchor
-            if elapsed >= agent._config.stamina:
-                agent._log("stamina_expired", elapsed=round(elapsed, 1), stamina=agent._config.stamina)
-                agent._cancel_event.set()
-                agent._set_state(AgentState.ASLEEP, reason="stamina expired")
-                agent._asleep.set()
 
         if agent._state == AgentState.STUCK:
             now = time.monotonic()
@@ -561,6 +563,38 @@ def _heartbeat_loop(agent) -> None:
                 agent._last_gc = now_mono
 
         time.sleep(1.0)
+
+
+def _maybe_sleep_after_idle_timeout(agent, *, now_mono: float | None = None) -> None:
+    """Move long-idle agents to ASLEEP using a hidden fixed runtime timeout.
+
+    The timeout replaces the old agent-visible stamina countdown. It is not
+    configurable from init.json and is not exposed through prompt/status/meta;
+    it only keeps idle/asleep lifecycle semantics from collapsing completely.
+    """
+    from ..state import AgentState
+
+    if agent._state != AgentState.IDLE:
+        return
+
+    now = time.monotonic() if now_mono is None else now_mono
+    idle_since = getattr(agent, "_idle_since_monotonic", None)
+    if idle_since is None:
+        agent._idle_since_monotonic = now
+        return
+
+    elapsed = now - idle_since
+    if elapsed < IDLE_SLEEP_TIMEOUT_SECONDS:
+        return
+
+    agent._log(
+        "idle_sleep_timeout",
+        idle_seconds=round(elapsed, 1),
+        timeout_seconds=IDLE_SLEEP_TIMEOUT_SECONDS,
+    )
+    agent._set_state(AgentState.ASLEEP, reason="idle sleep timeout")
+    agent._save_chat_history()
+    agent._asleep.set()
 
 
 def _write_heartbeat_tick(agent) -> None:

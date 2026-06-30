@@ -32,7 +32,6 @@ def build_agent_config(manifest: dict[str, Any], *, max_rpm: int) -> AgentConfig
     llm = manifest.get("llm", {})
 
     return AgentConfig(
-        stamina=manifest.get("stamina", defaults.stamina),
         soul_delay=soul.get("delay", defaults.soul_delay),
         consultation_past_count=soul.get(
             "consultation_past_count", defaults.consultation_past_count
@@ -955,6 +954,20 @@ class Agent(BaseAgent):
     # Deep refresh — full reconstruct from init.json
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _strip_hidden_runtime_manifest_settings(data: dict) -> bool:
+        """Remove legacy user-facing runtime knobs that are now kernel-owned.
+
+        `manifest.stamina` used to configure an agent-visible countdown. The
+        runtime now keeps only a hidden fixed idle timeout, so persisted init.json
+        should not keep presenting stamina as a user-editable setting.
+        """
+        manifest = data.get("manifest")
+        if isinstance(manifest, dict) and "stamina" in manifest:
+            manifest.pop("stamina", None)
+            return True
+        return False
+
     def _read_init(self) -> dict | None:
         """Read and validate init.json from working directory.
 
@@ -985,6 +998,20 @@ class Agent(BaseAgent):
             self._log("refresh_init_error", error="failed to read init.json")
             return None
 
+        # Strip deprecated/hidden runtime fields from the raw user-owned init
+        # before preset materialization. The cleanup may write init.json back,
+        # but must not persist resolved preset contents such as skills.paths.
+        stripped = strip_deprecated(data)
+        hidden_runtime_stripped = self._strip_hidden_runtime_manifest_settings(data)
+        if stripped or hidden_runtime_stripped:
+            try:
+                init_path.write_text(
+                    json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass  # best-effort disk cleanup
+
         # Materialize active preset, if any, BEFORE validation so the manifest
         # the schema validates is the fully-resolved one the agent will run on.
         try:
@@ -994,18 +1021,6 @@ class Agent(BaseAgent):
             self._log("refresh_init_error",
                       error=f"preset materialization failed: {e}")
             return None
-
-        # Strip deprecated fields before validation so they don't trigger
-        # warnings or interfere with the refresh path.
-        stripped = strip_deprecated(data)
-        if stripped:
-            try:
-                init_path.write_text(
-                    json.dumps(data, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8",
-                )
-            except OSError:
-                pass  # best-effort disk cleanup
 
         # Resolve "provider": "inherit" in capabilities against the main LLM.
         manifest = data.get("manifest")
@@ -1046,7 +1061,8 @@ class Agent(BaseAgent):
         `manifest.preset.active = name` (storing the path string verbatim —
         no canonicalization), and writes atomically.
 
-        Other manifest fields are preserved.
+        Other manifest fields are preserved, except retired/hidden runtime
+        knobs such as ``manifest.stamina``.
 
         Raises:
             KeyError: the preset file does not exist
@@ -1094,6 +1110,8 @@ class Agent(BaseAgent):
             preset_block["allowed"] = [*allowed, name]
             self._log("preset_allowed_widened", name=name,
                       reason="direct_activate_bypassed_gate")
+
+        self._strip_hidden_runtime_manifest_settings(data)
 
         # Atomic write
         tmp = init_path.with_suffix(".json.tmp")
