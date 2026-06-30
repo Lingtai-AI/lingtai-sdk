@@ -264,10 +264,15 @@ def _presets(agent, args: dict) -> dict:
             },
             "capabilities": pm.get("capabilities", {}),
         })
+        # If the preset has an inline api_key, skip the env-var credential
+        # check — the key is already embedded and does not need an env var.
+        api_key_env = llm.get("api_key_env")
+        if llm.get("api_key"):
+            api_key_env = None
         connectivity_specs.append({
             "provider": llm.get("provider"),
             "base_url": llm.get("base_url"),
-            "api_key_env": llm.get("api_key_env"),
+            "api_key_env": api_key_env,
         })
 
     # Probe all presets in parallel — fresh each call.
