@@ -1251,17 +1251,7 @@ class DaemonManager:
         ``preset_surface`` is None, the parent's currently registered regular
         capability surface is used, again plus only task-scoped MCP tools.
         """
-        from ...capabilities import _GROUPS
-
-        # Expand groups and filter blacklist
-        tool_names: set[str] = set()
-        for name in requested:
-            if name in EMANATION_BLACKLIST:
-                continue
-            if name in _GROUPS:
-                tool_names.update(_GROUPS[name])
-            else:
-                tool_names.add(name)
+        tool_names = self._expand_requested_tools(requested)
 
         intrinsic_schemas, intrinsic_handlers = self._daemon_intrinsic_surface()
         tool_names |= set(intrinsic_schemas)
