@@ -60,6 +60,7 @@ from .config import (
 )
 from .i18n import t as _t
 from .reminders.context_pressure import (
+    current_molt_emission_descriptor,
     render_current_molt_context,
     render_reconstruction_molt,
 )
@@ -93,6 +94,16 @@ TOOL_META_COMMENT_OVERFLOW_KEY = "overflow"
 TOOL_META_TOKEN_USAGE_KEY = "token_usage"
 TOOL_META_TOKEN_USAGE_PENDING_KEY = "_tool_meta_token_usage"
 TOOL_META_CURRENT_TIME_KEY = "current_time"
+# Current sustained-pressure molt reminder — permanent per-result metadata at
+# ``tool_meta.context.molt`` (moved here from the former sparse
+# ``agent_meta.context.molt`` so the reminder persists on every result while the
+# warning is active).  ``build_meta`` stashes the reminder under the transit key
+# and carries the emission-event descriptor under the event transit key while
+# active; ``ToolExecutor._attach_tool_block`` pops both — promoting the reminder
+# into the permanent ``tool_meta.context`` block and logging with per-round dedup.
+TOOL_META_CONTEXT_KEY = "context"
+TOOL_META_CONTEXT_PENDING_KEY = "_tool_meta_context"
+TOOL_META_CONTEXT_EVENT_PENDING_KEY = "_tool_meta_context_event"
 
 
 def build_tool_meta_overflow_comment(tool_call_id: str | None) -> dict:
@@ -436,8 +447,14 @@ def build_meta_readme() -> dict:
     return {
         TOOL_META_KEY: (
             "Per-result tool/call metadata (id, timestamp, optional current_time, "
-            "char_count, elapsed_ms, optional token_usage). Present on every tool result; "
-            "permanent. token_usage is the single unified token-diagnostics block "
+            "char_count, elapsed_ms, optional token_usage, optional context). "
+            "Present on every tool result; "
+            "permanent. context, when present, carries the SUSTAINED-pressure "
+            "context.molt reminder string — a warning that appears only after "
+            "context has been high (>= 0.75) for several consecutive fresh provider "
+            "rounds and clears when pressure drops. It lives here (permanent, "
+            "restamped on every result while active) rather than in the sparse "
+            "agent_meta so the reminder persists. token_usage is the single unified token-diagnostics block "
             "(see meta_guidance.token_efficiency). It is one flat dict combining a "
             "provider-round token/cache snapshot — keys input, cache_miss, cache_rate, "
             "context_usage, window, output, thinking — with a current-session "
@@ -457,8 +474,9 @@ def build_meta_readme() -> dict:
             "the before (A) and after (B) context tokens/usage, context_window, "
             "trigger_threshold (0.75) and recovery_target (0.6); if B is still "
             "at/above the recovery target it includes a natural-language molt "
-            "reminder. This is permanent evidence of a past event, not current "
-            "state — distinct from agent_meta.context.molt."
+            "reminder at reconstruction.molt (a one-shot; distinct from the "
+            "sustained-pressure tool_meta.context.molt above). This is permanent "
+            "evidence of a past event, not current state."
         ),
         AGENT_META_KEY: (
             "Agent/current-state snapshot (elapsed_ms, active_turn_tool_calls, "
@@ -466,11 +484,10 @@ def build_meta_readme() -> dict:
             "adapter_comment). Numeric context/token diagnostics are deliberately "
             "not duplicated here: provider-round context_usage/window and session "
             "token totals live permanently in tool_meta.token_usage instead (see "
-            "meta_guidance.token_efficiency). context appears only when it needs to "
-            "carry a 'molt' reminder string: a SUSTAINED-pressure warning that appears "
-            "only after context has been high (>= 0.75) for several consecutive "
-            "fresh provider rounds and clears when pressure drops — current "
-            "state, not a permanent event (cf. tool_meta.reconstruction). SPARSE / "
+            "meta_guidance.token_efficiency). The sustained-pressure context.molt "
+            "reminder is NOT here either — it now lives in permanent "
+            "tool_meta.context.molt so it persists on every result while active. "
+            "SPARSE / "
             "update-driven: agent_meta is attached to a tool result only when its "
             "MATERIAL snapshot changes since the last emitted agent_meta — it is "
             "NOT re-stamped onto the newest tool result merely because that result "
@@ -783,10 +800,12 @@ def build_runtime_guidance() -> dict:
 
 
 def build_molt_context(agent, usage: float) -> str | None:
-    """Return `_meta.agent_meta.context.molt` as a natural-language reminder.
+    """Return the sustained-pressure molt reminder string, or ``None``.
 
-    This is current-state guidance (latest tool result only), not a permanent
-    event — it belongs in ``agent_meta``. The corrected contract (channel B)
+    The returned text is attached to PERMANENT ``_meta.tool_meta.context.molt``
+    (``build_meta`` routes it there via a transit key so it persists on every
+    result while the warning is active — it is NOT the sparse ``agent_meta``).
+    The contract (channel B)
     replaces the old immediate ``usage >= 0.60`` trip-wire with a
     *sustained-pressure* signal: the reminder appears only once context has been
     high (>= the 0.75 reconstruction ratio) for
@@ -822,12 +841,37 @@ def build_molt_context(agent, usage: float) -> str | None:
     return render_current_molt_context(streak=streak, usage=usage)
 
 
+def _current_molt_emission_event(agent, *, usage, message) -> dict | None:
+    """Return the current-molt emission-event descriptor, or ``None``.
+
+    Pure / side-effect-free: it only builds the ``{event_name, payload}``
+    descriptor from the session's reminder state (the values that produced
+    ``message``).  It does NOT decide whether to log — the DEDUP happens at the
+    real emission site (``ToolExecutor._attach_tool_block``), keyed by the
+    payload's ``last_round_id``, so this render-path call never mutates agent
+    state (``build_meta`` runs both for the text-input prefix and per tool-result
+    stamp; a side effect here would desync the dedup).
+
+    Returns ``None`` only when no real reminder object is available (compat
+    session stand-ins that expose just ``context_pressure_*`` attributes carry no
+    round id / debug state to build a meaningful event from).
+    """
+    session = getattr(agent, "_session", None)
+    reminder = getattr(session, "context_pressure_reminder", None)
+    if reminder is None:
+        return None
+    try:
+        return current_molt_emission_descriptor(reminder, usage=usage, message=message)
+    except Exception:
+        return None
+
+
 def build_reconstruction_tool_meta(agent) -> dict | None:
     """Build the one-shot delayed-summarize reconstruction event (channel A).
 
     Permanent per-result evidence, destined for ``_meta.tool_meta.reconstruction``.
     Distinct from :func:`build_molt_context` (channel B, current-state reminder
-    inside sparse ``agent_meta``): this records a *historical event* — the runtime actually rebuilt the
+    routed to permanent ``tool_meta.context.molt``): this records a *historical event* — the runtime actually rebuilt the
     provider context around the compacted history when context crossed the 0.75
     reconstruction threshold.
 
@@ -1122,19 +1166,28 @@ def build_meta(agent) -> dict:
     Shape::
 
         {
-            "current_time": "<iso>",         # transient; promoted into tool_meta
-            "context": {
-                "molt": str,                 # optional natural-language sustained-pressure reminder
+            "current_time": "<iso>",          # transient; promoted into tool_meta
+            "_tool_meta_context": {           # transient; promoted into tool_meta.context
+                "molt": str,                  # optional natural-language sustained-pressure reminder
             },
-            "current_tool_result_chars": dict, # total + top formal tool results >1000 chars
+            "_tool_meta_context_event": {...},# transient; deduped current-molt emission event
+            "current_tool_result_chars": dict,# total + top formal tool results >1000 chars
         }
 
-    ``current_time`` is not promoted into ``agent_meta``; ``ToolExecutor`` moves
-    it into the permanent per-result ``tool_meta`` block when time awareness is
-    enabled. Numeric context/token diagnostics are not duplicated in ``agent_meta``;
-    provider-round ``context_usage``/``window`` and session token stats live in
-    ``tool_meta.token_usage``.  The ``context`` sub-object is emitted only when
-    it carries the sustained-pressure ``molt`` reminder.
+    ``current_time`` and the two ``_tool_meta_context*`` keys are transient
+    transit keys: ``ToolExecutor._attach_tool_block`` promotes ``current_time``
+    and the sustained-pressure ``molt`` reminder into the PERMANENT per-result
+    ``tool_meta`` block (``tool_meta.current_time`` / ``tool_meta.context.molt``),
+    and logs ``context_pressure_current_molt_reminder_emitted`` from the
+    ``_tool_meta_context_event`` payload — deduped there to once per provider
+    round (this function is side-effect-free and carries the payload on every
+    build while the warning is active, since it also runs for the text-input
+    prefix).  The molt reminder is therefore permanent per-result metadata, not
+    the sparse ``agent_meta``.  Numeric context/token diagnostics are not
+    duplicated in ``agent_meta``; provider-round ``context_usage``/``window`` and
+    session token stats live in ``tool_meta.token_usage``.  The
+    ``_tool_meta_context`` sub-object is emitted only when the sustained-pressure
+    warning is active.
 
     """
     meta: dict = {}
@@ -1144,12 +1197,18 @@ def build_meta(agent) -> dict:
 
     usage = _current_context_usage(agent)
 
-    # Numeric context/token diagnostics are already carried by
-    # ``tool_meta.token_usage`` (context_usage/window plus session stats).
-    # Keep ``agent_meta.context`` for current-state action guidance only.
+    # Sustained-pressure molt reminder — now PERMANENT per-result metadata at
+    # ``tool_meta.context.molt`` (moved off the sparse ``agent_meta.context`` so
+    # it persists on every result while the warning is active).  It rides via a
+    # transit key that ``ToolExecutor._attach_tool_block`` promotes into the
+    # permanent ``tool_meta.context`` block.  Numeric context/token diagnostics
+    # stay in ``tool_meta.token_usage``.
     molt = build_molt_context(agent, usage)
     if molt:
-        meta["context"] = {"molt": molt}
+        meta[TOOL_META_CONTEXT_PENDING_KEY] = {"molt": molt}
+        event = _current_molt_emission_event(agent, usage=usage, message=molt)
+        if event is not None:
+            meta[TOOL_META_CONTEXT_EVENT_PENDING_KEY] = event
 
     tool_meta_token_usage = build_tool_meta_token_usage(agent)
     if tool_meta_token_usage:
@@ -1265,6 +1324,12 @@ def build_synthetic_meta_envelope(
         # synthetic tool_meta instead (Jason FINAL: all token diagnostics live in
         # tool_meta.token_usage only).
         token_usage = agent_meta.pop(TOOL_META_TOKEN_USAGE_PENDING_KEY, None)
+        # Tool-meta context/reminder transit keys are consumed only by real
+        # ToolExecutor tool-result stamping.  Synthetic notification snapshots
+        # are log-side reconstructions, so do not expose internal transit
+        # payloads as agent_meta.
+        agent_meta.pop(TOOL_META_CONTEXT_PENDING_KEY, None)
+        agent_meta.pop(TOOL_META_CONTEXT_EVENT_PENDING_KEY, None)
     except (AttributeError, TypeError):
         agent_meta = {}
         token_usage = None
@@ -1712,10 +1777,12 @@ def agent_meta_signature(agent_meta: Mapping[str, Any]) -> str:
     ``active_turn_tool_calls``, ``current_time``, and the running
     ``current_tool_result_chars.total_chars`` — is deliberately excluded so it
     cannot defeat the "if no change" requirement by forcing agent_meta onto
-    every result.  Material signals (a new sustained-pressure ``context.molt``
-    reminder, changed dynamic ``adapter_comment`` scalars, a newly-large tool
-    result in ``current_tool_result_chars.top_results`` / a changed
-    ``over_threshold_count``) DO change the signature and re-surface agent_meta.
+    every result.  Material signals (changed dynamic ``adapter_comment`` scalars,
+    a newly-large tool result in ``current_tool_result_chars.top_results`` / a
+    changed ``over_threshold_count``) DO change the signature and re-surface
+    agent_meta.  (The sustained-pressure molt reminder no longer rides on
+    agent_meta — it is permanent ``tool_meta.context.molt`` now — so it is not a
+    signal here.)
     """
     material: dict = {}
     for key, value in (agent_meta or {}).items():
@@ -1814,6 +1881,11 @@ def attach_active_runtime(
     # tool_meta before the turn boundary.  Hand-built tests or future producers
     # should still not be able to reintroduce time into sparse agent_meta.
     agent_meta.pop(TOOL_META_CURRENT_TIME_KEY, None)
+    # The sustained-pressure molt reminder is PERMANENT tool_meta metadata now:
+    # its transit keys are promoted into tool_meta by ``_attach_tool_block`` and
+    # must never leak into the sparse agent_meta (nor into its change signature).
+    agent_meta.pop(TOOL_META_CONTEXT_PENDING_KEY, None)
+    agent_meta.pop(TOOL_META_CONTEXT_EVENT_PENDING_KEY, None)
     calls = _active_turn_tool_calls(agent)
     if calls is not None:
         agent_meta["active_turn_tool_calls"] = calls

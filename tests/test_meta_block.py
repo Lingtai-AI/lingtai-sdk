@@ -2116,8 +2116,10 @@ def test_attach_active_runtime_unchanged_snapshot_not_restamped_on_latest():
 
 def test_attach_active_runtime_material_change_reattaches():
     # After an unchanged batch, a genuinely material change (here: a new
-    # sustained-pressure molt reminder) re-attaches agent_meta to the newest
-    # result and strips the older holder.
+    # adapter_comment scalar) re-attaches agent_meta to the newest result and
+    # strips the older holder.  (The sustained-pressure molt reminder is NO longer
+    # an agent_meta signal — it lives on permanent tool_meta.context.molt now — so
+    # a neutral agent_meta material field drives this mechanism test.)
     agent = _runtime_agent(total_calls=1)
     first = ToolResultBlock(id="t1", name="x", content=_stamped_result({"current_time": "T1"}, 5))
     holder = attach_active_runtime(agent, [first], prior_holder=None)
@@ -2129,20 +2131,20 @@ def test_attach_active_runtime_material_change_reattaches():
     assert holder2 is holder
     assert "agent_meta" not in second.content.get("_meta", {})
 
-    # Material change: a molt reminder now appears in the snapshot.
+    # Material change: a new adapter_comment scalar appears in the snapshot.
     agent._executor.guard.total_calls = 3
     third = ToolResultBlock(
         id="t3",
         name="x",
         content=_stamped_result(
-            {"current_time": "T3", "context": {"molt": "sustained pressure"}}, 7
+            {"current_time": "T3", "adapter_comment": {"note": "materially new"}}, 7
         ),
     )
     new_holder = attach_active_runtime(agent, [third], prior_holder=holder)
 
     assert new_holder is third.content
     assert "agent_meta" in third.content["_meta"]
-    assert third.content["_meta"]["agent_meta"]["context"] == {"molt": "sustained pressure"}
+    assert third.content["_meta"]["agent_meta"]["adapter_comment"] == {"note": "materially new"}
     # The older holder now sheds its agent_meta/guidance.
     assert "_meta" not in first.content or "agent_meta" not in first.content["_meta"]
 
@@ -2361,8 +2363,9 @@ def test_attach_active_runtime_is_wired_into_turn_boundary():
 
 # ---------------------------------------------------------------------------
 # build_molt_context / context.molt — SUSTAINED context-pressure warning
-# surfaced under _meta.agent_meta.context.molt (latest-only, current state, not
-# a dismissible notification).
+# surfaced under permanent _meta.tool_meta.context.molt (persists on every
+# result while active; routed via the _tool_meta_context transit key), not a
+# dismissible notification.
 #
 # Corrected contract (channel B): the warning is NOT the old immediate
 # ``usage >= 0.60`` trip-wire.  It is driven by the SessionManager
@@ -2477,14 +2480,72 @@ def test_build_meta_attaches_context_molt_only_when_streak_armed():
 
     meta = build_meta(agent)
     assert meta_block._current_context_usage(agent) == pytest.approx(0.9)
-    # Streak not yet armed -> no context block is emitted even though usage is 0.9.
+    # Streak not yet armed -> no context reminder is emitted even though usage is
+    # 0.9.  The molt reminder now rides on a transit key destined for the
+    # PERMANENT tool_meta.context block (not the sparse agent_meta.context), so
+    # neither the transit key nor a plain "context" key is present.
+    assert meta_block.TOOL_META_CONTEXT_PENDING_KEY not in meta
     assert "context" not in meta
 
-    # Arm the streak; same high usage now surfaces the warning.
+    # Arm the streak; same high usage now surfaces the warning under the transit
+    # key (ToolExecutor._attach_tool_block promotes it into tool_meta.context).
     fake_session.context_pressure_warning_active = True
     fake_session.context_pressure_streak = 3
     meta = build_meta(agent)
-    assert "molt" in meta["context"]
-    assert isinstance(meta["context"]["molt"], str)
-    assert "Context has stayed high" in meta["context"]["molt"]
-    assert "3 consecutive fresh model calls" in meta["context"]["molt"]
+    context_transit = meta[meta_block.TOOL_META_CONTEXT_PENDING_KEY]
+    assert isinstance(context_transit["molt"], str)
+    assert "Context has stayed high" in context_transit["molt"]
+    assert "3 consecutive fresh model calls" in context_transit["molt"]
+    # It must NOT land in a plain agent-facing "context" key on the meta dict.
+    assert "context" not in meta
+
+
+def _molt_agent_with_reminder(reminder):
+    """Agent stand-in whose session exposes a real ContextPressureReminder plus
+    the live token-decomposition attributes build_meta reads for usage."""
+    fake_iface = SimpleNamespace(estimate_context_tokens=lambda: 90)
+    session = SimpleNamespace(
+        _token_decomp_dirty=False,
+        _system_prompt_tokens=10,
+        _tools_tokens=0,
+        _latest_input_tokens=0,
+        chat=SimpleNamespace(interface=fake_iface, context_window=lambda: 100),
+        context_pressure_reminder=reminder,
+    )
+    return SimpleNamespace(
+        _intrinsics={"psyche": object()},
+        _config=SimpleNamespace(
+            context_limit=None, time_awareness=True, timezone_awareness=True
+        ),
+        _session=session,
+        _uptime_anchor=None,
+    )
+
+
+def test_build_meta_current_molt_carries_reminder_and_event_payload():
+    from lingtai_kernel.reminders.context_pressure import ContextPressureReminder
+
+    reminder = ContextPressureReminder()
+    for rid in (1, 2, 3):
+        reminder.note_round(0.90, round_id=rid)
+    agent = _molt_agent_with_reminder(reminder)
+
+    # build_meta is SIDE-EFFECT-FREE and always carries the reminder text (transit
+    # key, destined for permanent tool_meta.context.molt) AND the emission-event
+    # payload while the warning is active — the DEDUP happens later, in
+    # ToolExecutor._attach_tool_block (keyed on payload.last_round_id), not here.
+    meta1 = build_meta(agent)
+    assert "molt" in meta1[meta_block.TOOL_META_CONTEXT_PENDING_KEY]
+    assert meta_block.TOOL_META_CONTEXT_EVENT_PENDING_KEY in meta1
+    payload = meta1[meta_block.TOOL_META_CONTEXT_EVENT_PENDING_KEY]["payload"]
+    assert payload["last_round_id"] == 3
+
+    # Called again in the same round, build_meta STILL carries the payload (no
+    # mutation / no dedup at this layer — the render-path text-prefix call and the
+    # per-result stamp call must both be pure).
+    meta2 = build_meta(agent)
+    assert meta_block.TOOL_META_CONTEXT_EVENT_PENDING_KEY in meta2
+    assert (
+        meta2[meta_block.TOOL_META_CONTEXT_EVENT_PENDING_KEY]["payload"]["last_round_id"]
+        == 3
+    )

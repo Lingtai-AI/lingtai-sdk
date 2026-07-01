@@ -216,7 +216,7 @@ def _make_agent_with_psyche(tmp_path):
 def test_compaction_pressure_not_published_as_notification(tmp_path):
     """Above the molt_pressure threshold, the kernel no longer publishes a
     dismissible ``.notification/molt.json`` warning. Context pressure is
-    agent state and is surfaced under ``_meta.agent_meta.context.molt``
+    agent state and is surfaced under ``_meta.tool_meta.context.molt``
     (see ``meta_block.build_molt_context``); ``_check_molt_pressure`` only
     clears any stale legacy ``molt`` notification and never publishes."""
     agent = _make_agent_with_psyche(tmp_path)

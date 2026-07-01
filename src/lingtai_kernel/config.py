@@ -19,7 +19,7 @@ MOLT_NOTICE_THRESHOLD = 0.60  # legacy name; now the molt RECOVERY TARGET (see b
 
 # Sustained context-pressure / molt-warning constants (kernel-fixed).
 #
-# The molt warning surfaced in ``_meta.agent_meta.context.molt`` is no longer an
+# The molt warning surfaced in ``_meta.tool_meta.context.molt`` is no longer an
 # immediate ``usage >= 0.60`` trip-wire.  It is a *sustained-pressure* signal:
 #
 #   * CONTEXT_PRESSURE_RECONSTRUCTION_RATIO (0.75) — a fresh provider round whose

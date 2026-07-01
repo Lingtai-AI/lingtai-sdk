@@ -19,12 +19,19 @@ from lingtai_kernel.config import (
 )
 from lingtai_kernel.reminders.context_pressure import (
     ContextPressureReminder,
+    CURRENT_MOLT_EVENT,
+    CURRENT_MOLT_TARGET_PATH,
+    RECONSTRUCTION_MOLT_EVENT,
+    RECONSTRUCTION_MOLT_TARGET_PATH,
     TRANSITION_DUPLICATE,
     TRANSITION_HIGH_ROUND,
     TRANSITION_INITIAL,
     TRANSITION_RELIEVED,
     TRANSITION_UNKNOWN_USAGE,
     TRANSITION_WARNING_ACTIVE,
+    current_molt_emission_descriptor,
+    reconstruction_molt_emission_descriptor,
+    reminder_message_hash,
     render_current_molt_context,
     render_reconstruction_molt,
 )
@@ -350,3 +357,101 @@ def test_meta_block_build_molt_context_compat_fallback_matches_reminder():
 
     # Fallback stays silent when not active, exactly like the reminder path.
     assert build_molt_context(_agent_with_compat_attrs(active=False, streak=2), 0.90) is None
+
+
+# ---------------------------------------------------------------------------
+# Emission descriptors — pure builders used by the _meta assembly layer to emit
+# structured runtime events ONLY when a reminder is actually attached to the
+# permanent tool_meta.  The reminder abstraction stays pure: it computes
+# descriptors, it does not log.
+# ---------------------------------------------------------------------------
+
+
+def test_reminder_message_hash_is_short_and_stable():
+    h1 = reminder_message_hash("hello reminder")
+    h2 = reminder_message_hash("hello reminder")
+    assert h1 == h2
+    assert isinstance(h1, str)
+    assert len(h1) == 12
+    assert all(c in "0123456789abcdef" for c in h1)
+    assert reminder_message_hash("different") != h1
+    # Non-string / empty input degrades to a stable sentinel, never raises.
+    assert isinstance(reminder_message_hash(None), str)
+    assert isinstance(reminder_message_hash(""), str)
+
+
+def test_current_molt_emission_descriptor_fields():
+    r = ContextPressureReminder()
+    for rid in (1, 2, 3):
+        r.note_round(0.90, round_id=rid)
+    message = r.current_molt_context(0.90)
+    assert message is not None
+    desc = current_molt_emission_descriptor(r, usage=0.90, message=message)
+    assert desc["event_name"] == CURRENT_MOLT_EVENT
+    payload = desc["payload"]
+    assert payload["target_path"] == CURRENT_MOLT_TARGET_PATH == "_meta.tool_meta.context.molt"
+    assert payload["message_hash"] == reminder_message_hash(message)
+    assert payload["threshold_high"] == 0.75
+    assert payload["recovery_target"] == 0.60
+    assert payload["usage"] == pytest.approx(0.90)
+    assert payload["streak"] == 3
+    assert payload["last_round_id"] == 3
+    assert payload["transition_reason"] == TRANSITION_WARNING_ACTIVE
+    # JSON-safe and carries no full reminder prose.
+    import json as _json
+
+    encoded = _json.dumps(payload)
+    assert message not in encoded
+    assert "Context has stayed high" not in encoded
+
+
+def test_reconstruction_molt_emission_descriptor_still_high_branch():
+    event = {
+        "type": "delayed_summarize_reconstruction",
+        "trigger_threshold": 0.75,
+        "recovery_target": 0.60,
+        "before": {"usage": 0.85},
+        "after": {"usage": 0.80, "source": "provider_input_tokens"},
+    }
+    message = "the rebuilt context is still at 80%..."
+    desc = reconstruction_molt_emission_descriptor(event, message=message)
+    assert desc["event_name"] == RECONSTRUCTION_MOLT_EVENT
+    payload = desc["payload"]
+    assert payload["target_path"] == RECONSTRUCTION_MOLT_TARGET_PATH
+    assert payload["target_path"] == "_meta.tool_meta.reconstruction.molt"
+    assert payload["message_hash"] == reminder_message_hash(message)
+    assert payload["trigger_threshold"] == 0.75
+    assert payload["recovery_target"] == 0.60
+    assert payload["before_usage"] == pytest.approx(0.85)
+    assert payload["after_usage"] == pytest.approx(0.80)
+    assert payload["after_source"] == "provider_input_tokens"
+    # >= trigger_threshold -> still_high branch
+    assert payload["branch"] == "still_high"
+    import json as _json
+
+    _json.dumps(payload)  # JSON-safe
+
+
+def test_reconstruction_molt_emission_descriptor_above_recovery_branch():
+    event = {
+        "trigger_threshold": 0.75,
+        "recovery_target": 0.60,
+        "before": {"usage": 0.85},
+        "after": {"usage": 0.70, "source": "local_estimate"},
+    }
+    payload = reconstruction_molt_emission_descriptor(event, message="text")["payload"]
+    # recovery_target <= after < trigger_threshold -> above_recovery branch
+    assert payload["branch"] == "above_recovery"
+    assert payload["after_usage"] == pytest.approx(0.70)
+    assert payload["after_source"] == "local_estimate"
+
+
+def test_reconstruction_molt_emission_descriptor_missing_before_is_none():
+    event = {
+        "trigger_threshold": 0.75,
+        "recovery_target": 0.60,
+        "after": {"usage": 0.80},
+    }
+    payload = reconstruction_molt_emission_descriptor(event, message="t")["payload"]
+    assert payload["before_usage"] is None
+    assert payload["after_source"] is None

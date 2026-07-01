@@ -15,9 +15,16 @@ from .meta_block import (
     build_tool_meta_overflow_comment,
     TOOL_META_COMMENT_KEY,
     TOOL_META_COMMENT_OVERFLOW_KEY,
+    TOOL_META_CONTEXT_KEY,
+    TOOL_META_CONTEXT_PENDING_KEY,
+    TOOL_META_CONTEXT_EVENT_PENDING_KEY,
     TOOL_META_TOKEN_USAGE_KEY,
     TOOL_META_TOKEN_USAGE_PENDING_KEY,
     TOOL_META_CURRENT_TIME_KEY,
+)
+from .reminders.context_pressure import (
+    RECONSTRUCTION_MOLT_EVENT,
+    reconstruction_molt_emission_descriptor,
 )
 from .tool_result_artifacts import (
     PREVENTIVE_MAX_CHARS as _DEFAULT_MAX_RESULT_CHARS,
@@ -109,6 +116,15 @@ class ToolExecutor:
         # ``summary=true`` fails closed to a summary-layer error (the raw is
         # never dumped into context); see ``maybe_summarize_result``.
         self._summarizer_fn = summarizer_fn
+        # Dedup memory for the current sustained-pressure molt EMISSION EVENT.
+        # The reminder text is permanent (restamped on every tool result while
+        # active), so the ``context_pressure_current_molt_reminder_emitted`` event
+        # is logged at most once per distinct provider round (payload
+        # ``last_round_id``) within this executor's lifetime (one executor per
+        # turn — see ``base_agent/turn._make_tool_executor``), counting genuine
+        # emissions instead of every permanent restamp.  ``object()`` is a
+        # sentinel distinct from any real round id (incl. ``None``).
+        self._last_current_molt_event_round: Any = object()
 
     def _tool_trace_id(self, tc: ToolCall) -> str:
         """Return the stable trace id for one top-level tool-call execution.
@@ -418,6 +434,8 @@ class ToolExecutor:
         pending = result.get("_runtime_pending")
         token_usage = None
         current_time = None
+        context_block = None
+        current_molt_event = None
         if isinstance(pending, dict):
             candidate_time = pending.pop(TOOL_META_CURRENT_TIME_KEY, None)
             if isinstance(candidate_time, str) and candidate_time:
@@ -425,6 +443,19 @@ class ToolExecutor:
             candidate = pending.pop(TOOL_META_TOKEN_USAGE_PENDING_KEY, None)
             if isinstance(candidate, dict):
                 token_usage = dict(candidate)
+            # Current sustained-pressure molt reminder — permanent per-result
+            # metadata at tool_meta.context.molt (build_meta stashes it under a
+            # transit key so it lands on tool_meta, not the sparse agent_meta).
+            candidate_context = pending.pop(TOOL_META_CONTEXT_PENDING_KEY, None)
+            if isinstance(candidate_context, dict) and candidate_context.get("molt"):
+                context_block = {"molt": candidate_context["molt"]}
+            # The matching one-shot emission-event payload rides alongside; it is
+            # only present when build_meta decided this is a NEW emission (deduped
+            # against agent state), so logging it here counts genuine emissions
+            # rather than every permanent restamp.
+            candidate_event = pending.pop(TOOL_META_CONTEXT_EVENT_PENDING_KEY, None)
+            if isinstance(candidate_event, dict):
+                current_molt_event = candidate_event
 
         char_count = self._intrinsic_char_count(result)
 
@@ -438,6 +469,8 @@ class ToolExecutor:
             tool_block[TOOL_META_CURRENT_TIME_KEY] = current_time
         if token_usage:
             tool_block[TOOL_META_TOKEN_USAGE_KEY] = token_usage
+        if context_block:
+            tool_block[TOOL_META_CONTEXT_KEY] = context_block
         if spilled_char_count is not None:
             tool_block["spilled_char_count"] = int(spilled_char_count)
         if status == "error":
@@ -460,6 +493,15 @@ class ToolExecutor:
             result["_meta"] = meta
         meta["tool_meta"] = tool_block
 
+        # Channel B event: the current sustained-pressure molt reminder was just
+        # attached to tool_meta.context.molt.  Emit the structured runtime event
+        # ONLY on a real attach (context_block present), and dedup to at most once
+        # per provider round (the reminder text is permanent — restamped on every
+        # result while active — so per-result emission would flood the log).
+        # Best-effort: a log failure never breaks the turn.
+        if context_block and isinstance(current_molt_event, dict):
+            self._maybe_emit_current_molt_event(current_molt_event)
+
         # Channel A: attach the one-shot delayed-summarize reconstruction event
         # (permanent per-result evidence) to the first stamped result. The
         # source is one-shot — once it returns an event it returns None — so
@@ -471,7 +513,57 @@ class ToolExecutor:
                 event = None
             if event:
                 tool_block["reconstruction"] = event
+                # Channel A event: the reconstruction molt reminder text was just
+                # attached at tool_meta.reconstruction.molt.  Emit only when the
+                # event actually carries that text (still >= recovery target).
+                molt_text = event.get("molt") if isinstance(event, dict) else None
+                if isinstance(molt_text, str) and molt_text:
+                    try:
+                        descriptor = reconstruction_molt_emission_descriptor(
+                            event, message=molt_text
+                        )
+                        self._emit_reminder_event(descriptor)
+                    except Exception:
+                        pass
         return result
+
+    def _maybe_emit_current_molt_event(self, descriptor: dict) -> None:
+        """Emit the current-molt event, deduped to once per provider round.
+
+        The reminder text is permanent (restamped every result while active), so
+        we log the emission event at most once per distinct ``last_round_id``
+        within this executor's lifetime (one executor per turn), counting genuine
+        emissions rather than every restamp.  Best-effort throughout.
+        """
+        try:
+            if not isinstance(descriptor, dict):
+                return
+            payload = descriptor.get("payload")
+            round_id = payload.get("last_round_id") if isinstance(payload, dict) else None
+            if round_id == self._last_current_molt_event_round:
+                return
+            self._last_current_molt_event_round = round_id
+            self._emit_reminder_event(descriptor)
+        except Exception:
+            pass
+
+    def _emit_reminder_event(self, descriptor: dict) -> None:
+        """Log a reminder-emission event from a ``{event_name, payload}`` descriptor.
+
+        Best-effort: reminder-emission accounting must never break a turn (the
+        reminder text is already attached to the wire regardless).  Uses the
+        standard agent event log via ``self._log`` — no parallel sink.
+        """
+        try:
+            if not isinstance(descriptor, dict):
+                return
+            event_name = descriptor.get("event_name")
+            payload = descriptor.get("payload")
+            if not event_name or not isinstance(payload, dict):
+                return
+            self._log(event_name, **payload)
+        except Exception:
+            pass
 
     def _overflow_comment_applies(
         self, *, char_count: int, spilled_char_count: int | None

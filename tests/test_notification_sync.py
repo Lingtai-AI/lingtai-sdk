@@ -1977,6 +1977,74 @@ def test_inject_notification_pair_emits_block_injected_event(tmp_path: Path) -> 
     assert "notification_guidance" not in notifs["email"]
 
 
+def test_inject_notification_pair_strips_tool_meta_context_transit_keys(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Synthesized notification pairs must not expose tool-meta transit keys."""
+    import lingtai_kernel.base_agent as base_agent_module
+    import lingtai_kernel.meta_block as meta_block_module
+    from lingtai_kernel.meta_block import (
+        TOOL_META_CONTEXT_EVENT_PENDING_KEY,
+        TOOL_META_CONTEXT_PENDING_KEY,
+    )
+
+    transit_event = {
+        "event_name": "context_pressure_current_molt_reminder_emitted",
+        "payload": {
+            "message_hash": "abc123transit",
+            "target_path": "_meta.tool_meta.context.molt",
+            "streak": 3,
+        },
+    }
+
+    def fake_build_meta(_agent):
+        return {
+            "current_time": "2026-07-01T00:00:00Z",
+            TOOL_META_CONTEXT_PENDING_KEY: {"molt": "transit molt prose"},
+            TOOL_META_CONTEXT_EVENT_PENDING_KEY: transit_event,
+            "current_tool_result_chars": {"total_chars": 1},
+        }
+
+    monkeypatch.setattr(base_agent_module, "build_meta", fake_build_meta)
+    monkeypatch.setattr(meta_block_module, "build_meta", fake_build_meta)
+
+    publish(tmp_path, "email", {"count": 1, "data": {"count": 1}})
+    agent = _make_stub_agent_for_block_log(tmp_path)
+    agent._sync_notifications()
+
+    entries = agent._chat_stub.interface.entries
+    call_args = entries[0].content[0].args
+    body = entries[1].content[0].content
+    assert isinstance(body, dict)
+
+    for key in (TOOL_META_CONTEXT_PENDING_KEY, TOOL_META_CONTEXT_EVENT_PENDING_KEY):
+        assert key not in call_args
+        assert key not in body
+
+    # Safe freshness fields may remain, but internal tool-meta context/event
+    # payloads must not be model-visible on the synthesized notification wire.
+    assert body["injection_seq"] == 1
+    assert body["current_tool_result_chars"] == {"total_chars": 1}
+    body_json = json.dumps(body, ensure_ascii=False)
+    assert "transit molt prose" not in body_json
+    assert "abc123transit" not in body_json
+
+    pair_logs = [fields for evt, fields in agent._logs if evt == "notification_pair_injected"]
+    assert pair_logs
+    pair_meta = pair_logs[-1]["meta"]
+    for key in (TOOL_META_CONTEXT_PENDING_KEY, TOOL_META_CONTEXT_EVENT_PENDING_KEY):
+        assert key not in pair_meta
+
+    block_logs = [fields for evt, fields in agent._logs if evt == "notification_block_injected"]
+    assert block_logs
+    logged_meta_json = json.dumps(block_logs[-1]["_meta"], ensure_ascii=False)
+    assert "transit molt prose" not in logged_meta_json
+    assert "abc123transit" not in logged_meta_json
+    agent_meta = block_logs[-1]["_meta"].get("agent_meta", {})
+    for key in (TOOL_META_CONTEXT_PENDING_KEY, TOOL_META_CONTEXT_EVENT_PENDING_KEY):
+        assert key not in agent_meta
+
+
 def test_block_injected_payload_not_mutated_by_skeletonization(tmp_path: Path) -> None:
     """The logged payload must survive later skeletonization of the live holder."""
     import time as _time

@@ -433,7 +433,7 @@ class SessionManager:
     def context_pressure_warning_active(self) -> bool:
         """True once context has been high for >= WARN_AFTER_ROUNDS fresh rounds.
 
-        This drives the resident ``_meta.agent_meta.context.molt`` warning. It
+        This drives the permanent ``_meta.tool_meta.context.molt`` warning. It
         is *current state*, not a one-shot event: it stays True as long as the
         streak remains at/above the warn count and drops the moment context
         relaxes below the threshold (which resets the streak).

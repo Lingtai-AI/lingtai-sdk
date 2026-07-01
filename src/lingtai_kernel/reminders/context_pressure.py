@@ -11,20 +11,28 @@ The abstraction owns:
     input (usage + round id), the transient streak state, and the
     warn-after-N-consecutive-high-rounds decision;
   * the current-state reminder **rendering** for
-    ``_meta.agent_meta.context.molt`` (:meth:`current_molt_context`);
+    ``_meta.tool_meta.context.molt`` (:meth:`current_molt_context`) — permanent
+    per-result metadata (moved off the sparse ``agent_meta`` so it persists);
   * the reconstruction-event **annotation** (channel A) for
     ``_meta.tool_meta.reconstruction.molt`` (:meth:`annotate_reconstruction`);
+  * pure **emission descriptors** (:func:`current_molt_emission_descriptor`,
+    :func:`reconstruction_molt_emission_descriptor`, :func:`reminder_message_hash`)
+    that the ``_meta`` assembly layer turns into structured runtime events when a
+    reminder is actually attached to the wire;
   * a :meth:`snapshot` / :meth:`to_debug_dict` view for tests / logs /
     debugging (thresholds, streak, active, last usage/round, and why).
 
-Behavior is unchanged from the pre-abstraction code: same 0.75 high-round ratio,
-same 3-round warn count, same 0.60 recovery target, same one-shot reconstruction
-event, same natural-language strings, same ``_meta`` shapes.  See
+Reminder prose and thresholds are unchanged (same 0.75 high-round ratio, 3-round
+warn count, 0.60 recovery target, one-shot reconstruction event, natural-language
+strings).  The one contract change: the current sustained-pressure reminder moved
+from ``_meta.agent_meta.context.molt`` to permanent ``_meta.tool_meta.context.molt``;
+the reconstruction reminder stays at ``_meta.tool_meta.reconstruction.molt``.  See
 ``config.py`` for the constants' rationale and ``meta_block.py`` /
 ``session.py`` for the callers.
 """
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 
 from ..config import (
@@ -32,6 +40,116 @@ from ..config import (
     CONTEXT_PRESSURE_RECOVERY_TARGET,
     CONTEXT_PRESSURE_WARN_AFTER_ROUNDS,
 )
+
+# ---------------------------------------------------------------------------
+# Emission descriptors — structured runtime events counted when a reminder is
+# ACTUALLY attached to the outgoing ``_meta``.
+#
+# These are pure helpers: they turn already-computed reminder state / event
+# dicts into a small ``{event_name, payload}`` descriptor plus a stable short
+# ``message_hash``.  The abstraction stays free of logging/I-O — the ``_meta``
+# assembly layer (``meta_block`` / ``ToolExecutor``) owns the actual
+# ``agent._log(...)`` call, because only it knows whether the reminder text was
+# really attached to the wire (not merely rendered in a test / dry-run).
+#
+# Both reminders now live in PERMANENT tool metadata:
+#   * the sustained current-state warning at ``_meta.tool_meta.context.molt``;
+#   * the one-shot reconstruction warning at
+#     ``_meta.tool_meta.reconstruction.molt``.
+#
+# Payloads are compact, JSON-safe, and redaction-safe: they carry a
+# ``message_hash`` of the emitted text, never the full long reminder prose.
+# ---------------------------------------------------------------------------
+
+CURRENT_MOLT_EVENT = "context_pressure_current_molt_reminder_emitted"
+RECONSTRUCTION_MOLT_EVENT = "context_pressure_reconstruction_molt_reminder_emitted"
+
+CURRENT_MOLT_TARGET_PATH = "_meta.tool_meta.context.molt"
+RECONSTRUCTION_MOLT_TARGET_PATH = "_meta.tool_meta.reconstruction.molt"
+
+
+def reminder_message_hash(text: object) -> str:
+    """Return a short, stable hex hash of the emitted reminder text.
+
+    Twelve hex chars of the SHA-256 digest — stable across runs (unlike
+    ``hash()``), compact, and redaction-safe (it replaces the full long prose in
+    event payloads).  Non-string / empty input degrades to the hash of the empty
+    string so callers never have to special-case a missing message.
+    """
+    if not isinstance(text, str):
+        text = "" if text is None else str(text)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+
+
+def _safe_float(value: object) -> float | None:
+    """Best-effort float coercion; ``None`` on failure (JSON-safe payloads)."""
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def current_molt_emission_descriptor(
+    reminder: "ContextPressureReminder",
+    *,
+    usage: float,
+    message: str,
+) -> dict:
+    """Return the ``{event_name, payload}`` for an emitted current-molt reminder.
+
+    Built from the reminder's own already-observed state (the values that
+    produced ``message``), so it never re-runs the warn decision.  ``usage`` is
+    the current context fraction named in the prose.
+    """
+    payload = {
+        "target_path": CURRENT_MOLT_TARGET_PATH,
+        "message_hash": reminder_message_hash(message),
+        "threshold_high": reminder.reconstruction_ratio,
+        "recovery_target": reminder.recovery_target,
+        "usage": _safe_float(usage),
+        "streak": int(reminder.streak),
+        "last_round_id": reminder.last_round_id,
+        "transition_reason": reminder.last_transition_reason,
+    }
+    return {"event_name": CURRENT_MOLT_EVENT, "payload": payload}
+
+
+def reconstruction_molt_emission_descriptor(event: dict, *, message: str) -> dict:
+    """Return the ``{event_name, payload}`` for an emitted reconstruction reminder.
+
+    Pure function of the assembled reconstruction ``event`` dict (which already
+    carries the thresholds and the before/after context) plus the emitted text.
+    No session access needed, so the ToolExecutor / meta layer can build it
+    without extra wiring.  ``branch`` classifies where the rebuilt after-context
+    landed: ``still_high`` (>= reconstruction ratio, stop looping summarize) vs
+    ``above_recovery`` (>= recovery target but below the ratio).
+    """
+    event = event if isinstance(event, dict) else {}
+    trigger = _safe_float(event.get("trigger_threshold"))
+    if trigger is None:
+        trigger = CONTEXT_PRESSURE_RECONSTRUCTION_RATIO
+    recovery = _safe_float(event.get("recovery_target"))
+    if recovery is None:
+        recovery = CONTEXT_PRESSURE_RECOVERY_TARGET
+    before = event.get("before") if isinstance(event.get("before"), dict) else {}
+    after = event.get("after") if isinstance(event.get("after"), dict) else {}
+    before_usage = _safe_float(before.get("usage"))
+    after_usage = _safe_float(after.get("usage"))
+    after_source = after.get("source")
+    branch = None
+    if after_usage is not None:
+        branch = "still_high" if after_usage >= trigger else "above_recovery"
+    payload = {
+        "target_path": RECONSTRUCTION_MOLT_TARGET_PATH,
+        "message_hash": reminder_message_hash(message),
+        "trigger_threshold": trigger,
+        "recovery_target": recovery,
+        "before_usage": before_usage,
+        "after_usage": after_usage,
+        "after_source": after_source,
+        "branch": branch,
+    }
+    return {"event_name": RECONSTRUCTION_MOLT_EVENT, "payload": payload}
 
 
 def _format_ratio_percent(value: float | int | str | None) -> str:
@@ -144,7 +262,7 @@ class ContextPressureReminder:
     # ------------------------------------------------------------------
 
     def current_molt_context(self, usage: float) -> str | None:
-        """Return the ``_meta.agent_meta.context.molt`` reminder, or ``None``.
+        """Return the ``_meta.tool_meta.context.molt`` reminder, or ``None``.
 
         Returns ``None`` unless the sustained-pressure warning is :attr:`active`.
         ``usage`` is the current context-window fraction to name in the prose

@@ -34,6 +34,8 @@ from ..llm import (
 )
 from ..logging import get_logger
 from ..meta_block import (
+    TOOL_META_CONTEXT_EVENT_PENDING_KEY,
+    TOOL_META_CONTEXT_PENDING_KEY,
     build_meta,
     build_notification_payload,
     formal_tool_result_preview,
@@ -1417,9 +1419,10 @@ class BaseAgent:
         field in the body lets the agent distinguish kernel-injected
         reads from voluntary calls when reading conversation history.
 
-        Both call.args and result.content carry notification freshness fields
-        from build_meta (for example context.molt when active) plus a monotonic
-        injection_seq. This makes
+        Both call.args and result.content carry safe notification freshness
+        fields from build_meta plus a monotonic injection_seq. Internal tool-meta
+        transit keys are stripped below before the synthesized pair reaches the wire.
+        This makes
         every synthesized pair tokenize uniquely even when the underlying
         notification payload repeats — a protection layer against the
         DeepSeek cache fast-path empty-response failure without needing a
@@ -1489,10 +1492,14 @@ class BaseAgent:
             meta = build_meta(self)
         except (AttributeError, TypeError):
             meta = {}
-        # ``current_time`` is a permanent per-tool-result field under
-        # tool_meta.  Notification injections are synthesized pairs, not real
-        # tool results, and already have injection_seq for freshness/novelty.
+        # ``current_time`` and the ``_tool_meta_*`` transit keys are
+        # permanent per-tool-result fields consumed by ToolExecutor.
+        # Notification injections are synthesized pairs, not real tool results,
+        # and already have injection_seq for freshness/novelty; never flatten
+        # internal tool-meta transit payloads onto the model-visible wire.
         meta.pop("current_time", None)
+        meta.pop(TOOL_META_CONTEXT_PENDING_KEY, None)
+        meta.pop(TOOL_META_CONTEXT_EVENT_PENDING_KEY, None)
         meta["injection_seq"] = self._notification_inject_seq
 
         notifications_with_guidance = build_notification_payload(notifications)
@@ -1505,10 +1512,10 @@ class BaseAgent:
             "_synthesized": True,
             "_meta": dict(notifications_with_guidance),
         }
-        # Flatten build_meta fields into body top-level — these are the
-        # synthesized pair's own freshness/uniqueness fields (context when
-        # active, injection_seq), distinct from the tool-result metadata blocks
-        # under ``_meta``.
+        # Flatten the remaining safe build_meta fields into body top-level —
+        # these are the synthesized pair's own freshness/uniqueness fields
+        # (for example injection_seq), distinct from the tool-result metadata
+        # blocks under ``_meta``.
         body.update(meta)
         # Store body as a dict (not a JSON string) so it can be mutated
         # in-place when this pair is skeletonized later.  All adapters

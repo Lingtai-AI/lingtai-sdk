@@ -914,14 +914,14 @@ def _handle_message(agent, msg: Message) -> None:
         logger.warning(f"[{agent.agent_name}] Unknown message type: {msg.type}")
 
 
-# Context-pressure molt reminders are emitted as `_meta.agent_meta.context.molt`
+# Context-pressure molt reminders are emitted as `_meta.tool_meta.context.molt`
 # by meta_block.build_meta; the notification channel is kept only for
 # post-molt continuation/event signals.
 def _check_molt_pressure(agent) -> None:
     """Clear the legacy pressure-warning notification channel.
 
-    Context pressure is current agent state and is now exposed under
-    `_meta.agent_meta.context.molt` by ``meta_block.build_meta``. It should not
+    Context pressure is current agent state and is now exposed under permanent
+    `_meta.tool_meta.context.molt` by ``meta_block.build_meta``. It should not
     be a dismissible notification. Post-molt continuation still uses the
     notification system and is handled separately.
     """
@@ -1805,7 +1805,7 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         agent._save_chat_history(ledger_source=ledger_source)
 
         # Mid-loop turn-boundary housekeeping. Context pressure is now surfaced
-        # every tool result under _meta.agent_meta.context.molt
+        # on every tool result under permanent _meta.tool_meta.context.molt
         # (meta_block.build_meta), so _check_molt_pressure here only clears any
         # stale legacy molt.json; the rescan keeps summarize reminders in sync
         # across tool-loop LLM rounds, not only at request/notification-wake

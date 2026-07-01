@@ -123,18 +123,20 @@ class _Agent:
         self.logs.append((event, kwargs))
 
 
-def _stamped(meta_value: str, *, molt: str | None = None) -> dict:
+def _stamped(meta_value: str, *, material: str | None = None) -> dict:
     """A dict tool-result content already carrying a _runtime_pending snapshot.
 
-    ``molt`` optionally injects a material ``context.molt`` reminder so the
+    ``material`` optionally injects a material ``adapter_comment`` scalar so the
     caller can drive a genuine change in the agent_meta signature between
     batches (``current_time`` and ``echo`` are volatile / non-agent_meta and do
-    NOT change the material signature on their own).
+    NOT change the material signature on their own).  Note: the sustained-pressure
+    molt reminder is NOT an agent_meta signal anymore — it rides on permanent
+    ``tool_meta.context.molt`` — so a neutral agent_meta field is used here.
     """
     content = {"status": "ok", "echo": meta_value}
     meta: dict = {"current_time": meta_value}
-    if molt is not None:
-        meta["context"] = {"molt": molt}
+    if material is not None:
+        meta["adapter_comment"] = {"note": material}
     stamp_meta(content, meta, 5)
     return content
 
@@ -205,10 +207,10 @@ def test_unchanged_snapshot_not_restamped_on_newer_result(tmp_path):
 
 
 def test_material_change_reattaches_and_strips_prior(tmp_path):
-    # First batch has no molt; second batch surfaces a sustained-pressure molt
-    # reminder — a material change. agent_meta re-attaches to the newer result
-    # and the older holder sheds its agent_meta/guidance.
-    agent = _Agent(tmp_path, [_stamped("T1"), _stamped("T2", molt="sustained pressure")])
+    # First batch has no material agent_meta change; second batch surfaces a new
+    # adapter_comment scalar — a material change. agent_meta re-attaches to the
+    # newer result and the older holder sheds its agent_meta/guidance.
+    agent = _Agent(tmp_path, [_stamped("T1"), _stamped("T2", material="materially new")])
 
     _process_response(
         agent,
@@ -223,7 +225,7 @@ def test_material_change_reattaches_and_strips_prior(tmp_path):
     second_holder = agent._runtime_live_holder
     assert second_holder is not first_holder
     assert second_holder["echo"] == "T2"
-    assert second_holder["_meta"]["agent_meta"]["context"] == {"molt": "sustained pressure"}
+    assert second_holder["_meta"]["agent_meta"]["adapter_comment"] == {"note": "materially new"}
     # The previous holder sheds its agent_meta/guidance now that a newer live
     # holder carries the changed snapshot.
     assert "_meta" not in first_holder or "agent_meta" not in first_holder["_meta"]
