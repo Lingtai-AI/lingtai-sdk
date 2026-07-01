@@ -26,7 +26,7 @@ reads/clears via the ``notification`` tool.
 
 Identity and runtime state surface via other channels:
     - identity prompt section — every turn, cached prefix
-    - per-result `_meta.tool_meta` / latest `_meta.agent_meta` on tool results
+    - per-result `_meta.tool_meta` / sparse update-driven `_meta.agent_meta` on tool results
     - `.status.json` — written by the kernel; read with read({".status.json"})
       when the agent wants the deep dive
 

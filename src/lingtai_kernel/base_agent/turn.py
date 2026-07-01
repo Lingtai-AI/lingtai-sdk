@@ -1671,14 +1671,18 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
                 prior_holder=_prior_holder,
             )
 
-        # Move the live `_meta.agent_meta` / `_meta.guidance` blocks (kernel
-        # runtime state + guidance) to the latest tool-result dict from this
-        # batch, stripping them from the prior holder.  This keeps them
-        # latest-only — only the freshest provider-visible result carries live
-        # agent state, so stale snapshots do not accumulate in history.  Mirrors
-        # the notification holder above.  Unlike notifications there is no
-        # molt-race special case: these are pure per-turn snapshots, not
-        # kernel-synchronized channel state.
+        # Attach the live `_meta.agent_meta` / `_meta.guidance` blocks (kernel
+        # runtime state + guidance ref) SPARSELY: agent_meta is attached to the
+        # latest tool-result dict from this batch only when its MATERIAL snapshot
+        # changed since the last emitted agent_meta (per attach_active_runtime /
+        # agent_meta_signature, which ignores volatile bookkeeping).  When the
+        # snapshot is unchanged, nothing is attached or moved — the prior holder
+        # keeps its snapshot as a historical update point (so _runtime_live_holder
+        # is left pointing there).  When it changes, the prior *live* holder sheds
+        # its blocks and the newer result takes over.  Mirrors the notification
+        # holder above, but gated by the change signature rather than latest-only.
+        # Unlike notifications there is no molt-race special case: these are pure
+        # per-turn snapshots, not kernel-synchronized channel state.
         #
         # MUST run before _log_notification_block_injected below: the durable
         # snapshot copies the holder's full ``_meta`` envelope, and

@@ -521,13 +521,19 @@ class BaseAgent:
         # `meta_block.attach_active_notifications`.
         self._notification_live_holder: dict | None = None
 
-        # Latest provider-visible tool result carrying the live `_runtime`
-        # block (kernel runtime state + guidance).  Like the notification
-        # holder, `_runtime` is latest-only: when a newer dict result takes
-        # over, the prior holder's `_runtime` is stripped so stale runtime
-        # snapshots never accumulate in history.
-        # See `meta_block.attach_active_runtime`.
+        # Provider-visible tool result currently carrying the live `_meta.agent_meta`
+        # / `_meta.guidance` blocks (kernel runtime state + guidance ref).
+        # `agent_meta` is SPARSE / update-driven, not latest-result-only: it is
+        # (re)attached only when the material agent snapshot changes since the
+        # last emitted `agent_meta` (tracked by `_agent_meta_signature`).  When
+        # the snapshot is unchanged it is NOT chased onto the newest result; the
+        # prior holder keeps it as a historical update point.  When it changes,
+        # the prior *live* holder sheds its blocks and the newer result takes
+        # over.  See `meta_block.attach_active_runtime` / `agent_meta_signature`.
         self._runtime_live_holder: dict | None = None
+        # Material signature of the last emitted `_meta.agent_meta`; the change
+        # gate for the sparse attach above.  ``None`` until the first snapshot.
+        self._agent_meta_signature: str | None = None
 
         # Large-result hint threshold (chars).  When a main-agent tool result's
         # serialized length exceeds this value it is treated as "large": the

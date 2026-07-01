@@ -1879,7 +1879,7 @@ def test_attach_active_runtime_picks_latest_dict_in_batch():
     assert string_tail.content == "plain text"
 
 
-def test_attach_active_runtime_empty_meta_yields_no_runtime_but_clears_prior():
+def test_attach_active_runtime_empty_meta_keeps_prior_snapshot():
     # A time-blind agent's results carry no _runtime_pending (stamp_meta no-op).
     agent = _runtime_agent(total_calls=1)
     prior_content = _stamped_result({"current_time": "T1"}, 5)
@@ -1887,16 +1887,159 @@ def test_attach_active_runtime_empty_meta_yields_no_runtime_but_clears_prior():
     holder = attach_active_runtime(agent, [prior], prior_holder=None)
     assert "agent_meta" in prior.content["_meta"]
 
-    # Next batch: result was NOT stamped (no pending). Prior still loses its blocks.
+    # Next batch: result was NOT stamped (no pending) — there is no new snapshot
+    # to emit. Under the sparse contract the prior holder's agent_meta stays put
+    # as the most recent emitted update point rather than being stripped with no
+    # replacement.
     blind = ToolResultBlock(id="t2", name="x", content={"status": "ok"})
     new_holder = attach_active_runtime(agent, [blind], prior_holder=holder)
 
-    assert new_holder is None
-    assert "_meta" not in prior.content
+    assert new_holder is holder
+    assert "agent_meta" in prior.content["_meta"]
     assert "_meta" not in blind.content
 
 
-def test_attach_active_runtime_no_dict_target_clears_prior():
+# ---------------------------------------------------------------------------
+# Sparse / update-driven agent_meta: agent_meta is attached only when the
+# material snapshot changes since the last emitted agent_meta, not re-stamped
+# onto every latest tool result when unchanged.
+# ---------------------------------------------------------------------------
+
+
+def test_attach_active_runtime_first_snapshot_is_attached():
+    # The very first material snapshot always attaches — there is no prior
+    # signature to compare against.
+    agent = _runtime_agent(total_calls=1)
+    content = _stamped_result({"current_time": "T1"}, 5)
+    block = ToolResultBlock(id="t1", name="x", content=content)
+
+    holder = attach_active_runtime(agent, [block], prior_holder=None)
+
+    assert holder is block.content
+    assert "agent_meta" in block.content["_meta"]
+    assert "guidance" in block.content["_meta"]
+
+
+def test_attach_active_runtime_unchanged_snapshot_not_restamped_on_latest():
+    # Same agent, a second batch whose MATERIAL snapshot is identical (only
+    # volatile bookkeeping — elapsed_ms, active_turn_tool_calls, current_time,
+    # total_chars — differs). agent_meta must NOT move onto the new latest
+    # result, and the prior holder keeps its snapshot as a historical update
+    # point.
+    agent = _runtime_agent(total_calls=1)
+    first = ToolResultBlock(id="t1", name="x", content=_stamped_result({"current_time": "T1"}, 5))
+    holder = attach_active_runtime(agent, [first], prior_holder=None)
+    assert "agent_meta" in first.content["_meta"]
+
+    # Volatile-only change: counter ticks, elapsed differs, time differs.
+    agent._executor.guard.total_calls = 2
+    second = ToolResultBlock(id="t2", name="x", content=_stamped_result({"current_time": "T2"}, 6))
+    new_holder = attach_active_runtime(agent, [second], prior_holder=holder)
+
+    # No material change → do not attach to the latest, do not move the holder.
+    assert "_meta" not in second.content or "agent_meta" not in second.content["_meta"]
+    # Prior snapshot stays as a historical update point (not stripped).
+    assert "agent_meta" in first.content["_meta"]
+    assert new_holder is holder
+    # Transient scaffolding is still cleared from the un-stamped result.
+    assert "_runtime_pending" not in second.content
+
+
+def test_attach_active_runtime_material_change_reattaches():
+    # After an unchanged batch, a genuinely material change (here: a new
+    # sustained-pressure molt reminder) re-attaches agent_meta to the newest
+    # result and strips the older holder.
+    agent = _runtime_agent(total_calls=1)
+    first = ToolResultBlock(id="t1", name="x", content=_stamped_result({"current_time": "T1"}, 5))
+    holder = attach_active_runtime(agent, [first], prior_holder=None)
+
+    # Unchanged batch — no re-attach.
+    agent._executor.guard.total_calls = 2
+    second = ToolResultBlock(id="t2", name="x", content=_stamped_result({"current_time": "T2"}, 6))
+    holder2 = attach_active_runtime(agent, [second], prior_holder=holder)
+    assert holder2 is holder
+    assert "agent_meta" not in second.content.get("_meta", {})
+
+    # Material change: a molt reminder now appears in the snapshot.
+    agent._executor.guard.total_calls = 3
+    third = ToolResultBlock(
+        id="t3",
+        name="x",
+        content=_stamped_result(
+            {"current_time": "T3", "context": {"molt": "sustained pressure"}}, 7
+        ),
+    )
+    new_holder = attach_active_runtime(agent, [third], prior_holder=holder)
+
+    assert new_holder is third.content
+    assert "agent_meta" in third.content["_meta"]
+    assert third.content["_meta"]["agent_meta"]["context"] == {"molt": "sustained pressure"}
+    # The older holder now sheds its agent_meta/guidance.
+    assert "_meta" not in first.content or "agent_meta" not in first.content["_meta"]
+
+
+def test_attach_active_runtime_new_large_result_is_material():
+    # A new large tool result appearing in current_tool_result_chars.top_results
+    # is a material change worth re-surfacing agent_meta, even if nothing else
+    # changed.
+    agent = _fake_agent()
+    small = ToolResultBlock(
+        id="t1", name="x", content=_stamped_result(build_meta(agent), 5)
+    )
+    holder = attach_active_runtime(agent, [small], prior_holder=None)
+    assert "agent_meta" in small.content["_meta"]
+
+    # A big result enters the batch — top_results changes materially.
+    big_content = {"payload": "B" * 5000}
+    stamp_meta(big_content, build_meta(agent), elapsed_ms=6)
+    big = ToolResultBlock(id="t2", name="bash", content=big_content)
+    new_holder = attach_active_runtime(agent, [big], prior_holder=holder)
+
+    assert new_holder is big.content
+    assert "agent_meta" in big.content["_meta"]
+    top = big.content["_meta"]["agent_meta"]["current_tool_result_chars"]["top_results"]
+    assert any(entry["id"] == "t2" for entry in top)
+
+
+def test_agent_meta_signature_ignores_volatile_bookkeeping():
+    # The material signature must be identical when only volatile fields differ.
+    from lingtai_kernel.meta_block import agent_meta_signature
+
+    base = {
+        "elapsed_ms": 5,
+        "active_turn_tool_calls": 1,
+        "current_time": "T1",
+        "current_tool_result_chars": {
+            "total_chars": 100,
+            "threshold": 3000,
+            "over_threshold_count": 0,
+            "top_results": [],
+        },
+        "context": {"molt": "reminder"},
+    }
+    volatile_changed = {
+        "elapsed_ms": 999,
+        "active_turn_tool_calls": 42,
+        "current_time": "T2",
+        "current_tool_result_chars": {
+            "total_chars": 999999,
+            "threshold": 3000,
+            "over_threshold_count": 0,
+            "top_results": [],
+        },
+        "context": {"molt": "reminder"},
+    }
+    assert agent_meta_signature(base) == agent_meta_signature(volatile_changed)
+
+    material_changed = dict(base)
+    material_changed["context"] = {"molt": "different reminder"}
+    assert agent_meta_signature(base) != agent_meta_signature(material_changed)
+
+
+def test_attach_active_runtime_no_dict_target_keeps_prior_snapshot():
+    # A batch with no dict-shaped result has nowhere to attach a new snapshot.
+    # Under the sparse contract the prior holder's agent_meta remains as the
+    # most recent emitted update point rather than being stripped.
     agent = _runtime_agent(total_calls=1)
     prior_content = _stamped_result({"current_time": "T1"}, 5)
     prior = ToolResultBlock(id="t1", name="x", content=prior_content)
@@ -1905,8 +2048,8 @@ def test_attach_active_runtime_no_dict_target_clears_prior():
     string_only = ToolResultBlock(id="t2", name="x", content="text")
     new_holder = attach_active_runtime(agent, [string_only], prior_holder=holder)
 
-    assert new_holder is None
-    assert "_meta" not in prior.content
+    assert new_holder is holder
+    assert "agent_meta" in prior.content["_meta"]
     assert string_only.content == "text"
 
 
