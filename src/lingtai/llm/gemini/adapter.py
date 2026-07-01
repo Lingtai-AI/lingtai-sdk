@@ -26,6 +26,7 @@ from lingtai_kernel.llm.interface import ToolResultBlock
 from lingtai.llm.base import LLMAdapter
 from lingtai_kernel.llm.interface import ChatInterface
 from lingtai_kernel.llm.streaming import StreamingAccumulator
+from lingtai.llm.identity_headers import merge_lingtai_identity_headers
 
 logger = get_logger()
 
@@ -687,10 +688,14 @@ class GeminiAdapter(LLMAdapter):
     """Adapter that wraps all ``google-genai`` SDK calls."""
 
     def __init__(self, api_key: str, timeout_ms: int = 300_000, max_rpm: int = 0,
-                 default_model: str = "gemini-3-flash-preview"):
+                 default_model: str = "gemini-3-flash-preview",
+                 default_headers: dict | None = None):
         self._client = genai.Client(
             api_key=api_key,
             http_options=types.HttpOptions(
+                # google-genai appends its own lowercase user-agent internally;
+                # use explicit LingTai X-headers here to avoid duplicate UA keys.
+                headers=merge_lingtai_identity_headers(default_headers, user_agent=False),
                 timeout=timeout_ms,
                 retry_options=types.HttpRetryOptions(),
             ),

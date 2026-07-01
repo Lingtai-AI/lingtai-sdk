@@ -22,12 +22,12 @@ Gemini adapter — `google-genai` SDK with Chat API and Interactions API, thinki
 | File | LOC | Role |
 |------|-----|------|
 | `__init__.py` | 3 | Re-exports `GeminiAdapter`, `GeminiChatSession`, `InteractionsChatSession` |
-| `adapter.py` | 908 | Adapter + 2 session classes + helpers |
+| `adapter.py` | 913 | Adapter + 2 session classes + helpers |
 | `defaults.py` | 4 | `DEFAULTS` dict: `api_key_env=GEMINI_API_KEY`, `model=gemini-3-flash-preview` |
 
 ### Classes
 
-- **`GeminiAdapter(LLMAdapter)`** — `adapter.py:686` — wraps `genai.Client`.
+- **`GeminiAdapter(LLMAdapter)`** — `adapter.py:687` — wraps `genai.Client` and passes LingTai identity/version headers through `types.HttpOptions(headers=...)`.
 - **`GeminiChatSession(ChatSession)`** — `adapter.py:139` — Chat API session (used for `json_schema` mode).
 - **`InteractionsChatSession(ChatSession)`** — `adapter.py:342` — Interactions API session (server-side history, primary path).
 
@@ -50,6 +50,7 @@ Gemini adapter — `google-genai` SDK with Chat API and Interactions API, thinki
 - **Imports from `lingtai`**: `LLMAdapter` ABC, `to_gemini` converter (lazy in `create_chat`)
 - **External**: `google.genai`, `google.genai.errors`, `google.genai.types`
 - **No inheritance from other adapters** (standalone implementation)
+- **HTTP identity**: `GeminiAdapter.__init__` uses `types.HttpOptions(headers=merge_lingtai_identity_headers(..., user_agent=False))`, sending `X-LingTai-*` headers while leaving the SDK-owned lowercase `user-agent` untouched.
 
 ## Composition
 
@@ -57,10 +58,10 @@ Gemini adapter — `google-genai` SDK with Chat API and Interactions API, thinki
 
 | Method | Line | Notes |
 |--------|------|-------|
-| `create_chat` | 706 | Routes to Interactions API (default) or Chat API (json_schema mode); wraps in `_GatedSession` |
-| `generate` | 851 | One-shot via `client.models.generate_content`; gated |
-| `make_tool_result_message` | 883 | Returns `ToolResultBlock` with `id=tool_call_id or tool_name` |
-| `is_quota_error` | 893 | `ClientError` with code 429 or `RESOURCE_EXHAUSTED` in message |
+| `create_chat` | 711 | Routes to Interactions API (default) or Chat API (json_schema mode); wraps in `_GatedSession` |
+| `generate` | 856 | One-shot via `client.models.generate_content`; gated |
+| `make_tool_result_message` | 888 | Returns `ToolResultBlock` with `id=tool_call_id or tool_name` |
+| `is_quota_error` | 898 | `ClientError` with code 429 or `RESOURCE_EXHAUSTED` in message |
 
 ### Dual session architecture
 

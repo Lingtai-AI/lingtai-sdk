@@ -41,6 +41,7 @@ from lingtai.llm.base import LLMAdapter
 from lingtai_kernel.llm.interface import ChatInterface, TextBlock, ThinkingBlock, ToolCallBlock
 from ..interface_converters import to_openai, to_responses_input
 from lingtai_kernel.llm.streaming import StreamingAccumulator
+from lingtai.llm.identity_headers import lingtai_user_agent, merge_lingtai_identity_headers
 
 logger = get_logger()
 
@@ -237,9 +238,7 @@ def _lingtai_user_agent() -> str:
     if _CODEX_IMPERSONATE_OFFICIAL_CLI:
         return _codex_cli_user_agent()
     try:
-        from importlib.metadata import version
-
-        return f"LingTai/{version('lingtai')}"
+        return lingtai_user_agent()
     except Exception:
         return "LingTai"
 
@@ -1972,8 +1971,7 @@ class OpenAIAdapter(LLMAdapter):
         if base_url:
             kwargs["base_url"] = base_url
         kwargs["timeout"] = timeout_ms / 1000.0  # openai SDK uses seconds
-        if default_headers:
-            kwargs["default_headers"] = dict(default_headers)
+        kwargs["default_headers"] = merge_lingtai_identity_headers(default_headers)
         self._client_kwargs = dict(kwargs)  # store for session reset
         self._client = openai.OpenAI(**kwargs)
         self._setup_gate(max_rpm)

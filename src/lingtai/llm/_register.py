@@ -17,13 +17,15 @@ CODEX_OFFICIAL_BASE_URL = "https://chatgpt.com/backend-api/codex"
 def register_all_adapters() -> None:
     from lingtai.llm.service import LLMService
 
-    def _gemini(*, model=None, defaults=None, api_key=None, max_rpm=0, **_kw):
+    def _gemini(*, model=None, defaults=None, api_key=None, max_rpm=0, **kw):
         from .gemini.adapter import GeminiAdapter
-        kw: dict = {}
-        if api_key is not None: kw["api_key"] = api_key
-        if max_rpm > 0: kw["max_rpm"] = max_rpm
-        if model: kw["default_model"] = model
-        return GeminiAdapter(**kw)
+        adapter_kw: dict = {}
+        if api_key is not None: adapter_kw["api_key"] = api_key
+        if max_rpm > 0: adapter_kw["max_rpm"] = max_rpm
+        if model: adapter_kw["default_model"] = model
+        if kw.get("default_headers") is not None:
+            adapter_kw["default_headers"] = kw["default_headers"]
+        return GeminiAdapter(**adapter_kw)
 
     def _anthropic(*, model=None, defaults=None, **kw):
         from .anthropic.adapter import AnthropicAdapter

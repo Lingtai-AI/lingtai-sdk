@@ -5,6 +5,7 @@ related_files:
   - src/lingtai/llm/ANATOMY.md
   - src/lingtai/llm/_register.py
   - src/lingtai/llm/interface_converters.py
+  - src/lingtai/llm/identity_headers.py
   - src/lingtai/llm/openai/__init__.py
   - src/lingtai/llm/openai/adapter.py
   - src/lingtai/llm/openai/codex_ws.py
@@ -49,7 +50,7 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 | `_base_url_namespace()` | 102–116 | Stable namespace token for an OpenAI-compatible `base_url` (URL host, or short hash fallback) used in the default `prompt_cache_key` |
 | `_codex_session_id()` | ~106–122 | Derive the 8-char Codex cache-affinity id (issue #378): `sha256(f"{anchor}\0{molt_count}").hexdigest()[:8]`, lowercase hex, where `anchor` MUST be a per-agent identity (the resolved `init.json` path) and `molt_count` is the agent's current molt count. The same value is used byte-identically for `session_id`, `thread_id`, and the default `prompt_cache_key` on the root/main path. No time/epoch — stable across restarts WITHIN a molt segment, and intentionally changes at each molt boundary |
 | `_codex_installation_id()` | `adapter.py:154` | Derives a UUID-shaped, non-secret LingTai installation id for Codex `client_metadata` from the same local anchor/id; never reuses `~/.codex/installation_id`. |
-| `_codex_identity_headers()` | ~150–205 | Builds Codex client identity headers (`originator`, `User-Agent`): default requests identify as LingTai, while the official Codex CLI-shaped identity remains an explicit local diagnostic opt-in. | `adapter.py:140`, `adapter.py:153`, `adapter.py:178`, `adapter.py:214` |
+| `_codex_identity_headers()` | ~259–268 | Builds Codex client identity headers (`originator`, `User-Agent`): default requests identify as LingTai via the shared `llm/identity_headers.py` User-Agent helper, while the official Codex CLI-shaped identity remains an explicit local diagnostic opt-in. | `adapter.py:259`, `adapter.py:268`, `identity_headers.py:20` |
 | `_validate_compact_threshold()` | 69–83 | Validates/normalizes OpenAI Responses auto-compaction threshold; positive `int` or explicit `None` (disable) only |
 | `_codex_responses_trace_path()` / `_codex_responses_trace_record()` | 63–157 | Opt-in Codex Responses stream diagnostic trace helpers; safe metadata only, default off |
 | `_build_http_timeout()` | 159–173 | `httpx.Timeout` per-phase caps (connect≤30s, read≤60s, pool=10s) |
@@ -176,7 +177,7 @@ Stable HTTP headers (`session_id` / `thread_id`, underscore spelling to match Co
 
 ### Codex client-identity headers (`originator` / `User-Agent`)
 
-The default request identity is explicit LingTai: `_CODEX_ORIGINATOR = "lingtai"` and `User-Agent: LingTai/<version>`. `_CODEX_IMPERSONATE_OFFICIAL_CLI` is reserved for explicit local protocol comparisons and switches both `originator` and `User-Agent` to the official Codex CLI-shaped values only when enabled; account-selection headers remain independent of this identity choice. `adapter.py:140`, `adapter.py:153`, `adapter.py:178`, `adapter.py:214`, `tests/test_codex_prompt_cache_key.py:113`, `tests/test_codex_prompt_cache_key.py:590`
+The default request identity is explicit LingTai: `_CODEX_ORIGINATOR = "lingtai"` and `User-Agent: LingTai/<version>`, with the version token resolved through the shared LLM HTTP identity helper (`../identity_headers.py:20`). `_CODEX_IMPERSONATE_OFFICIAL_CLI` is reserved for explicit local protocol comparisons and switches both `originator` and `User-Agent` to the official Codex CLI-shaped values only when enabled; account-selection headers remain independent of this identity choice. `adapter.py:140`, `adapter.py:153`, `adapter.py:178`, `adapter.py:214`, `tests/test_codex_prompt_cache_key.py:113`, `tests/test_codex_prompt_cache_key.py:590`
 
 ### Codex `ChatGPT-Account-ID` header (the user's own account id)
 
@@ -198,7 +199,7 @@ When a Codex session has a stable LingTai session/thread identity, `CodexRespons
 - **`CodexResponsesSession._response_id`** — transient debug aid only; never threaded into next request (line 1538).
 - **`CodexResponsesSession._current_id`** — the single per-agent affinity id (the hash of the agent path + current molt count) handed to this session, used byte-identically for `_prompt_cache_key` / `_session_id` / `_thread_id`. Set once per session at construction — a NEW session is built for each `create_chat`, and the adapter resolves the molt-current id at that point, so a molt-advanced id reaches the next session without any in-session mutation (no rotation, no epoch, no clock).
 - **Codex Responses trace** — opt-in diagnostics write JSONL metadata to `logs/codex_responses_trace.jsonl` when `LINGTAI_CODEX_RESPONSES_TRACE=1` (override path with `LINGTAI_CODEX_RESPONSES_TRACE_PATH`). Default off; stores event/item shapes, lengths/hashes, usage, and accumulator counts, not raw content.
-- **`OpenAIAdapter._client`** — shared `openai.OpenAI` instance. `_client_kwargs` stored for session `reset()`.
+- **`OpenAIAdapter._client`** — shared `openai.OpenAI` instance. `_client_kwargs` stored for session `reset()`. Constructor passes `default_headers=merge_lingtai_identity_headers(...)` (`adapter.py:1974`), so OpenAI-compatible HTTP requests carry non-secret LingTai identity/version headers unless a caller/provider header overrides them case-insensitively.
 - **`OpenAIAdapter._session_class`** — class var, subclasses override (e.g. DeepSeek and MiMo inject `reasoning_content` round-trip fallbacks).
 
 ## Notes

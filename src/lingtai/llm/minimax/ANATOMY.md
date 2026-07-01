@@ -24,7 +24,7 @@ MiniMax adapter — inherits Anthropic-compatible endpoint, adds MCP client fact
 | File | LOC | Role |
 |------|-----|------|
 | `__init__.py` | 4 | Re-exports `MiniMaxAdapter`, `get_minimax_mcp_client` |
-| `adapter.py` | 21 | `MiniMaxAdapter(AnthropicAdapter)` — thin subclass |
+| `adapter.py` | 27 | `MiniMaxAdapter(AnthropicAdapter)` — thin subclass |
 | `mcp_client.py` | 153 | Singleton MCP client factory for MiniMax MCP server (vision/compose/draw/talk) |
 | `defaults.py` | 7 | `DEFAULTS` dict: `api_compat=anthropic`, `base_url=https://api.minimax.io/anthropic`, `api_key_env=MINIMAX_API_KEY`, `model=MiniMax-M2.7-highspeed`, `max_rpm=120` |
 
@@ -43,7 +43,7 @@ Only override is `__init__`:
 
 | Override | Line | What changes |
 |----------|------|-------------|
-| `__init__` | 15 | Sets `base_url` to `https://api.minimax.io/anthropic` (or custom), calls `super().__init__()`, re-calls `_setup_gate(max_rpm=120)` |
+| `__init__` | 15 | Sets `base_url` to `https://api.minimax.io/anthropic` (or custom), forwards `default_headers`, calls `super().__init__()`, re-calls `_setup_gate(max_rpm=120)` |
 
 All other methods (`create_chat`, `generate`, `make_tool_result_message`, `is_quota_error`, `send`, `send_stream`, etc.) are **inherited unchanged** from `AnthropicAdapter` / `AnthropicChatSession`.
 

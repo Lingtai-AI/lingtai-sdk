@@ -50,6 +50,7 @@ from lingtai.llm.base import LLMAdapter
 from lingtai_kernel.llm.interface import ChatInterface
 from ..interface_converters import to_anthropic
 from lingtai_kernel.llm.streaming import StreamingAccumulator
+from lingtai.llm.identity_headers import merge_lingtai_identity_headers
 
 
 # ---------------------------------------------------------------------------
@@ -660,11 +661,13 @@ class AnthropicAdapter(LLMAdapter):
         base_url: str | None = None,
         timeout_ms: int = 300_000,
         max_rpm: int = 0,
+        default_headers: dict | None = None,
     ):
         self._base_url = base_url
         kwargs: dict[str, Any] = {
             "api_key": api_key,
             "timeout": timeout_ms / 1000.0,
+            "default_headers": merge_lingtai_identity_headers(default_headers),
         }
         if base_url:
             kwargs["base_url"] = base_url

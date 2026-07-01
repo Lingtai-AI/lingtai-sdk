@@ -3,6 +3,7 @@ related_files:
   - src/lingtai/ANATOMY.md
   - src/lingtai/llm/__init__.py
   - src/lingtai/llm/_register.py
+  - src/lingtai/llm/identity_headers.py
   - src/lingtai/llm/anthropic/ANATOMY.md
   - src/lingtai/llm/api_gate.py
   - src/lingtai/llm/base.py
@@ -18,6 +19,7 @@ related_files:
   - src/lingtai/llm/service.py
   - src/lingtai_kernel/llm/ANATOMY.md
   - tests/test_codex_endpoint_pool.py
+  - tests/test_llm_identity_headers.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -36,12 +38,13 @@ LLM adapter layer — multi-provider support with adapter registry, base classes
 | File | LOC | Role |
 |------|-----|------|
 | `__init__.py` | 20 | Re-exports kernel types (`ChatSession`, `LLMResponse`, `ToolCall`, `FunctionSchema`, `ChatInterface`) + `LLMAdapter` from `base.py`. Triggers `register_all_adapters()` on import. |
-| `_register.py` | 200 | Registers adapter factories for all providers with `LLMService.register_adapter()`. Module constant `CODEX_OFFICIAL_BASE_URL` is the Codex default endpoint. The `_codex` factory also forwards an optional `codex_base_urls` pool (+ `codex_molt_count` override) to the adapter. |
+| `_register.py` | 202 | Registers adapter factories for all providers with `LLMService.register_adapter()`. Module constant `CODEX_OFFICIAL_BASE_URL` is the Codex default endpoint. The `_codex` factory also forwards an optional `codex_base_urls` pool (+ `codex_molt_count` override) to the adapter. |
+| `identity_headers.py` | 53 | Shared non-secret LingTai HTTP identity/version header helper for SDK-backed LLM adapters. |
 | `claude_code/` | — | `claude-code` provider: drives the local `claude` CLI as a stateless reasoning core on a Claude subscription (`adapter.py`, `defaults.py`). |
 | `api_gate.py` | 112 | `APICallGate` — RPM rate limiter with deque timestamps, `ThreadPoolExecutor`, daemon gate thread |
 | `base.py` | 150 | `LLMAdapter` ABC (4 abstract methods), `_GatedSession` proxy |
 | `interface_converters.py` | 335 | Bidirectional converters: `to_*` / `from_*` for Anthropic, OpenAI, OpenAI Responses API, Gemini |
-| `service.py` | 430 | `LLMService` concrete class — adapter registry, session management, one-shot generation |
+| `service.py` | 454 | `LLMService` concrete class — adapter registry, session management, one-shot generation |
 
 ## Connections
 
@@ -53,7 +56,8 @@ LLM adapter layer — multi-provider support with adapter registry, base classes
 
 ## Composition
 
-- **Factory pattern** — `LLMService._adapter_registry` (class-level dict) maps provider name → `Callable[..., LLMAdapter]`. Each factory receives `(model, defaults, **kw)` and lazy-imports the adapter module.
+- **Factory pattern** — `LLMService._adapter_registry` (class-level dict) maps provider name → `Callable[..., LLMAdapter]`. Each factory receives `(model, defaults, **kw)` and lazy-imports the adapter module. HTTP-capable factories forward `default_headers` to SDK-backed adapters; `claude-code` deliberately drops them because the local CLI owns its own HTTP stack.
+- **HTTP identity headers** — `identity_headers.py:12-53` builds `X-LingTai-Client`, optional `X-LingTai-Version`, and optional `User-Agent: LingTai/<version>`, then merges them under caller/provider headers case-insensitively. OpenAI-compatible, Anthropic-compatible, and Gemini adapters consume this helper at SDK construction time.
 - **Adapter caching** — `LLMService._adapters` keyed by `(provider, base_url)` tuple (`service.py:141`). Double-checked locking via `_adapter_lock` (`service.py:142`).
 - **Session tracking** — `LLMService._sessions` dict maps `st_<12-hex>` session IDs to `ChatSession` instances (`service.py:144`). Untracked sessions get `session_id=""`.
 - **Gated sessions** — `_GatedSession` (`base.py:19`) proxies `send()` and `send_stream()` through `APICallGate.submit()`. Attribute writes land on the proxy; reads fall through to inner session via `__getattr__`.
@@ -67,7 +71,7 @@ LLM adapter layer — multi-provider support with adapter registry, base classes
 
 - **Class-level** — `LLMService._adapter_registry` (shared across all instances); `LLMAdapter._gate` (per-adapter instance).
 - **Instance-level** — `LLMService._adapters` cache; `LLMService._sessions` registry; `APICallGate._timestamps` deque for RPM window.
-- **Provider defaults** — `LLMService._provider_defaults` dict injected at construction (`service.py:140`). Drives model, base_url, max_rpm, api_compat, the Codex per-agent identity (`codex_session_anchor`/`codex_thread_salt`), Codex token-file selection (`codex_auth_path`), the optional Codex endpoint pool (`codex_base_urls`; direct host/test defaults may also pass `codex_molt_count`), and OpenAI Responses `compact_threshold` settings. Build it from `manifest.llm` via `build_provider_defaults_from_manifest_llm()` (`service.py:66`) — opt-in safelists ensure adapter-consulted manifest fields propagate: `_PROVIDER_DEFAULTS_PASS_THROUGH_KEYS` skips `None` values such as `api_compat`, while `_PROVIDER_DEFAULTS_PRESERVE_NONE_KEYS` preserves explicit `None` for settings like `compact_threshold` where `null` means “disable”. Both `cli.py:_load_init` and `agent.py:_setup_from_init` use this helper to stay in sync.
+- **Provider defaults** — `LLMService._provider_defaults` dict injected at construction (`service.py:140`). Drives model, base_url, max_rpm, api_compat, `default_headers` (caller/provider headers preserved under the shared LingTai identity defaults), the Codex per-agent identity (`codex_session_anchor`/`codex_thread_salt`), Codex token-file selection (`codex_auth_path`), the optional Codex endpoint pool (`codex_base_urls`; direct host/test defaults may also pass `codex_molt_count`), and OpenAI Responses `compact_threshold` settings. Build it from `manifest.llm` via `build_provider_defaults_from_manifest_llm()` (`service.py:66`) — opt-in safelists ensure adapter-consulted manifest fields propagate: `_PROVIDER_DEFAULTS_PASS_THROUGH_KEYS` skips `None` values such as `api_compat`, while `_PROVIDER_DEFAULTS_PRESERVE_NONE_KEYS` preserves explicit `None` for settings like `compact_threshold` where `null` means “disable”. Both `cli.py:_load_init` and `agent.py:_setup_from_init` use this helper to stay in sync.
 - **Key resolution** — `LLMService._key_resolver` callable (`service.py:94`); defaults to `os.environ.get(f"{PROVIDER}_API_KEY")`.
 
 ## Notes

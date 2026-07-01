@@ -32,6 +32,7 @@ class OpenRouterAdapter(OpenAIAdapter):
         base_url: str | None = None,
         timeout_ms: int = 300_000,
         max_rpm: int = 0,
+        default_headers: dict | None = None,
     ):
         # Allow base_url override for staging / self-hosted proxies, but
         # default to the public OpenRouter endpoint.
@@ -40,6 +41,7 @@ class OpenRouterAdapter(OpenAIAdapter):
             base_url=base_url or _OPENROUTER_BASE_URL,
             timeout_ms=timeout_ms,
             max_rpm=max_rpm,
+            default_headers=default_headers,
         )
 
     def _adapter_extra_body(self) -> dict:

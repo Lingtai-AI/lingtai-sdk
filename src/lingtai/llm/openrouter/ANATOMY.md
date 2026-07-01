@@ -22,7 +22,7 @@ OpenRouter adapter — thin OpenAI-compat shim pinned to `openrouter.ai/api/v1`,
 | File | LOC | Role |
 |------|-----|------|
 | `__init__.py` | 0 | Empty |
-| `adapter.py` | 48 | `OpenRouterAdapter(OpenAIAdapter)` — one override |
+| `adapter.py` | 50 | `OpenRouterAdapter(OpenAIAdapter)` — one override |
 
 ### Class
 
@@ -40,7 +40,7 @@ OpenRouter adapter — thin OpenAI-compat shim pinned to `openrouter.ai/api/v1`,
 
 | Method | Line | Notes |
 |--------|------|-------|
-| `__init__` | 28 | Calls `super().__init__()` with `base_url=base_url or _OPENROUTER_BASE_URL` |
+| `__init__` | 28 | Calls `super().__init__()` with `base_url=base_url or _OPENROUTER_BASE_URL` and forwards `default_headers` for LingTai identity/version headers |
 | `_adapter_extra_body` | 45 | Returns `{"reasoning": {"include": False}}` — tells OpenRouter to omit reasoning text from responses |
 
 All other methods (`create_chat`, `generate`, `make_tool_result_message`, `is_quota_error`, `send`, `send_stream`) are **inherited unchanged** from `OpenAIAdapter` / `OpenAIChatSession`.
@@ -55,7 +55,7 @@ No additional state beyond what `OpenAIAdapter` provides.
 
 ## Notes
 
-- **48 LOC total** — one of the thinnest adapters.
+- **50 LOC total** — one of the thinnest adapters.
 - **Same pattern as DeepSeek**: subclass `OpenAIAdapter`, override `__init__` for base URL, optionally override `_adapter_extra_body`.
 - **Reasoning exclusion**: Unlike DeepSeek (which needs `reasoning_content` round-trip), OpenRouter explicitly opts **out** of reasoning text. The OpenAI response parser already reads both `reasoning_content` and `reasoning` field names if present.
 - Git history: 2 commits.

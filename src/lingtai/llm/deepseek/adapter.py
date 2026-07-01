@@ -122,10 +122,12 @@ class DeepSeekAdapter(OpenAIAdapter):
         base_url: str | None = None,
         timeout_ms: int = 300_000,
         max_rpm: int = 0,
+        default_headers: dict | None = None,
     ):
         super().__init__(
             api_key=api_key,
             base_url=base_url or _DEEPSEEK_BASE_URL,
             timeout_ms=timeout_ms,
             max_rpm=max_rpm,
+            default_headers=default_headers,
         )

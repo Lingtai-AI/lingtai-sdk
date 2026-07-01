@@ -22,7 +22,7 @@ DeepSeek adapter — thin OpenAI-compat wrapper that satisfies DeepSeek V4 think
 | File | LOC | Role |
 |------|-----|------|
 | `__init__.py` | 0 | Empty |
-| `adapter.py` | ~130 | `DeepSeekAdapter`, `DeepSeekChatSession`, `_fallback_reasoning_for` |
+| `adapter.py` | 133 | `DeepSeekAdapter`, `DeepSeekChatSession`, `_fallback_reasoning_for` |
 
 ### Classes
 
@@ -48,7 +48,7 @@ DeepSeek adapter — thin OpenAI-compat wrapper that satisfies DeepSeek V4 think
 
 | Method | Notes |
 |--------|-------|
-| `__init__` | Calls `super().__init__()` with `base_url=base_url or _DEEPSEEK_BASE_URL` |
+| `__init__` | Calls `super().__init__()` with `base_url=base_url or _DEEPSEEK_BASE_URL` and forwards `default_headers` so OpenAIAdapter adds LingTai identity/version headers |
 | `_session_class` | Set to `DeepSeekChatSession` (parent's `create_chat` uses this) |
 
 All other `LLMAdapter` methods (`create_chat`, `generate`, `make_tool_result_message`, `is_quota_error`) are **inherited unchanged** from `OpenAIAdapter`.

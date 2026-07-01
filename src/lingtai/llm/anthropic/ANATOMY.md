@@ -22,12 +22,12 @@ Anthropic Claude adapter — Messages API with prompt caching, tool use, and ext
 | File | LOC | Role |
 |------|-----|------|
 | `__init__.py` | 3 | Re-exports `AnthropicAdapter`, `AnthropicChatSession` |
-| `adapter.py` | 829 | Adapter + session + helpers |
+| `adapter.py` | 832 | Adapter + session + helpers |
 | `defaults.py` | 6 | `DEFAULTS` dict: `api_key_env=ANTHROPIC_API_KEY`, `model=claude-sonnet-4-20250514` |
 
 ### Classes
 
-- **`AnthropicAdapter(LLMAdapter)`** — `adapter.py:652` — wraps `anthropic.Anthropic` SDK.
+- **`AnthropicAdapter(LLMAdapter)`** — `adapter.py:653` — wraps `anthropic.Anthropic` SDK and supplies merged LingTai identity/version default headers.
 - **`AnthropicChatSession(ChatSession)`** — `adapter.py:279` — per-session state, owns `ChatInterface`.
 
 ### Helper functions (module-level)
@@ -57,10 +57,10 @@ Anthropic Claude adapter — Messages API with prompt caching, tool use, and ext
 
 | Method | Line | Notes |
 |--------|------|-------|
-| `create_chat` | 696 | Builds tools, tool_choice, thinking config; wraps in `_GatedSession` via `_wrap_with_gate` |
-| `generate` | 765 | One-shot via `self._client.messages.create`; gated by `_gated_call` |
-| `make_tool_result_message` | 810 | Returns canonical `ToolResultBlock` with `toolu_` prefix ID |
-| `is_quota_error` | 820 | `isinstance(exc, anthropic.RateLimitError)` |
+| `create_chat` | 699 | Builds tools, tool_choice, thinking config; wraps in `_GatedSession` via `_wrap_with_gate` |
+| `generate` | 768 | One-shot via `self._client.messages.create`; gated by `_gated_call` |
+| `make_tool_result_message` | 813 | Returns canonical `ToolResultBlock` with `toolu_` prefix ID |
+| `is_quota_error` | 823 | `isinstance(exc, anthropic.RateLimitError)` |
 
 ### ChatSession method overrides (`AnthropicChatSession`)
 
@@ -107,7 +107,7 @@ Anthropic Claude adapter — Messages API with prompt caching, tool use, and ext
 
 ## State
 
-- `AnthropicAdapter`: holds `_client` (SDK instance), `_client_kwargs` (for session reset), `_gate` (rate limiter).
+- `AnthropicAdapter`: holds `_client` (SDK instance), `_client_kwargs` (for session reset), `_gate` (rate limiter). Constructor merges LingTai HTTP identity headers under caller/provider `default_headers` before building the SDK client.
 - `AnthropicChatSession`: holds `_client`, `_model`, `_system` (list of cached blocks), `_interface` (ChatInterface), `_tools`, `_tool_choice`, `_extra_kwargs`, `_client_kwargs`, `_context_window`, `_request_timeout`.
 
 ### Usage normalization (`adapter.py:163-173`)

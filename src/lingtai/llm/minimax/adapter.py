@@ -15,7 +15,13 @@ class MiniMaxAdapter(AnthropicAdapter):
     def __init__(
         self, api_key: str, *, base_url: str | None = None,
         max_rpm: int = 120, timeout_ms: int = 300_000,
+        default_headers: dict | None = None,
     ):
         effective_url = base_url or "https://api.minimax.io/anthropic"
-        super().__init__(api_key=api_key, base_url=effective_url, timeout_ms=timeout_ms)
+        super().__init__(
+            api_key=api_key,
+            base_url=effective_url,
+            timeout_ms=timeout_ms,
+            default_headers=default_headers,
+        )
         self._setup_gate(max_rpm)
