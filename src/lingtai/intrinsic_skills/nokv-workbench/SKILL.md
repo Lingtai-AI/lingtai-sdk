@@ -114,10 +114,17 @@ returned `snapshot_id` and `read_version` in final reports or handoff notes.
 
 ## Read and search
 
+Use `nokv_workbench_find` to query across workbenches. By default it returns
+compact committed-state and manifest summaries rather than full manifest
+bodies. Pass `include_manifest=true` only when the full
+`metadata/run_manifest.json` envelope is needed.
+
 Use `nokv_workbench_list`, `nokv_workbench_stat`, `nokv_workbench_read`, and
-`nokv_workbench_grep` for NoKV workbench content. NoKV grep is a
-case-insensitive literal substring search, not regex. Use LingTai's local
-`grep` for local workdir text and NoKV grep for workbench artifacts.
+`nokv_workbench_grep` for content inside one workbench. Query tools return
+flat `section`, `relative_path`, and `path` fields so follow-up calls can reuse
+`section` and `relative_path` directly. NoKV grep is a case-insensitive
+literal substring search, not regex. Use LingTai's local `grep` for local
+workdir text and NoKV grep for workbench artifacts.
 
 ## Commit checklist
 
