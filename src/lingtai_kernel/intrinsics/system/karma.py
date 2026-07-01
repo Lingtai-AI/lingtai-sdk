@@ -189,7 +189,11 @@ def _nirvana(agent, args: dict) -> dict:
     address = args["address"]
     resolved = args["_resolved_address"]
     if is_alive(resolved):
-        (resolved / ".sleep").write_text("")
+        # Write .suspend (not .sleep) so the process actually shuts down.
+        # .sleep sets _asleep — heartbeat continues, is_alive() stays True,
+        # and the wait loop below would always time out.
+        # .suspend sets _shutdown — process terminates, heartbeat stops.
+        (resolved / ".suspend").write_text("")
         import time as _time
         deadline = _time.time() + 10.0
         while _time.time() < deadline:
@@ -198,7 +202,7 @@ def _nirvana(agent, args: dict) -> dict:
             _time.sleep(0.5)
         else:
             if is_alive(resolved):
-                return {"error": True, "message": f"Agent at {address} did not sleep within timeout"}
+                return {"error": True, "message": f"Agent at {address} did not shut down within timeout"}
     shutil.rmtree(resolved)
     agent._log("karma_nirvana", target=address)
     return {"status": "nirvana", "address": address}
