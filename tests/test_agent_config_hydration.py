@@ -171,6 +171,20 @@ def test_build_agent_config_overlays_explicit_values_and_ignores_stale_molt():
     assert not hasattr(cfg, "molt_prompt")
 
 
+def test_cache_miss_budget_defaults_to_one_million():
+    # Bare AgentConfig and a manifest without the field both default to 1M.
+    assert AgentConfig().cache_miss_budget == 1_000_000
+    manifest = _init_data()["manifest"]
+    cfg = build_agent_config(manifest, max_rpm=0)
+    assert cfg.cache_miss_budget == 1_000_000
+
+
+def test_cache_miss_budget_overlays_explicit_manifest_value():
+    manifest = _init_data({"cache_miss_budget": 250_000})["manifest"]
+    cfg = build_agent_config(manifest, max_rpm=0)
+    assert cfg.cache_miss_budget == 250_000
+
+
 def test_boot_omitted_defaults_update_artifacts_and_ignore_stale_molt(tmp_path):
     init_data = _init_data({
         "molt_notice": 0.99,

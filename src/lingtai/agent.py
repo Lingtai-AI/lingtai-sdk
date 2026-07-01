@@ -46,6 +46,11 @@ def build_agent_config(manifest: dict[str, Any], *, max_rpm: int) -> AgentConfig
         language=manifest.get("language", defaults.language),
         activeness=manifest.get("activeness", defaults.activeness),
         context_limit=manifest.get("context_limit", defaults.context_limit),
+        # Soft per-molt/session cache-miss token budget (default 1_000_000).
+        # Validated as a positive int in init_schema; hydrated verbatim here.
+        cache_miss_budget=manifest.get(
+            "cache_miss_budget", defaults.cache_miss_budget
+        ),
         thinking=llm.get("thinking", defaults.thinking),
         # Molt thresholds and the context.molt message are kernel-fixed runtime
         # constants and are NOT agent-configurable. Stale manifest

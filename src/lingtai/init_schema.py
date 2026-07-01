@@ -90,6 +90,11 @@ MANIFEST_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     # meta_block.build_molt_context. See MANIFEST_LEGACY_IGNORED below.
     "max_turns": int,
     "max_rpm": int,
+    # Soft per-molt/session cache-miss token budget. Positive int; default
+    # 1_000_000 lives in AgentConfig.cache_miss_budget. The range check
+    # (reject bool and <= 0) is enforced explicitly in validate_init below —
+    # the (int) type here only rejects non-int types like str/float/None.
+    "cache_miss_budget": int,
     "admin": dict,
     "streaming": bool,
     "time_awareness": bool,
@@ -285,6 +290,19 @@ def validate_init(data: dict) -> list[str]:
         if summarize_threshold < 0:
             raise ValueError(
                 "manifest.summarize_notification_threshold: expected non-negative int"
+            )
+
+    if "cache_miss_budget" in manifest:
+        cache_miss_budget = manifest["cache_miss_budget"]
+        # bool is an int subclass — reject it explicitly, then require > 0.
+        # (_optional_keys already rejected non-int types like str/float/None.)
+        if isinstance(cache_miss_budget, bool):
+            raise ValueError(
+                "manifest.cache_miss_budget: expected positive int, got bool"
+            )
+        if cache_miss_budget <= 0:
+            raise ValueError(
+                "manifest.cache_miss_budget: expected positive int (> 0)"
             )
 
     soul = manifest.get("soul")

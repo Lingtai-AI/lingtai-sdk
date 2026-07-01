@@ -105,6 +105,16 @@ TOOL_META_CONTEXT_KEY = "context"
 TOOL_META_CONTEXT_PENDING_KEY = "_tool_meta_context"
 TOOL_META_CONTEXT_EVENT_PENDING_KEY = "_tool_meta_context_event"
 
+# Cache-miss budget guard — the two compact numeric fields surfaced under
+# ``tool_meta.context`` alongside the ``molt`` warning when the current-session
+# cache-miss total reaches/exceeds the configured budget (see
+# :func:`build_cache_miss_budget_context`).  They ride the SAME
+# ``_tool_meta_context`` transit sub-object as the sustained-pressure ``molt``
+# reminder, so ``ToolExecutor._attach_tool_block`` promotes them into the
+# permanent ``tool_meta.context`` block in one step.
+TOOL_META_CONTEXT_CACHE_MISS_BUDGET_KEY = "cache_miss_budget"
+TOOL_META_CONTEXT_CACHE_MISS_TOKENS_KEY = "cache_miss_tokens"
+
 
 def build_tool_meta_overflow_comment(tool_call_id: str | None) -> dict:
     """Return the ``tool_meta.comment.overflow`` hint for a capped/large result.
@@ -454,7 +464,16 @@ def build_meta_readme() -> dict:
             "context has been high (>= 0.75) for several consecutive fresh provider "
             "rounds and clears when pressure drops. It lives here (permanent, "
             "restamped on every result while active) rather than in the sparse "
-            "agent_meta so the reminder persists. token_usage is the single unified token-diagnostics block "
+            "agent_meta so the reminder persists. context also carries the "
+            "cache-miss budget guard: a soft per-molt/session cap on total "
+            "cache-miss (uncached input) tokens for the CURRENT runtime session "
+            "(default 1,000,000). Once the session cache-miss total reaches/exceeds "
+            "cache_miss_budget, context.molt carries a 'cache miss budget {N} "
+            "reached, molt now' warning and context.cache_miss_budget / "
+            "context.cache_miss_tokens report the configured budget and the current "
+            "cache-miss total. When the sustained-pressure warning is also active, "
+            "both warnings are preserved in context.molt (the budget line is "
+            "appended). The action when warned is to molt. token_usage is the single unified token-diagnostics block "
             "(see meta_guidance.token_efficiency). It is one flat dict combining a "
             "provider-round token/cache snapshot — keys input, cache_miss, cache_rate, "
             "context_usage, window, output, thinking — with a current-session "
@@ -841,6 +860,71 @@ def build_molt_context(agent, usage: float) -> str | None:
     return render_current_molt_context(streak=streak, usage=usage)
 
 
+def build_cache_miss_budget_context(agent) -> dict | None:
+    """Return the cache-miss budget guard sub-object, or ``None``.
+
+    A soft per-molt/runtime-session cap on total cache-miss (uncached input)
+    tokens.  The current-session cache-miss total is derived from
+    ``agent.get_current_session_token_usage()`` — the CURRENT runtime-session
+    deltas, whose reset/baseline matches the existing per-molt token-usage deltas
+    (NOT a lifetime/cumulative counter) — as::
+
+        cache_miss = max(input_tokens - cached_tokens, 0)
+
+    When ``cache_miss >= agent._config.cache_miss_budget`` (inclusive), return a
+    dict destined for the SAME ``_tool_meta_context`` transit sub-object as the
+    sustained-pressure ``molt`` reminder::
+
+        {
+            "molt": "cache miss budget {budget} reached, molt now",
+            "cache_miss_budget": <budget>,
+            "cache_miss_tokens": <cache_miss>,
+        }
+
+    ``ToolExecutor._attach_tool_block`` promotes the whole sub-object into the
+    permanent ``tool_meta.context`` block, so the warning persists (restamped on
+    every result) at ``tool_meta.context.molt`` and the budget value is surfaced
+    at ``tool_meta.context.cache_miss_budget`` while the guard is tripped.
+
+    Returns ``None`` (no guard) when: the ``psyche`` intrinsic is absent (matching
+    :func:`build_molt_context`, since ``molt`` presupposes the molt action), the
+    budget is not a positive int, the session-usage getter is missing/raising, or
+    the cache-miss total is below the budget.  It is a soft signal only — nothing
+    is blocked — and NOT a new event route (no emission-event payload).
+    """
+    if "psyche" not in getattr(agent, "_intrinsics", set()):
+        return None
+
+    config = getattr(agent, "_config", None)
+    budget = getattr(config, "cache_miss_budget", None)
+    # Defensive: only a positive int arms the guard.  bool is an int subclass,
+    # so reject it explicitly (a True budget must never mean "1").
+    if isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0:
+        return None
+
+    usage_fn = getattr(agent, "get_current_session_token_usage", None)
+    if not callable(usage_fn):
+        return None
+    try:
+        usage = usage_fn()
+    except Exception:
+        return None
+    if not isinstance(usage, Mapping):
+        return None
+
+    input_tokens = _non_negative_int(usage.get("input_tokens"))
+    cached_tokens = _non_negative_int(usage.get("cached_tokens"))
+    cache_miss = max(input_tokens - cached_tokens, 0)
+    if cache_miss < budget:
+        return None
+
+    return {
+        "molt": f"cache miss budget {budget} reached, molt now",
+        TOOL_META_CONTEXT_CACHE_MISS_BUDGET_KEY: budget,
+        TOOL_META_CONTEXT_CACHE_MISS_TOKENS_KEY: cache_miss,
+    }
+
+
 def _current_molt_emission_event(agent, *, usage, message) -> dict | None:
     """Return the current-molt emission-event descriptor, or ``None``.
 
@@ -1168,7 +1252,9 @@ def build_meta(agent) -> dict:
         {
             "current_time": "<iso>",          # transient; promoted into tool_meta
             "_tool_meta_context": {           # transient; promoted into tool_meta.context
-                "molt": str,                  # optional natural-language sustained-pressure reminder
+                "molt": str,                  # sustained-pressure and/or cache-miss-budget reminder
+                "cache_miss_budget": int,     # present only when the budget guard is tripped
+                "cache_miss_tokens": int,     # present only when the budget guard is tripped
             },
             "_tool_meta_context_event": {...},# transient; deduped current-molt emission event
             "current_tool_result_chars": dict,# total + top formal tool results >1000 chars
@@ -1185,9 +1271,17 @@ def build_meta(agent) -> dict:
     prefix).  The molt reminder is therefore permanent per-result metadata, not
     the sparse ``agent_meta``.  Numeric context/token diagnostics are not
     duplicated in ``agent_meta``; provider-round ``context_usage``/``window`` and
-    session token stats live in ``tool_meta.token_usage``.  The
-    ``_tool_meta_context`` sub-object is emitted only when the sustained-pressure
-    warning is active.
+    session token stats live in ``tool_meta.token_usage``.
+
+    The ``_tool_meta_context`` sub-object is emitted when EITHER the
+    sustained-pressure warning is active OR the cache-miss budget guard is tripped
+    (:func:`build_cache_miss_budget_context`).  When both fire, both warnings are
+    preserved in ``molt`` (the budget line is appended on its own line, never
+    replacing the context-pressure prose) and the budget fields
+    (``cache_miss_budget`` / ``cache_miss_tokens``) ride alongside.  The budget
+    guard is a soft signal only and NOT a new event route — it never attaches a
+    ``_tool_meta_context_event``, and the context-pressure event still hashes only
+    its own pure message.
 
     """
     meta: dict = {}
@@ -1206,9 +1300,37 @@ def build_meta(agent) -> dict:
     molt = build_molt_context(agent, usage)
     if molt:
         meta[TOOL_META_CONTEXT_PENDING_KEY] = {"molt": molt}
+        # The channel-B emission event is built from the PURE sustained-pressure
+        # message (before the budget line is appended below), so its
+        # ``message_hash`` and per-round dedup semantics stay unchanged even when
+        # both warnings are active.
         event = _current_molt_emission_event(agent, usage=usage, message=molt)
         if event is not None:
             meta[TOOL_META_CONTEXT_EVENT_PENDING_KEY] = event
+
+    # Cache-miss budget guard — rides the SAME ``_tool_meta_context`` transit
+    # sub-object as the sustained-pressure reminder.  When both are active we
+    # PRESERVE both warnings: the budget line is appended to ``molt`` on a new
+    # line (never replacing the context-pressure prose), and the budget fields
+    # are merged in alongside.  This is a soft signal, not a new event route, so
+    # no ``_tool_meta_context_event`` is emitted for it.
+    budget_ctx = build_cache_miss_budget_context(agent)
+    if budget_ctx:
+        existing = meta.get(TOOL_META_CONTEXT_PENDING_KEY)
+        if isinstance(existing, dict):
+            prior_molt = existing.get("molt")
+            budget_molt = budget_ctx["molt"]
+            existing["molt"] = (
+                f"{prior_molt}\n{budget_molt}" if prior_molt else budget_molt
+            )
+            existing[TOOL_META_CONTEXT_CACHE_MISS_BUDGET_KEY] = budget_ctx[
+                TOOL_META_CONTEXT_CACHE_MISS_BUDGET_KEY
+            ]
+            existing[TOOL_META_CONTEXT_CACHE_MISS_TOKENS_KEY] = budget_ctx[
+                TOOL_META_CONTEXT_CACHE_MISS_TOKENS_KEY
+            ]
+        else:
+            meta[TOOL_META_CONTEXT_PENDING_KEY] = budget_ctx
 
     tool_meta_token_usage = build_tool_meta_token_usage(agent)
     if tool_meta_token_usage:

@@ -75,7 +75,11 @@ and no concrete next action remains, consider molt as a costed optimization
 rather than automatic cleanup: default to proactive task-boundary molt only once
 current-session API calls exceed 100, or when context pressure, explicit human
 request, or conversation confusion makes the fresh briefing worth the cost. Below
-that threshold, go idle instead of molting merely because the task ended.
+that threshold, go idle instead of molting merely because the task ended. A
+separate soft cache-miss budget (default 1,000,000 uncached-input tokens for the
+current session) also nudges a molt: when `_meta.tool_meta.context.molt` says the
+cache-miss budget is reached, molt to shed the carried context and restore cache
+efficiency.
 
 ## V · Idle and soul
 

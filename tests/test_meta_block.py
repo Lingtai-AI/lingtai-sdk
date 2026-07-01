@@ -14,6 +14,7 @@ from lingtai_kernel.meta_block import (
     GuidanceSchemaError,
     attach_active_notifications,
     attach_active_runtime,
+    build_cache_miss_budget_context,
     build_meta,
     build_meta_guidance,
     build_meta_readme,
@@ -271,6 +272,15 @@ def test_build_meta_readme_mentions_tool_result_char_count_and_summarize():
     assert "session_cache_rate" in readme["tool_meta"]
     assert "api_calls" in readme["tool_meta"]
     assert "tool_meta.token_usage" in readme["agent_meta"]
+
+
+def test_build_meta_readme_documents_cache_miss_budget_guard():
+    """The resident tool_meta readme must document the cache-miss budget guard:
+    the "molt now" warning at context.molt and the cache_miss_budget field."""
+    readme = build_meta_readme()
+    tool_meta_doc = readme["tool_meta"]
+    assert "cache_miss_budget" in tool_meta_doc
+    assert "molt now" in tool_meta_doc
     # agent_meta no longer carries a token_efficiency block of its own.
     assert "token_efficiency block" not in readme["agent_meta"]
     assert "current_tool_result_chars" in readme["agent_meta"]
@@ -2549,3 +2559,207 @@ def test_build_meta_current_molt_carries_reminder_and_event_payload():
         meta2[meta_block.TOOL_META_CONTEXT_EVENT_PENDING_KEY]["payload"]["last_round_id"]
         == 3
     )
+
+
+# ---------------------------------------------------------------------------
+# build_cache_miss_budget_context / cache-miss budget guard.
+#
+# A per-molt/runtime-session soft cap on total cache-miss (uncached input)
+# tokens. The current-session cache-miss total is derived from
+# agent.get_current_session_token_usage() as max(input_tokens - cached_tokens, 0).
+# Once it reaches/exceeds agent._config.cache_miss_budget, build_meta restamps a
+# "cache miss budget {budget} reached, molt now" reminder into the
+# _tool_meta_context transit sub-object (promoted to permanent
+# tool_meta.context.molt) and surfaces cache_miss_budget / cache_miss_tokens
+# under tool_meta.context. It is a soft signal, not a new event route.
+# ---------------------------------------------------------------------------
+
+
+def _budget_agent(
+    *,
+    budget=1_000_000,
+    input_tokens=0,
+    cached_tokens=0,
+    psyche=True,
+    warning_active=False,
+    streak=0,
+    has_getter=True,
+):
+    """Minimal agent stand-in for build_cache_miss_budget_context / build_meta.
+
+    Carries a get_current_session_token_usage() returning the given
+    input/cached token deltas, plus the streak fields build_molt_context reads
+    (so the "both warnings active" case can be exercised through build_meta).
+    """
+    session = SimpleNamespace(
+        _token_decomp_dirty=True,
+        context_pressure_warning_active=warning_active,
+        context_pressure_streak=streak,
+    )
+    agent = SimpleNamespace(
+        _intrinsics={"psyche": object()} if psyche else {},
+        _config=SimpleNamespace(
+            cache_miss_budget=budget,
+            context_limit=None,
+            time_awareness=True,
+            timezone_awareness=True,
+        ),
+        _session=session,
+    )
+    if has_getter:
+        agent.get_current_session_token_usage = lambda: {
+            "input_tokens": input_tokens,
+            "cached_tokens": cached_tokens,
+            "api_calls": 1,
+        }
+    return agent
+
+
+def test_cache_miss_budget_context_none_below_budget():
+    # cache_miss = 900k - 100k = 800k < 1M -> no context.
+    agent = _budget_agent(budget=1_000_000, input_tokens=900_000, cached_tokens=100_000)
+    assert build_cache_miss_budget_context(agent) is None
+
+
+def test_cache_miss_budget_context_present_at_budget():
+    # cache_miss = 1.0M - 0 = 1.0M == budget -> reminder (inclusive >=).
+    agent = _budget_agent(budget=1_000_000, input_tokens=1_000_000, cached_tokens=0)
+    ctx = build_cache_miss_budget_context(agent)
+    assert isinstance(ctx, dict)
+    assert ctx["molt"] == "cache miss budget 1000000 reached, molt now"
+    assert ctx["cache_miss_budget"] == 1_000_000
+    assert ctx["cache_miss_tokens"] == 1_000_000
+
+
+def test_cache_miss_budget_context_present_above_budget_with_cache():
+    # cache_miss = 1.5M - 200k = 1.3M >= 1M budget.
+    agent = _budget_agent(budget=1_000_000, input_tokens=1_500_000, cached_tokens=200_000)
+    ctx = build_cache_miss_budget_context(agent)
+    assert ctx["cache_miss_tokens"] == 1_300_000
+    assert ctx["cache_miss_budget"] == 1_000_000
+    assert ctx["molt"] == "cache miss budget 1000000 reached, molt now"
+
+
+def test_cache_miss_budget_context_clamps_negative_cache_miss_to_zero():
+    # cached > input (odd provider accounting) -> cache_miss clamps to 0, no warn.
+    agent = _budget_agent(budget=1, input_tokens=100, cached_tokens=500)
+    assert build_cache_miss_budget_context(agent) is None
+
+
+def test_cache_miss_budget_context_honors_custom_budget():
+    agent = _budget_agent(budget=250_000, input_tokens=250_000, cached_tokens=0)
+    ctx = build_cache_miss_budget_context(agent)
+    assert ctx["molt"] == "cache miss budget 250000 reached, molt now"
+    assert ctx["cache_miss_budget"] == 250_000
+
+
+def test_cache_miss_budget_context_absent_without_psyche():
+    # Consistent with build_molt_context: no psyche intrinsic -> no reminder.
+    agent = _budget_agent(input_tokens=2_000_000, cached_tokens=0, psyche=False)
+    assert build_cache_miss_budget_context(agent) is None
+
+
+def test_cache_miss_budget_context_graceful_without_getter():
+    agent = _budget_agent(input_tokens=2_000_000, cached_tokens=0, has_getter=False)
+    assert build_cache_miss_budget_context(agent) is None
+
+
+def test_cache_miss_budget_context_absent_for_nonpositive_budget():
+    # Defensive: a non-positive / non-int budget disables the guard, never warns.
+    for bad in (0, -1, None, "1000000"):
+        agent = _budget_agent(budget=bad, input_tokens=5_000_000, cached_tokens=0)
+        assert build_cache_miss_budget_context(agent) is None
+
+
+def test_build_meta_attaches_budget_context_at_budget():
+    """build_meta integrates the budget guard: at/above budget the transit
+    sub-object carries the molt warning plus the budget fields."""
+    agent = _budget_agent(budget=1_000_000, input_tokens=1_200_000, cached_tokens=0)
+    meta = build_meta(agent)
+    ctx = meta[meta_block.TOOL_META_CONTEXT_PENDING_KEY]
+    assert ctx["molt"] == "cache miss budget 1000000 reached, molt now"
+    assert ctx["cache_miss_budget"] == 1_000_000
+    assert ctx["cache_miss_tokens"] == 1_200_000
+    # Budget guard is not a new event route: no emission-event payload.
+    assert meta_block.TOOL_META_CONTEXT_EVENT_PENDING_KEY not in meta
+
+
+def test_build_meta_no_budget_context_below_budget():
+    agent = _budget_agent(budget=1_000_000, input_tokens=500_000, cached_tokens=0)
+    meta = build_meta(agent)
+    assert meta_block.TOOL_META_CONTEXT_PENDING_KEY not in meta
+
+
+def test_build_meta_preserves_both_warnings_when_context_pressure_also_active():
+    """When the sustained context-pressure warning AND the cache-miss budget
+    warning are both active, both must survive in tool_meta.context.molt — the
+    budget line is appended and the context-pressure prose is preserved — and the
+    budget fields ride alongside."""
+    from lingtai_kernel.reminders.context_pressure import ContextPressureReminder
+
+    # Drive a real context decomposition (usage 0.9) with an armed real reminder,
+    # plus a cache-miss total over budget.
+    fake_iface = SimpleNamespace(estimate_context_tokens=lambda: 90)
+    reminder = ContextPressureReminder()
+    reminder.streak = 3  # >= warn_after_rounds (3) -> active
+    reminder.last_round_id = 7
+    agent = _budget_agent(budget=1_000_000, input_tokens=1_200_000, cached_tokens=0)
+    agent._session._token_decomp_dirty = False
+    agent._session._system_prompt_tokens = 10
+    agent._session._tools_tokens = 0
+    agent._session._latest_input_tokens = 0
+    agent._session.context_pressure_reminder = reminder
+    agent._session.chat = SimpleNamespace(
+        interface=fake_iface, context_window=lambda: 100
+    )
+
+    meta = build_meta(agent)
+    ctx = meta[meta_block.TOOL_META_CONTEXT_PENDING_KEY]
+    molt = ctx["molt"]
+    # Context-pressure prose preserved.
+    assert "Context has stayed high" in molt
+    assert "3 consecutive fresh model calls" in molt
+    # Budget warning also present, appended on its own line.
+    assert "cache miss budget 1000000 reached, molt now" in molt
+    assert molt.endswith("cache miss budget 1000000 reached, molt now")
+    # Budget fields present alongside.
+    assert ctx["cache_miss_budget"] == 1_000_000
+    assert ctx["cache_miss_tokens"] == 1_200_000
+    # The context-pressure emission event still hashes ONLY the pressure message,
+    # not the combined text (channel-B dedup/logging semantics are unchanged).
+    from lingtai_kernel.reminders.context_pressure import reminder_message_hash
+    pressure_only = reminder.current_molt_context(0.9)
+    payload = meta[meta_block.TOOL_META_CONTEXT_EVENT_PENDING_KEY]["payload"]
+    assert payload["message_hash"] == reminder_message_hash(pressure_only)
+
+
+def test_attach_tool_block_promotes_budget_context_and_pops_transit_key():
+    """_attach_tool_block promotes the budget sub-object (molt + budget fields)
+    into permanent tool_meta.context and pops the transit key from
+    _runtime_pending so it never lands on the wire tool_meta."""
+    from lingtai_kernel.loop_guard import LoopGuard
+    from lingtai_kernel.tool_executor import _DEFAULT_MAX_RESULT_CHARS, ToolExecutor
+
+    agent = _budget_agent(budget=1_000_000, input_tokens=1_200_000, cached_tokens=0)
+    meta = build_meta(agent)
+    result = {"ok": True}
+    stamp_meta(result, meta, elapsed_ms=5)
+    # Sanity: the transit key is present before _attach_tool_block consumes it.
+    assert meta_block.TOOL_META_CONTEXT_PENDING_KEY in result["_runtime_pending"]
+
+    executor = ToolExecutor(
+        dispatch_fn=lambda name, args: {},
+        make_tool_result_fn=lambda name, result, **kw: result,
+        guard=LoopGuard(max_total_calls=50),
+        working_dir="/tmp",
+        max_result_chars=_DEFAULT_MAX_RESULT_CHARS,
+    )
+    wire = executor._attach_tool_block(result, tool_call_id="tc1", elapsed_ms=5)
+    context = wire["_meta"]["tool_meta"]["context"]
+    assert context["molt"] == "cache miss budget 1000000 reached, molt now"
+    assert context["cache_miss_budget"] == 1_000_000
+    assert context["cache_miss_tokens"] == 1_200_000
+    # The transit key was popped out of _runtime_pending (the batch boundary
+    # strips whatever remains of _runtime_pending; the key itself must not
+    # survive into the promoted tool_meta.context beyond molt + budget fields).
+    assert meta_block.TOOL_META_CONTEXT_PENDING_KEY not in result["_runtime_pending"]
