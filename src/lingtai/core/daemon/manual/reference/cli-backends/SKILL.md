@@ -5,8 +5,8 @@ description: >
   daemon(action=list), claude-p/codex/opencode behavior,
   backend_options flag passing, preset/capability inheritance, and Codex modal
   capabilities.
-version: 1.3.0
-last_changed_at: "2026-06-15T22:36:44-07:00"
+version: 1.4.0
+last_changed_at: "2026-06-30T00:00:00-07:00"
 ---
 
 # Daemon CLI Backend Reference
@@ -73,17 +73,26 @@ driving a TUI. The interactive code path remains in the tree only so older
 callers and stored daemon entries that recorded `backend="claude"` keep
 resolving.
 
+> **MCP completion contract.** MCP-capable daemon backends load LingTai's
+> built-in `daemon_common` MCP for every run. The model must call the MCP
+> `finish(status, summary?, reason?, artifacts?)` tool before ending:
+> `status="done"` is the only signal that permits `mark_done`; `failed`,
+> `incomplete`, a missing finish call, or an invalid completion file makes the
+> run **failed** while preserving the final text/error for inspection.
+> Background-and-wait is invalid: run required validation synchronously with an
+> adequate explicit timeout and inspect the result in the same run.
+
 | Backend | CLI command | Session resume | Notes |
 |---------|-------------|----------------|-------|
 | `lingtai` | (built-in) | N/A — in-process `ask` | Default. Uses preset resolution, tool surface curation, model routing. |
-| `claude-p` | `claude --print --dangerously-skip-permissions --output-format stream-json --verbose --name <em_id> <task>` | `claude --resume <claude_session_id> --print ...` via `ask` (async — returns immediately, reply arrives via notification / `check`) | Print-mode Claude Code backend (the recommended Claude backend). Wraps Claude Code's official `--print`/stream-json mode. Session ID is captured from stream-json output, so `ask` is usable as soon as `emanate` returns. |
+| `claude-p` | `claude --print --dangerously-skip-permissions --output-format stream-json --verbose --name <em_id> --mcp-config <run>/claude-mcp-config.json --strict-mcp-config <task>` | `claude --resume <claude_session_id> --print ...` via `ask` (async — returns immediately, reply arrives via notification / `check`) | Print-mode Claude Code backend (the recommended Claude backend). Wraps Claude Code's official `--print`/stream-json mode and loads the per-run `daemon_common` MCP. Session ID is captured from stream-json output, so `ask` is usable as soon as `emanate` returns. |
 | `claude-code` | same as `claude-p` | same as `claude-p` | Backward-compatible alias retained for existing callers and stored daemon entries. |
-| `codex` | `codex exec --json --dangerously-bypass-approvals-and-sandbox <task>` | `codex exec resume <codex_session_id>` via `ask` (async — returns immediately, reply arrives via notification / `check`) | Mirrors the print-mode Claude backend. `thread.started` event carries the session id (codex internally calls it `thread_id`), captured immediately. `ask` resumes the same conversation context. |
-| `opencode` | `opencode run --format json <prompt>` | `opencode run --session <opencode_session_id> ...` via `ask` (async) | Uses opencode's session id/event vocabulary. |
-| `mimocode` / `mimo` | `mimo run --format json <prompt>` | `mimo run --session <mimocode_session_id> --format json ...` via `ask` (async) | MiMo Code CLI backend (npm package `@mimo-ai/cli`, binary `mimo`). `mimo` canonicalizes to `mimocode`. |
-| `qwen-code` / `qwen` | `qwen --yolo -p <prompt>` | Not supported yet; `ask` returns an explicit unsupported-backend error | Qwen Code CLI backend (npm package `@qwen-code/qwen-code`, binary `qwen`). `qwen` canonicalizes to `qwen-code`. |
-| `oh-my-pi` / `omp` | `omp --mode json --approval-mode yolo <prompt>` | `omp --mode json --approval-mode yolo --session <oh_my_pi_session_id> ...` via `ask` (async) | Oh-My-Pi pi-coding-agent CLI backend (npm package `@oh-my-pi/pi-coding-agent`, binary `omp`). `--mode json` is non-interactive JSON event-stream print mode; the first `type:session` header line carries the resumable session id. `omp` canonicalizes to `oh-my-pi`. |
-| `cursor` | `agent -p <prompt>` | `agent -p --resume <cursor_session_id> ...` via `ask` (async) | Cursor Agent CLI backend. |
+| `codex` | `codex exec --json --dangerously-bypass-approvals-and-sandbox -c mcp_servers.daemon_common.command=... -c mcp_servers.daemon_common.args=... -c mcp_servers.daemon_common.env=... <task>` | `codex exec resume <codex_session_id>` via `ask` (async — returns immediately, reply arrives via notification / `check`) | Mirrors the print-mode Claude backend. `thread.started` event carries the session id (codex internally calls it `thread_id`), captured immediately. The per-run `daemon_common` MCP is injected through Codex config overrides. |
+| `opencode` | `OPENCODE_CONFIG_CONTENT=<per-run daemon_common config> opencode run --format json <prompt>` | `opencode run --session <opencode_session_id> ...` via `ask` (async) | Uses opencode's session id/event vocabulary. The daemon injects the built-in completion MCP through OpenCode's per-process config content environment. |
+| `mimocode` / `mimo` | `mimo run --format json <prompt>` | `mimo run --session <mimocode_session_id> --format json ...` via `ask` (async) | MiMo Code CLI backend (npm package `@mimo-ai/cli`, binary `mimo`). `mimo` canonicalizes to `mimocode`. Per-run MCP injection is not wired here yet because no local binary/docs path in this workspace confirmed a MiMo-specific config override compatible with LingTai's wrapper. |
+| `qwen-code` / `qwen` | `QWEN_CODE_SYSTEM_SETTINGS_PATH=<run>/qwen-daemon-settings.json qwen --yolo -p <prompt>` | Not supported yet; `ask` returns an explicit unsupported-backend error | Qwen Code CLI backend (npm package `@qwen-code/qwen-code`, binary `qwen`). `qwen` canonicalizes to `qwen-code`. The per-run settings file contains `mcpServers.daemon_common`. |
+| `oh-my-pi` / `omp` | `omp --mode json --approval-mode yolo <prompt>` | `omp --mode json --approval-mode yolo --session <oh_my_pi_session_id> ...` via `ask` (async) | Oh-My-Pi pi-coding-agent CLI backend (npm package `@oh-my-pi/pi-coding-agent`, binary `omp`). `--mode json` is non-interactive JSON event-stream print mode; the first `type:session` header line carries the resumable session id. `omp` canonicalizes to `oh-my-pi`. Per-run MCP injection is not wired yet pending evidence of its accepted config/env path. |
+| `cursor` | `agent -p <prompt>` | `agent -p --resume <cursor_session_id> ...` via `ask` (async) | Cursor Agent CLI backend. Per-run MCP injection is not wired yet; local `agent --help` could not be inspected in this environment because the CLI attempted macOS keychain access and failed before printing help. |
 
 **Per-task system prompt.** Every task item may include `system_prompt`. Use it
 as the parent agent's one-run behavior contract: the daemon's role, constraints,
@@ -106,10 +115,15 @@ provide full one-run MCP registrations per task with `mcp: [{name, transport,
 ...}]`. The runtime serializes those registrations into the oneshot prompt as
 YAML for every backend. For the built-in LingTai backend, it also starts the
 registered MCP clients for this run and exposes their tools in the daemon tool
-surface; clients are closed when the run finishes. CLI backends do not receive
-native config injection in this PR, but they do receive the same YAML context and
-may load it if their runtime supports MCP. Secret `env`/`headers` values are
-redacted in prompts. The daemon-eligible `email` intrinsic is available only
+surface; clients are closed when the run finishes. The `daemon_common` MCP is
+added automatically and its `finish` tool is the hard terminal-success contract.
+Claude print backends receive a per-run `--mcp-config` file; Codex receives
+`-c mcp_servers.daemon_common.*` overrides; OpenCode receives
+`OPENCODE_CONFIG_CONTENT`; and Qwen receives a per-run settings file path.
+MiMo, Oh-My-Pi, and Cursor are not declared unsupported: they have documented
+MCP entrypoints that still need daemon-native config wiring and tests. Secret
+`env`/`headers` values are redacted in prompts. The daemon-eligible `email`
+intrinsic is available only
 when explicitly requested in the task `tools` list, so result-only/no-tool
 emanations cannot communicate in the local agent network unless the parent opted
 in. Other intrinsics remain unavailable to keep daemon lightweight and
@@ -228,10 +242,12 @@ transcript as "I starved it," not "the model failed."
 
 **Claude reserved flags:** The `claude-p` daemon backend owns its execution mode.
 `backend_options` cannot override harness-owned flags such as `--print` or
-`--output-format`; attempts are rejected before spawn. `claude-p` must keep
-stream-json output so daemon progress/result extraction remains reliable. (The
-hidden legacy interactive `claude` path also reserves `--settings` and the
-managed system-prompt flags, but that backend is no longer user-selectable.)
+`--output-format`, or completion-MCP flags such as `--mcp-config` and
+`--strict-mcp-config`; attempts are rejected before spawn. `claude-p` must keep
+stream-json output and the per-run MCP config so daemon progress/result
+extraction and completion enforcement remain reliable. (The hidden legacy
+interactive `claude` path also reserves `--settings` and the managed
+system-prompt flags, but that backend is no longer user-selectable.)
 
 **When it applies:** `backend_options` is honored only at `emanate` time (when
 the CLI session is first spawned). `daemon(action="ask", ...)` reuses the
@@ -239,11 +255,14 @@ existing session via `claude --resume` / `codex exec resume` / backend-specific
 resume and does not re-pass `backend_options` — the runtime flags chosen at
 emanate time persist for the life of the session.
 
-**Where it shows up on disk:** resolved options are written into the emanation's
-`daemon.json` (`backend_options` field for the raw object, `backend_argv` for the
-converted argv tokens), plus a `daemon_backend_options` entry in the parent's
-`logs/events.jsonl`. A later `daemon(action="check", id="em-N")` and the events
-log together let you reconstruct exactly which flags were passed.
+**Where it shows up on disk:** user-supplied options are written into the
+emanation's `daemon.json` as `backend_options` (the raw object) and
+`backend_argv` (the converted user argv tokens). Harness-owned MCP/config flags
+are written separately as `backend_harness_argv`, and the runner receives
+`backend_argv + backend_harness_argv`. This separation prevents run artifacts
+from implying the model supplied the completion-MCP loader flags. The parent
+also logs `daemon_backend_options` with separate `argv` and `harness_argv`
+fields in `logs/events.jsonl`.
 
 `lingtai` backend ignores `backend_options`: there is no CLI process to forward
 it to.

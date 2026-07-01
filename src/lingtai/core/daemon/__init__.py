@@ -17,6 +17,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import threading
 import time
 import yaml
@@ -52,6 +53,11 @@ PROVIDERS = {"providers": [], "default": "builtin"}
 # larger values are capped here.
 DEFAULT_MAX_TURNS = 1000
 _DAEMON_SKILL_FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?\n)---\s*\n", re.DOTALL)
+_DAEMON_COMMON_MCP_NAME = "daemon_common"
+_DAEMON_COMPLETION_FILE = "daemon_completion.json"
+_DAEMON_CLAUDE_MCP_CONFIG_FILE = "claude-mcp-config.json"
+_DAEMON_COMPLETION_STATUSES = {"done", "failed", "incomplete"}
+_SOURCE_ROOT = Path(__file__).resolve().parents[3]
 
 
 # Tools emanations can never use (no recursion, no spawning, no identity mutation)
@@ -149,6 +155,84 @@ def _normalize_claude_usage(usage: dict | None) -> dict | None:
             "cached": cached, "thinking": thinking}
 
 
+def _toml_string(value: str) -> str:
+    return json.dumps(value)
+
+
+def _toml_array(values: list[str]) -> str:
+    return "[" + ", ".join(_toml_string(v) for v in values) + "]"
+
+
+def _toml_inline_table(values: dict[str, str]) -> str:
+    return "{ " + ", ".join(
+        f"{key} = {_toml_string(value)}"
+        for key, value in sorted(values.items())
+    ) + " }"
+
+
+def _codex_mcp_argv(registrations: list[dict]) -> list[str]:
+    argv: list[str] = []
+    for reg in registrations:
+        if reg.get("name") != _DAEMON_COMMON_MCP_NAME:
+            continue
+        prefix = f"mcp_servers.{reg['name']}"
+        argv.extend(["-c", f"{prefix}.command={_toml_string(reg['command'])}"])
+        argv.extend(["-c", f"{prefix}.args={_toml_array(list(reg.get('args') or []))}"])
+        if reg.get("env"):
+            argv.extend(["-c", f"{prefix}.env={_toml_inline_table(dict(reg['env']))}"])
+    return argv
+
+
+def _opencode_mcp_env(registrations: list[dict]) -> dict[str, str]:
+    mcp: dict[str, dict] = {}
+    for reg in registrations:
+        if reg.get("name") != _DAEMON_COMMON_MCP_NAME:
+            continue
+        mcp[reg["name"]] = {
+            "type": "local",
+            "command": [reg["command"], *list(reg.get("args") or [])],
+            "enabled": True,
+            "environment": dict(reg.get("env") or {}),
+        }
+    if not mcp:
+        return {}
+    return {"OPENCODE_CONFIG_CONTENT": json.dumps({"mcp": mcp}, ensure_ascii=False)}
+
+
+def _write_qwen_mcp_settings(run_dir: DaemonRunDir, registrations: list[dict]) -> Path:
+    servers: dict[str, dict] = {}
+    for reg in registrations:
+        if reg.get("name") != _DAEMON_COMMON_MCP_NAME:
+            continue
+        servers[reg["name"]] = {
+            "command": reg["command"],
+            "args": list(reg.get("args") or []),
+            "env": dict(reg.get("env") or {}),
+        }
+    path = run_dir.path / "qwen-daemon-settings.json"
+    atomic_write_json(path, {"mcpServers": servers}, ensure_ascii=False, indent=2)
+    return path
+
+
+def _cli_backend_loads_common_mcp(backend: str) -> bool:
+    return backend in {"claude-p", "claude-code", "codex", "opencode", "qwen-code"}
+
+
+def _dev_pythonpath_with_source_root() -> str:
+    """Return a PYTHONPATH that lets module-launched MCPs see this checkout.
+
+    Daemon MCP subprocesses run under the parent's active interpreter. In dev
+    and tests that interpreter may be an external venv whose site-packages does
+    not contain the dirty worktree, so the module command needs the checkout's
+    ``src`` directory in process env. This is still a direct module launch, not
+    a model-visible shell helper.
+    """
+    existing = os.environ.get("PYTHONPATH", "")
+    parts = [str(_SOURCE_ROOT)]
+    parts.extend(p for p in existing.split(os.pathsep) if p)
+    return os.pathsep.join(dict.fromkeys(parts))
+
+
 # Safe CLI option key: letters/digits with '-' or '_' separators. No leading
 # '-' (the helper adds '--' itself). No spaces, no shell metachars — argv is
 # passed as a list to subprocess, but we still refuse anything that doesn't
@@ -218,6 +302,8 @@ _CLAUDE_COMMON_RESERVED_BACKEND_FLAGS = {
     "--settings",
     "--print",
     "--output-format",
+    "--mcp-config",
+    "--strict-mcp-config",
 }
 _CLAUDE_INTERACTIVE_RESERVED_BACKEND_FLAGS = {
     "--append-system-prompt",
@@ -293,6 +379,21 @@ class _CliTaskContext:
     skill_catalog: str | None
     mcp_catalog: str | None
     mcp_regs: list[dict]
+
+
+@dataclass(frozen=True)
+class _DaemonCompletion:
+    """Validated daemon completion signal written by the common MCP."""
+
+    status: str | None
+    summary: str | None = None
+    reason: str | None = None
+    artifacts: list[str] | None = None
+    error: str | None = None
+
+    @property
+    def is_done(self) -> bool:
+        return self.status == "done" and self.error is None
 
 
 _CLAUDE_INTERACTIVE_RESERVED_FLAGS = frozenset(
@@ -1008,6 +1109,171 @@ class DaemonManager:
             f"{body}"
         )
 
+    @staticmethod
+    def _completion_file(run_dir: DaemonRunDir) -> Path:
+        return run_dir.path / _DAEMON_COMPLETION_FILE
+
+    @staticmethod
+    def _daemon_common_mcp_registration(run_dir: DaemonRunDir) -> dict:
+        return {
+            "name": _DAEMON_COMMON_MCP_NAME,
+            "transport": "stdio",
+            "command": sys.executable,
+            "args": ["-m", "lingtai.mcp_servers.daemon_common"],
+            "env": {
+                "LINGTAI_DAEMON_COMPLETION_FILE": str(
+                    DaemonManager._completion_file(run_dir)
+                ),
+                "LINGTAI_DAEMON_RUN_ID": run_dir.run_id,
+                "PYTHONPATH": _dev_pythonpath_with_source_root(),
+            },
+        }
+
+    @staticmethod
+    def _with_daemon_common_mcp(
+        registrations: list[dict],
+        run_dir: DaemonRunDir,
+    ) -> list[dict]:
+        rows = list(registrations)
+        if any(r.get("name") == _DAEMON_COMMON_MCP_NAME for r in rows):
+            raise ValueError(
+                f"MCP registration name {_DAEMON_COMMON_MCP_NAME!r} is reserved"
+            )
+        return [DaemonManager._daemon_common_mcp_registration(run_dir), *rows]
+
+    @staticmethod
+    def _daemon_common_context() -> str:
+        return (
+            "LingTai daemon completion contract: before ending this run, call "
+            "the MCP tool `finish` exactly once with status `done`, `failed`, "
+            "or `incomplete`. Use `done` only after the task is actually "
+            "complete. If blocked, timed out, uncertain, or unable to validate "
+            "the required result, call `finish(status=\"incomplete\", reason=...)` "
+            "or `finish(status=\"failed\", reason=...)`. For this daemon "
+            "contract, background-and-wait is invalid: do not start a background "
+            "job and end your turn expecting a later notification or re-entry. "
+            "Run required validation synchronously with an explicit timeout, "
+            "inspect its result in this run, then call `finish`."
+        )
+
+    @staticmethod
+    def _append_daemon_common_context(context: str | None) -> str:
+        common = DaemonManager._daemon_common_context()
+        if context:
+            return f"{context}\n\n## LingTai daemon completion MCP\n{common}"
+        return common
+
+    @staticmethod
+    def _write_claude_mcp_config(
+        run_dir: DaemonRunDir,
+        registrations: list[dict],
+    ) -> Path:
+        servers: dict[str, dict] = {}
+        for reg in registrations:
+            if reg.get("transport", reg.get("type", "stdio")) != "stdio":
+                continue
+            server = {
+                "command": reg["command"],
+                "args": list(reg.get("args") or []),
+            }
+            if reg.get("env"):
+                server["env"] = dict(reg["env"])
+            servers[reg["name"]] = server
+        path = run_dir.path / _DAEMON_CLAUDE_MCP_CONFIG_FILE
+        atomic_write_json(path, {"mcpServers": servers}, ensure_ascii=False, indent=2)
+        return path
+
+    @staticmethod
+    def _read_daemon_completion(run_dir: DaemonRunDir) -> _DaemonCompletion:
+        path = DaemonManager._completion_file(run_dir)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return _DaemonCompletion(None, error="missing completion MCP finish signal")
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
+            return _DaemonCompletion(None, error=f"invalid completion signal: {e}")
+        if not isinstance(data, dict):
+            return _DaemonCompletion(None, error="completion signal must be a JSON object")
+        status = data.get("status")
+        if status not in _DAEMON_COMPLETION_STATUSES:
+            return _DaemonCompletion(
+                None,
+                error=(
+                    "completion status must be one of "
+                    f"{sorted(_DAEMON_COMPLETION_STATUSES)}"
+                ),
+            )
+        run_id = data.get("run_id")
+        if run_id is not None and run_id != run_dir.run_id:
+            return _DaemonCompletion(
+                None,
+                error=f"completion run_id mismatch: {run_id!r} != {run_dir.run_id!r}",
+            )
+        summary = data.get("summary")
+        reason = data.get("reason")
+        artifacts = data.get("artifacts")
+        if summary is not None and not isinstance(summary, str):
+            return _DaemonCompletion(None, error="completion summary must be a string")
+        if reason is not None and not isinstance(reason, str):
+            return _DaemonCompletion(None, error="completion reason must be a string")
+        if artifacts is not None and (
+            not isinstance(artifacts, list)
+            or not all(isinstance(item, str) for item in artifacts)
+        ):
+            return _DaemonCompletion(
+                None, error="completion artifacts must be an array of strings"
+            )
+        return _DaemonCompletion(status, summary, reason, artifacts)
+
+    @staticmethod
+    def _run_has_daemon_common_mcp(run_dir: DaemonRunDir) -> bool:
+        call_params = run_dir.state_snapshot().get("call_parameters")
+        if not isinstance(call_params, dict):
+            return False
+        registrations = call_params.get("mcp")
+        if not isinstance(registrations, list):
+            return False
+        return any(
+            isinstance(reg, dict) and reg.get("name") == _DAEMON_COMMON_MCP_NAME
+            for reg in registrations
+        )
+
+    def _require_done_completion(self, run_dir: DaemonRunDir, final_text: str) -> None:
+        if not self._run_has_daemon_common_mcp(run_dir):
+            return
+        completion = self._read_daemon_completion(run_dir)
+        if not completion.is_done:
+            raise self._fail_missing_or_bad_completion(run_dir, completion, final_text)
+
+    def _fail_missing_or_bad_completion(
+        self,
+        run_dir: DaemonRunDir,
+        completion: _DaemonCompletion,
+        final_text: str,
+    ) -> RuntimeError:
+        detail = completion.error or f"finish status was {completion.status!r}"
+        if completion.reason:
+            detail += f"; reason: {completion.reason}"
+        if completion.summary:
+            detail += f"; summary: {completion.summary}"
+        exc = RuntimeError(
+            "daemon completion MCP contract did not permit success: "
+            f"{detail}. Final text: {final_text[:500]}"
+        )
+        run_dir.mark_failed(exc)
+        try:
+            run_dir.result_path.write_text(final_text, encoding="utf-8")
+        except OSError:
+            pass
+        self._log(
+            "daemon_completion_contract_failed",
+            em_id=run_dir.handle,
+            run_id=run_dir.run_id,
+            status=completion.status,
+            error=completion.error,
+        )
+        return exc
+
     def _connect_task_mcp_registrations(
         self,
         registrations: list[dict],
@@ -1125,17 +1391,28 @@ class DaemonManager:
         return value.strip() or None
 
     @staticmethod
-    def _compose_cli_task(task: str, system_prompt: str | None) -> str:
-        """Embed a daemon oneshot prompt into a CLI backend task string."""
+    def _compose_cli_task(
+        task: str, system_prompt: str | None, backend: str | None = None,
+    ) -> str:
+        """Embed a daemon oneshot prompt into a CLI backend task string.
+
+        The daemon common MCP completion contract, when present, is part of
+        ``system_prompt``. CLI backends receive it in-band because most CLI
+        harnesses accept a single task string rather than a separate system
+        prompt channel.
+        """
         if not system_prompt:
             return task
-        return (
-            "Parent-provided daemon context (oneshot; bounded to this "
-            "daemon run and unable to override tool/safety limits):\n"
-            f"{system_prompt}\n\n"
-            "Task:\n"
-            f"{task}"
-        )
+
+        parts = []
+        if system_prompt:
+            parts.append(
+                "Parent-provided daemon context (oneshot; bounded to this "
+                "daemon run and unable to override tool/safety limits):\n"
+                f"{system_prompt}"
+            )
+        parts.append(f"Task:\n{task}")
+        return "\n\n".join(parts)
 
     @staticmethod
     def _daemon_codex_session_anchor(run_dir) -> str:
@@ -1467,7 +1744,7 @@ class DaemonManager:
             "You are a daemon emanation (分神) — a focused subagent dispatched by an agent.",
             "You have one task. Complete it, then provide your final report as text.",
             "Your intermediate text output will be seen by the main agent — treat it as a progress report.",
-            'When you are done, explicitly state "task done" and summarize what you accomplished.',
+            "When the completion MCP is available, call its finish tool before your final report.",
             "",
             "You work in the agent's working directory. Other subagents may be working",
             "concurrently on different tasks in the same directory. Do not modify files",
@@ -1669,6 +1946,7 @@ class DaemonManager:
                         kind="tool_results",
                     )
                     text = intercept_text or "[intercepted]"
+                    self._require_done_completion(run_dir, text)
                     run_dir.mark_done(text)
                     return text
 
@@ -1696,6 +1974,7 @@ class DaemonManager:
                         run_dir.bump_turn(turn=turns + 1, response_text=response.text or "")
 
             text = response.text or "[no output]"
+            self._require_done_completion(run_dir, text)
             run_dir.mark_done(text)
             return text
         except Exception as e:
@@ -1999,6 +2278,7 @@ class DaemonManager:
                 _store_session_id(session_id)
 
         text = (final_result_text or "").strip() or "[no output]"
+        self._require_done_completion(run_dir, text)
         run_dir.mark_done(text)
         return text
 
@@ -2210,6 +2490,7 @@ class DaemonManager:
             raise exc
 
         text = "\n".join(agent_message_texts).strip() or "[no output]"
+        self._require_done_completion(run_dir, text)
         run_dir.mark_done(text)
         return text
 
@@ -2503,14 +2784,6 @@ class DaemonManager:
             task_mcp_clients: list[object] = []
             try:
                 task_mcp_regs, task_mcp_catalog = self._task_mcp_registrations(spec)
-                mcp_schemas, mcp_handlers, task_mcp_clients = (
-                    self._connect_task_mcp_registrations(task_mcp_regs)
-                )
-                schemas, dispatch = self._build_tool_surface(
-                    spec["tools"],
-                    preset_surface=preset_surface,
-                    mcp_surface=(mcp_schemas, mcp_handlers),
-                )
                 task_system_prompt = self._task_system_prompt(spec)
                 task_skill_catalog = self._task_skill_catalog(spec)
             except Exception as e:
@@ -2519,13 +2792,12 @@ class DaemonManager:
             task_context = self._combine_oneshot_context(
                 task_system_prompt, task_skill_catalog, task_mcp_catalog
             )
-            system_prompt = self._build_emanation_prompt(
-                spec["task"], schemas, system_prompt=task_context
-            )
+            task_context = self._append_daemon_common_context(task_context)
 
             # Effective model for this emanation (preset overrides if present)
             effective_model = (resolved["llm"]["model"]
                                if resolved else self._default_model)
+            system_prompt = "[daemon prompt pending MCP startup]"
 
             # Construct run_dir — creates folder on disk, writes daemon.json,
             # .prompt, .heartbeat, daemon_start event. If FS construction fails,
@@ -2547,7 +2819,7 @@ class DaemonManager:
                         "task": spec["task"],
                         "tools": spec.get("tools", []),
                         "skills": spec.get("skills", []),
-                        "mcp": [self._redact_mcp_registration_for_prompt(r) for r in task_mcp_regs],
+                        "mcp": [],
                         "system_prompt": task_system_prompt,
                     },
                     log_callback=self._log,
@@ -2559,6 +2831,35 @@ class DaemonManager:
                 self._close_task_mcp_clients(task_mcp_clients)
                 return {"status": "error",
                         "message": f"Failed to create daemon folder: {e}"}
+
+            try:
+                task_mcp_regs = self._with_daemon_common_mcp(task_mcp_regs, run_dir)
+                task_mcp_catalog = self._render_task_mcp_catalog(task_mcp_regs)
+                task_context = self._combine_oneshot_context(
+                    task_system_prompt, task_skill_catalog, task_mcp_catalog
+                )
+                task_context = self._append_daemon_common_context(task_context)
+                mcp_schemas, mcp_handlers, task_mcp_clients = (
+                    self._connect_task_mcp_registrations(task_mcp_regs)
+                )
+                schemas, dispatch = self._build_tool_surface(
+                    spec["tools"],
+                    preset_surface=preset_surface,
+                    mcp_surface=(mcp_schemas, mcp_handlers),
+                )
+                system_prompt = self._build_emanation_prompt(
+                    spec["task"], schemas, system_prompt=task_context
+                )
+                run_dir.prompt_path.write_text(system_prompt, encoding="utf-8")
+                run_dir._state["call_parameters"]["mcp"] = [
+                    self._redact_mcp_registration_for_prompt(r)
+                    for r in task_mcp_regs
+                ]
+                run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
+            except Exception as e:
+                self._close_task_mcp_clients(task_mcp_clients)
+                run_dir.mark_failed(e)
+                return {"status": "error", "message": str(e)}
 
             future = pool.submit(
                 self._run_emanation,
@@ -2641,6 +2942,10 @@ class DaemonManager:
                 task_system_prompt = self._task_system_prompt(spec)
                 task_skill_catalog = self._task_skill_catalog(spec)
                 task_mcp_regs, task_mcp_catalog = self._task_mcp_registrations(spec)
+                if any(r.get("name") == _DAEMON_COMMON_MCP_NAME for r in task_mcp_regs):
+                    raise ValueError(
+                        f"MCP registration name {_DAEMON_COMMON_MCP_NAME!r} is reserved"
+                    )
             except ValueError as e:
                 return {"status": "error",
                         "message": f"tasks[{i}]: {e}"}
@@ -2676,19 +2981,22 @@ class DaemonManager:
             em_id = f"em-{self._next_id}"
             self._next_id += 1
             ids.append(em_id)
-            backend_argv = context.backend_argv
+            user_backend_argv = list(context.backend_argv)
+            backend_argv = list(user_backend_argv)
+            backend_harness_argv: list[str] = []
             backend_options = spec.get("backend_options") or None
+            system_prompt = f"[{backend} backend — task delegated to external CLI]"
 
             task_context = self._combine_oneshot_context(
                 context.system_prompt, context.skill_catalog, context.mcp_catalog
             )
-            system_prompt = f"[{backend} backend — task delegated to external CLI]"
+            if _cli_backend_loads_common_mcp(backend):
+                task_context = self._append_daemon_common_context(task_context)
             if task_context:
                 system_prompt += (
                     "\n\nParent-provided daemon context (oneshot):\n"
                     + task_context
                 )
-            cli_task = self._compose_cli_task(spec["task"], task_context)
             try:
                 run_dir = DaemonRunDir(
                     parent_working_dir=self._agent._working_dir,
@@ -2706,10 +3014,7 @@ class DaemonManager:
                         "task": spec["task"],
                         "tools": spec.get("tools", []),
                         "skills": spec.get("skills", []),
-                        "mcp": [
-                            self._redact_mcp_registration_for_prompt(r)
-                            for r in context.mcp_regs
-                        ],
+                        "mcp": [],
                         "system_prompt": context.system_prompt,
                         "backend_options": backend_options,
                     },
@@ -2720,17 +3025,72 @@ class DaemonManager:
                 return {"status": "error",
                         "message": f"Failed to create daemon folder: {e}"}
 
-            # Persist the resolved options into daemon.json for observability.
-            # The raw object (what the agent passed) goes alongside the
-            # converted argv tokens so the run is fully reconstructible from
-            # the run dir.
-            if backend_options is not None or backend_argv:
+            try:
+                mcp_regs = (
+                    self._with_daemon_common_mcp(context.mcp_regs, run_dir)
+                    if _cli_backend_loads_common_mcp(backend)
+                    else list(context.mcp_regs)
+                )
+                mcp_catalog = self._render_task_mcp_catalog(mcp_regs)
+                task_context = self._combine_oneshot_context(
+                    context.system_prompt, context.skill_catalog, mcp_catalog
+                )
+                if _cli_backend_loads_common_mcp(backend):
+                    task_context = self._append_daemon_common_context(task_context)
+                system_prompt = f"[{backend} backend — task delegated to external CLI]"
+                if task_context:
+                    system_prompt += (
+                        "\n\nParent-provided daemon context (oneshot):\n"
+                        + task_context
+                    )
+                run_dir.prompt_path.write_text(system_prompt, encoding="utf-8")
+                run_dir._state["call_parameters"]["mcp"] = [
+                    self._redact_mcp_registration_for_prompt(r)
+                    for r in mcp_regs
+                ]
+                run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
+                cli_task = self._compose_cli_task(
+                    spec["task"], task_context, backend=backend,
+                )
+                if backend_spec.runner_attr == "_run_claude_code_emanation":
+                    mcp_config_path = self._write_claude_mcp_config(run_dir, mcp_regs)
+                    backend_harness_argv = [
+                        "--mcp-config", str(mcp_config_path),
+                        "--strict-mcp-config",
+                    ]
+                elif backend == "codex" and _cli_backend_loads_common_mcp(backend):
+                    backend_harness_argv = _codex_mcp_argv(mcp_regs)
+                elif backend == "opencode" and _cli_backend_loads_common_mcp(backend):
+                    opencode_env = _opencode_mcp_env(mcp_regs)
+                    if opencode_env:
+                        backend_harness_argv = [
+                            "__lingtai_opencode_config_content",
+                            opencode_env["OPENCODE_CONFIG_CONTENT"],
+                        ]
+                elif backend == "qwen-code" and _cli_backend_loads_common_mcp(backend):
+                    qwen_settings = _write_qwen_mcp_settings(run_dir, mcp_regs)
+                    backend_harness_argv = [
+                        "__lingtai_qwen_system_settings_path",
+                        str(qwen_settings),
+                    ]
+                backend_argv = [*user_backend_argv, *backend_harness_argv]
+            except Exception as e:
+                run_dir.mark_failed(e)
+                return {"status": "error", "message": str(e)}
+
+            # Persist user-supplied options separately from harness-owned argv
+            # so run artifacts do not imply the model supplied MCP loader flags.
+            if backend_options is not None:
                 run_dir._state["backend_options"] = backend_options
-                run_dir._state["backend_argv"] = list(backend_argv)
+                run_dir._state["backend_argv"] = list(user_backend_argv)
+            if backend_harness_argv:
+                run_dir._state["backend_harness_argv"] = list(backend_harness_argv)
+            if backend_options is not None or backend_harness_argv:
                 run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
             self._log("daemon_backend_options",
                       em_id=em_id, backend=backend,
-                      argv=list(backend_argv))
+                      argv=list(user_backend_argv),
+                      harness_argv=list(backend_harness_argv))
 
             run_fn = getattr(self, backend_spec.runner_attr)
             future = pool.submit(
@@ -3903,6 +4263,19 @@ class DaemonManager:
             return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
         prompt = self._build_opencode_prompt(task)
+        env_extra: dict[str, str] = {}
+        raw_backend_argv = list(backend_argv or [])
+        backend_argv = []
+        idx = 0
+        while idx < len(raw_backend_argv):
+            token = raw_backend_argv[idx]
+            if token == "__lingtai_opencode_config_content":
+                idx += 1
+                if idx < len(raw_backend_argv):
+                    env_extra["OPENCODE_CONFIG_CONTENT"] = raw_backend_argv[idx]
+            else:
+                backend_argv.append(token)
+            idx += 1
 
         # Required infrastructure flags come first; free-form
         # backend_options sit between them and the prompt positional so the
@@ -3916,12 +4289,16 @@ class DaemonManager:
                   cmd_head=" ".join(cmd[:1 + len(prefix)]))
 
         try:
+            env = os.environ.copy()
+            if env_extra:
+                env.update(env_extra)
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
                 cwd=str(self._agent._working_dir),
+                env=env,
                 start_new_session=True,  # own process group for reliable cleanup
             )
         except FileNotFoundError:
@@ -4039,6 +4416,7 @@ class DaemonManager:
         if not any_event and not stderr_tail:
             text = "[no output]"
 
+        self._require_done_completion(run_dir, text)
         run_dir.mark_done(text)
         return text
 
@@ -4119,6 +4497,20 @@ class DaemonManager:
         if cancel_event.is_set():
             return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
+        qwen_env: dict[str, str] = {}
+        raw_backend_argv = list(backend_argv or [])
+        backend_argv = []
+        idx = 0
+        while idx < len(raw_backend_argv):
+            token = raw_backend_argv[idx]
+            if token == "__lingtai_qwen_system_settings_path":
+                idx += 1
+                if idx < len(raw_backend_argv):
+                    qwen_env["QWEN_CODE_SYSTEM_SETTINGS_PATH"] = raw_backend_argv[idx]
+            else:
+                backend_argv.append(token)
+            idx += 1
+
         prompt = self._build_qwen_code_prompt(task)
         cmd = ["qwen", "--yolo"]
         if backend_argv:
@@ -4127,12 +4519,15 @@ class DaemonManager:
         self._log("daemon_qwen_code_start", em_id=em_id, cmd_head=" ".join(cmd[:5]))
 
         try:
+            env = os.environ.copy()
+            env.update(qwen_env)
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
                 cwd=str(self._agent._working_dir),
+                env=env,
                 start_new_session=True,
             )
         except FileNotFoundError:
@@ -4191,6 +4586,7 @@ class DaemonManager:
             raise exc
 
         text = output or (f"[no stdout; stderr tail follows]\n{stderr_tail[-500:]}" if stderr_tail else "[no output]")
+        self._require_done_completion(run_dir, text)
         run_dir.mark_done(text)
         return text
 

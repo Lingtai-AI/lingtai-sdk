@@ -7,9 +7,9 @@ description: >
   quality/effort/budget controls. Use this when you need to write code, generate
   patches, refactor files, create documentation, or do any multi-file code work
   that would be faster delegated than done manually.
-version: 1.0.2
+version: 1.0.3
 tags: [cli, code, delegation, claude, implementation]
-last_changed_at: "2026-06-14T00:11:48-07:00"
+last_changed_at: "2026-06-30T00:00:00-07:00"
 ---
 
 # Claude Code CLI — Code Delegation
@@ -100,6 +100,8 @@ A single synchronous subprocess. You wait for it to finish, you get one transcri
 - You need progress checkpoints, retries, or the ability to inspect/interrupt work independently
 
 `claude -p` does not provide its own async/job protocol. "Async" means a LingTai or OS wrapper around the CLI (for example bash `async=true`, a supervised background job, or an independent daemon/backend), and that wrapper must own logs, timeout, cancellation, and recovery notes.
+
+> **Inside `claude -p` (print mode), the inner Claude's own background jobs never notify it back.** `run_in_background`, `&`, and wait-loops are interactive-session affordances; in `--print` there is no second prompt and no `<task-notification>` re-entry, so the model is never woken when the job finishes. If you are the Claude running inside a `claude -p` daemon, **do not background a job and then end your turn waiting for its completion** — run validation synchronously with an adequate explicit timeout and read the result in the same turn, or report a blocker. (The LingTai `claude-p` daemon backend enforces this: a run that ends while awaiting a background-job notification is marked failed, not done.)
 
 **Examples:**
 ```bash

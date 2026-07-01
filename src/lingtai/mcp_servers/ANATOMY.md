@@ -7,6 +7,7 @@ related_files:
   - src/lingtai/mcp_servers/__init__.py
   - src/lingtai/mcp_servers/_identity.py
   - src/lingtai/mcp_servers/_skill.py
+  - src/lingtai/mcp_servers/daemon_common/server.py
   - src/lingtai/mcp_servers/cloud_mail/manager.py
   - src/lingtai/mcp_servers/feishu/manager.py
   - src/lingtai/mcp_servers/imap/manager.py
@@ -25,14 +26,15 @@ maintenance: |
 ---
 # lingtai.mcp_servers
 
-Curated MCP server package implementations shipped inside the `lingtai` Python distribution. They are launched by catalog/script entry points such as `python -m lingtai.mcp_servers.<name>` and expose real addon tools (IMAP, Telegram, Feishu, WeChat, WhatsApp, Cloud Mail) plus bundled progressive-disclosure manuals.
+Curated and built-in MCP server package implementations shipped inside the `lingtai` Python distribution. They are launched by catalog/script entry points such as `python -m lingtai.mcp_servers.<name>` and expose real addon tools (IMAP, Telegram, Feishu, WeChat, WhatsApp, Cloud Mail), daemon lifecycle tools, plus bundled progressive-disclosure manuals.
 
 ## Components
 
 | File / folder | Role |
 |---|---|
-| `_skill.py` | Shared bundled-skill helper: re-exports the kernel-owned `split_frontmatter` from `lingtai_kernel._frontmatter` (one impl shared with the prompt-section catalog; kernel never imports the wrapper), `load_skill()` loads package `SKILL.md`, `manual_action_description()` injects frontmatter into the schema, and `manual_payload()` returns the manual body + absolute path without sidecar lists (`_skill.py:36-82`). |
+| `_skill.py` | Shared bundled-skill helper: re-exports the kernel-owned `split_frontmatter` from `lingtai_kernel._frontmatter` (one impl shared with the prompt-section catalog; kernel never imports the wrapper), `load_skill()` loads package `SKILL.md`, `manual_action_description()` injects frontmatter into the schema, and `manual_payload()` returns the manual body + absolute path without sidecar lists (`_skill.py:36-79`). |
 | `_identity.py` | Shared public-identity envelope/path/write helper for curated messaging MCPs: builds the `lingtai.mcp.identity.v1` document, computes `system/mcp_identities/<name>.json`, and performs the newline-terminated atomic JSON write. Provider-specific account fields and redaction stay in each provider. |
+| `daemon_common/` | Built-in daemon lifecycle MCP. `daemon_common/server.py:1-151` exposes `finish(status, summary?, reason?, artifacts?)`, validates the call, and atomically writes the internal per-run `daemon_completion.json` file named by `LINGTAI_DAEMON_COMPLETION_FILE`; daemon runners validate that file before allowing success. |
 | `telegram/`, `imap/`, `feishu/`, `wechat/`, `whatsapp/`, `cloud_mail/` | Curated MCPs using `_skill.py` for their `action="manual"` payloads (`telegram/manager.py`, `imap/manager.py`, `feishu/manager.py`, `wechat/manager.py`, `whatsapp/manager.py`, `cloud_mail/manager.py`). Messaging MCPs with runtime account identity also delegate their identity envelope/path/write policy to `_identity.py`. |
 | Per-package `SKILL.md` | The human/agent-facing bundled manual. If a manual has sidecars, the sidecar inventory and relative paths live in this markdown, not in the tool payload. |
 | `pyproject.toml` package-data entries | Ships every curated MCP `SKILL.md`; `reference/**/*` and `assets/**/*` are also packaged for future sidecar files (`pyproject.toml:81-86`). |
@@ -49,7 +51,7 @@ Parent: `src/lingtai/` wrapper package (`src/lingtai/ANATOMY.md`). Sibling wrapp
 
 ## State
 
-The package itself is mostly code + packaged manuals. Runtime state is per-agent and server-specific: e.g. message caches, contacts, inbox replay guards, or credential-derived identities live under the agent workdir or `.secrets/`, not in `src/lingtai/mcp_servers/`. The shared manual and identity helpers have no persistent state of their own.
+The package itself is mostly code + packaged manuals. Runtime state is per-agent and server-specific: e.g. message caches, contacts, inbox replay guards, credential-derived identities, or daemon completion sentinels live under the agent workdir/run dir or `.secrets/`, not in `src/lingtai/mcp_servers/`. The shared manual and identity helpers have no persistent state of their own.
 
 ## Notes
 

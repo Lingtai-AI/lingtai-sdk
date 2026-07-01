@@ -134,7 +134,9 @@ def test_emanate_respects_per_batch_timeout(tmp_path):
         return m
 
     with patch("lingtai.core.daemon.ThreadPoolExecutor") as MockPool, \
-         patch("lingtai.core.daemon.threading.Thread", side_effect=fake_thread_init):
+         patch("lingtai.core.daemon.threading.Thread", side_effect=fake_thread_init), \
+         patch.object(mgr, "_connect_task_mcp_registrations",
+                      return_value=({}, {}, [])):
         pool = MockPool.return_value
         pool.submit.return_value = MagicMock(
             done=MagicMock(return_value=True),
@@ -161,7 +163,9 @@ def test_emanate_caps_timeout_at_ceiling(tmp_path):
         return m
 
     with patch("lingtai.core.daemon.ThreadPoolExecutor") as MockPool, \
-         patch("lingtai.core.daemon.threading.Thread", side_effect=fake_thread_init):
+         patch("lingtai.core.daemon.threading.Thread", side_effect=fake_thread_init), \
+         patch.object(mgr, "_connect_task_mcp_registrations",
+                      return_value=({}, {}, [])):
         pool = MockPool.return_value
         pool.submit.return_value = MagicMock(
             done=MagicMock(return_value=True),

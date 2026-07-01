@@ -375,10 +375,15 @@ def test_emanate_opencode_routes_to_cli_handler(tmp_path):
         em_id = result["ids"][0]
         mgr._emanations[em_id]["future"].result(timeout=5)
 
-    assert captured["task"] == "Summarise the changelog."
-    assert captured["backend_argv"] == ["--model", "openai/gpt-5"]
+    assert captured["task"].endswith("Task:\nSummarise the changelog.")
+    assert "call the MCP tool `finish`" in captured["task"]
+    assert "daemon_common" in captured["task"]
+    assert captured["backend_argv"][:2] == ["--model", "openai/gpt-5"]
+    assert "__lingtai_opencode_config_content" in captured["backend_argv"]
     assert captured["state"]["backend"] == "opencode"
     assert captured["state"]["backend_options"] == {"model": "openai/gpt-5"}
+    assert captured["state"]["backend_argv"] == ["--model", "openai/gpt-5"]
+    assert "__lingtai_opencode_config_content" in captured["state"]["backend_harness_argv"]
 
 
 # ---------------------------------------------------------------------------

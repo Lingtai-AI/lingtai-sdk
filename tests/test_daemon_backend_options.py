@@ -151,9 +151,7 @@ def test_emanate_cli_rejects_bad_backend_options(tmp_path):
 
 
 def test_emanate_cli_persists_resolved_options(tmp_path):
-    """Successful CLI emanate writes backend_options + backend_argv into
-    daemon.json so daemon(check) and the on-disk artifact can be
-    reconstructed later."""
+    """Successful CLI emanate persists user argv separately from harness argv."""
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
 
@@ -193,11 +191,14 @@ def test_emanate_cli_persists_resolved_options(tmp_path):
         fut = mgr._emanations[em_id]["future"]
         fut.result(timeout=5)
 
-    assert captured["backend_argv"] == [
+    user_argv = [
         "--effort", "high",
         "--model", "claude-opus-4-7",
         "--search",
     ]
+    assert captured["backend_argv"][:len(user_argv)] == user_argv
+    assert "--mcp-config" in captured["backend_argv"]
+    assert "--strict-mcp-config" in captured["backend_argv"]
     state = captured["daemon_json_state"]
     assert state["backend"] == "claude-code"
     assert state["backend_options"] == {
@@ -205,17 +206,13 @@ def test_emanate_cli_persists_resolved_options(tmp_path):
         "model": "claude-opus-4-7",
         "search": True,
     }
-    assert state["backend_argv"] == [
-        "--effort", "high",
-        "--model", "claude-opus-4-7",
-        "--search",
-    ]
+    assert state["backend_argv"] == user_argv
+    assert "--mcp-config" in state["backend_harness_argv"]
+    assert "--strict-mcp-config" in state["backend_harness_argv"]
 
 
 def test_emanate_cli_no_options_omits_fields(tmp_path):
-    """When backend_options is absent, daemon.json should not carry the
-    fields at all (avoids confusing readers into thinking an empty
-    options object was passed)."""
+    """No backend_options omits user fields but records harness argv separately."""
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
 
@@ -238,9 +235,12 @@ def test_emanate_cli_no_options_omits_fields(tmp_path):
         em_id = result["ids"][0]
         mgr._emanations[em_id]["future"].result(timeout=5)
 
-    assert captured["backend_argv"] == []
+    assert "--mcp-config" in captured["backend_argv"]
+    assert "--strict-mcp-config" in captured["backend_argv"]
     assert "backend_options" not in captured["state"]
     assert "backend_argv" not in captured["state"]
+    assert "--mcp-config" in captured["state"]["backend_harness_argv"]
+    assert "--strict-mcp-config" in captured["state"]["backend_harness_argv"]
 
 
 def test_lingtai_backend_ignores_backend_options(tmp_path):
@@ -571,19 +571,26 @@ def test_cli_contexts_keep_per_task_argv_and_passive_mcp(tmp_path):
         for em_id in result["ids"]:
             mgr._emanations[em_id]["future"].result(timeout=5)
 
-    assert captured["task with argv"]["backend_argv"] == [
-        "--model", "claude-opus-4-7",
-    ]
-    assert captured["task with argv"]["call_parameters"]["mcp"] == []
-    assert captured["task with mcp"]["backend_argv"] == []
+    argv_with_model = captured["task with argv"]["backend_argv"]
+    assert argv_with_model[:2] == ["--model", "claude-opus-4-7"]
+    assert "--mcp-config" in argv_with_model
+    assert "--strict-mcp-config" in argv_with_model
+    assert captured["task with argv"]["call_parameters"]["mcp"][0]["name"] == "daemon_common"
+    argv_with_mcp = captured["task with mcp"]["backend_argv"]
+    assert "--mcp-config" in argv_with_mcp
+    assert "--strict-mcp-config" in argv_with_mcp
     assert "backend_argv" not in captured["task with mcp"]["state"]
-    assert captured["task with mcp"]["call_parameters"]["mcp"] == [{
+    assert "--mcp-config" in captured["task with mcp"]["state"]["backend_harness_argv"]
+    assert "--strict-mcp-config" in captured["task with mcp"]["state"]["backend_harness_argv"]
+    mcp_params = captured["task with mcp"]["call_parameters"]["mcp"]
+    assert mcp_params[0]["name"] == "daemon_common"
+    assert mcp_params[1] == {
         "name": "demo",
         "command": "demo-mcp",
         "args": ["--serve"],
         "env": {"TOKEN": "<redacted>"},
         "transport": "stdio",
-    }]
+    }
 
 
 def test_mimocode_cmd_appends_backend_argv_before_prompt(tmp_path):
