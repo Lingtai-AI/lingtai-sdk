@@ -442,11 +442,13 @@ def _heartbeat_loop(agent) -> None:
                         source, question = "human", content.strip()
                     if question:
                         def _inquiry_done(q: str, s: str, tf) -> None:
-                            _run_inquiry(agent, q, source=s)
                             try:
-                                tf.unlink()
-                            except OSError:
-                                pass
+                                _run_inquiry(agent, q, source=s)
+                            finally:
+                                try:
+                                    tf.unlink()
+                                except OSError:
+                                    pass
                         threading.Thread(
                             target=_inquiry_done,
                             args=(question, source, taken_file),
