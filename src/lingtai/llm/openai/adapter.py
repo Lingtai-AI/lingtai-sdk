@@ -544,10 +544,11 @@ def _freeze_responses_outputs(
 ) -> list[dict[str, Any]]:
     """Stabilize ``function_call_output.output`` strings across WS replay turns.
 
-    The kernel carries *latest-only* resident-meta blocks (``_meta.agent_meta`` /
-    ``_meta.guidance`` / ``_meta.notifications``) and MOVES them off an older tool
-    result onto the freshest one each turn (``meta_block.attach_active_runtime`` /
-    ``attach_active_notifications``). That rewrites an older
+    The kernel carries resident-meta blocks with different cadences:
+    sparse/update-driven ``_meta.agent_meta`` / ``_meta.guidance`` (moved only
+    when their material snapshot changes by ``meta_block.attach_active_runtime``)
+    and latest-only ``_meta.notifications`` (moved by
+    ``attach_active_notifications``). Those moves rewrite an older
     ``ToolResultBlock.content`` *in place*, so the same ``call_id``'s
     ``function_call_output.output`` serializes differently on a later turn even
     though, semantically, the model already saw that result.

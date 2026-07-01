@@ -1,4 +1,4 @@
-"""Turn-level integration tests for the latest-only ``_meta`` agent/guidance blocks.
+"""Turn-level integration tests for the sparse ``_meta`` agent/guidance blocks.
 
 These tests drive ``base_agent.turn._process_response`` end-to-end (with light
 fakes) to verify the parent-identified blockers are actually fixed at the
@@ -7,11 +7,15 @@ boundary, not just in the helper:
   * blocker #1 — ``attach_active_runtime`` is invoked at the tool-batch
     boundary, so the latest provider-visible result gets ``_meta.agent_meta``
     and ``_meta.guidance``.
-  * the latest-only invariant — a prior result loses ``_meta.agent_meta`` once a
-    newer dict-shaped result takes over across consecutive batches.
+  * the sparse / update-driven invariant — when the material agent snapshot is
+    unchanged across consecutive batches, ``_meta.agent_meta`` is NOT re-stamped
+    onto the newer result (the prior holder keeps it as a historical update
+    point); a genuinely material change re-attaches it to the newer result and
+    strips the older holder.
 
-The helper-level semantics (promotion, pending scaffolding, guidance schema)
-are covered in ``tests/test_meta_block.py``; this file proves the wiring.
+The helper-level semantics (change signature, promotion, pending scaffolding,
+guidance schema) are covered in ``tests/test_meta_block.py``; this file proves
+the wiring.
 """
 from __future__ import annotations
 
@@ -117,10 +121,19 @@ class _Agent:
         self.logs.append((event, kwargs))
 
 
-def _stamped(meta_value: str) -> dict:
-    """A dict tool-result content already carrying a _runtime_pending snapshot."""
+def _stamped(meta_value: str, *, molt: str | None = None) -> dict:
+    """A dict tool-result content already carrying a _runtime_pending snapshot.
+
+    ``molt`` optionally injects a material ``context.molt`` reminder so the
+    caller can drive a genuine change in the agent_meta signature between
+    batches (``current_time`` and ``echo`` are volatile / non-agent_meta and do
+    NOT change the material signature on their own).
+    """
     content = {"status": "ok", "echo": meta_value}
-    stamp_meta(content, {"current_time": meta_value, "context": {"usage": 0.1}}, 5)
+    meta: dict = {"current_time": meta_value}
+    if molt is not None:
+        meta["context"] = {"molt": molt}
+    stamp_meta(content, meta, 5)
     return content
 
 
@@ -151,32 +164,64 @@ def test_runtime_block_lands_on_latest_result_at_turn_boundary(tmp_path):
     assert "active_turn_tool_calls" not in holder
 
 
-def test_prior_runtime_block_is_stripped_when_newer_result_arrives(tmp_path):
-    agent = _Agent(tmp_path, [_stamped("T1"), _stamped("T2")])
-
-    first_response = LLMResponse(
-        text="",
-        tool_calls=[ToolCall(id="call_1", name="bash", args={"c": "x"})],
-    )
-    _process_response(agent, first_response, ledger_source="test")
-    first_holder = agent._runtime_live_holder
-    assert "current_time" not in first_holder["_meta"]["agent_meta"]
-    assert first_holder["echo"] == "T1"
-
-    # Stage a second assistant turn with a fresh tool call, then process it.
+def _second_batch(agent, call_id: str = "call_2"):
+    """Stage and process a second assistant turn + tool call on ``agent``."""
     agent._chat.interface.add_assistant_message(
-        [TextBlock("again"), ToolCallBlock(id="call_2", name="bash", args={"c": "y"})]
+        [TextBlock("again"), ToolCallBlock(id=call_id, name="bash", args={"c": "y"})]
     )
     agent._session = _Session(agent._chat)
-    second_response = LLMResponse(
-        text="",
-        tool_calls=[ToolCall(id="call_2", name="bash", args={"c": "y"})],
+    _process_response(
+        agent,
+        LLMResponse(text="", tool_calls=[ToolCall(id=call_id, name="bash", args={"c": "y"})]),
+        ledger_source="test",
     )
-    _process_response(agent, second_response, ledger_source="test")
+
+
+def test_unchanged_snapshot_not_restamped_on_newer_result(tmp_path):
+    # Two batches whose MATERIAL agent snapshot is identical (only the volatile
+    # current_time / non-agent_meta echo differ). agent_meta must stay on the
+    # first holder as a historical update point; the newer result must NOT get
+    # re-stamped merely because it is the latest.
+    agent = _Agent(tmp_path, [_stamped("T1"), _stamped("T2")])
+
+    _process_response(
+        agent,
+        LLMResponse(text="", tool_calls=[ToolCall(id="call_1", name="bash", args={"c": "x"})]),
+        ledger_source="test",
+    )
+    first_holder = agent._runtime_live_holder
+    assert "agent_meta" in first_holder["_meta"]
+    assert first_holder["echo"] == "T1"
+
+    _second_batch(agent)
+
+    # Sparse: the live holder did not move; the new result carries no agent_meta.
+    assert agent._runtime_live_holder is first_holder
+    assert "agent_meta" in first_holder["_meta"]
+    second_result = agent._chat.committed[-1][0].content
+    assert "agent_meta" not in second_result.get("_meta", {})
+
+
+def test_material_change_reattaches_and_strips_prior(tmp_path):
+    # First batch has no molt; second batch surfaces a sustained-pressure molt
+    # reminder — a material change. agent_meta re-attaches to the newer result
+    # and the older holder sheds its agent_meta/guidance.
+    agent = _Agent(tmp_path, [_stamped("T1"), _stamped("T2", molt="sustained pressure")])
+
+    _process_response(
+        agent,
+        LLMResponse(text="", tool_calls=[ToolCall(id="call_1", name="bash", args={"c": "x"})]),
+        ledger_source="test",
+    )
+    first_holder = agent._runtime_live_holder
+    assert "agent_meta" in first_holder["_meta"]
+
+    _second_batch(agent)
 
     second_holder = agent._runtime_live_holder
     assert second_holder is not first_holder
-    assert "current_time" not in second_holder["_meta"]["agent_meta"]
     assert second_holder["echo"] == "T2"
-    # The previous holder must have shed its agent_meta/guidance (latest-only).
+    assert second_holder["_meta"]["agent_meta"]["context"] == {"molt": "sustained pressure"}
+    # The previous holder sheds its agent_meta/guidance now that a newer live
+    # holder carries the changed snapshot.
     assert "_meta" not in first_holder or "agent_meta" not in first_holder["_meta"]

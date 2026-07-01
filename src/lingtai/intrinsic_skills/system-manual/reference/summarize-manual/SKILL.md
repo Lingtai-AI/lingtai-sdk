@@ -137,7 +137,11 @@ progressive-disclosure entry point.
 
 Use this when a tool result is long or noisy — typically one that ranks high in
 `_meta.agent_meta.current_tool_result_chars.top_results` (above its `threshold`,
-counted in `over_threshold_count`).
+counted in `over_threshold_count`). `agent_meta` is sparse/update-driven: it is
+re-emitted onto a later result when the material snapshot changes (a newly-large
+result counts as a change), so read the ranking from the **most recent emitted**
+`agent_meta` — it may sit on an earlier result than the newest one, not
+necessarily on the last tool result.
 
 1. Read or inspect the result first.
 2. Decide what future-you needs from it.

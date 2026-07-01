@@ -12,20 +12,25 @@ the result dict:
 
 - ``_meta.tool_meta`` — permanent per-result identity facts, written once by
   ``ToolExecutor._attach_tool_block`` and never moved.
-- ``_meta.agent_meta`` — latest-result-only agent/current-state snapshot.
-- ``_meta.guidance`` — latest-result-only lightweight ref/hook pointing at the
-  resident ``meta_guidance`` system-prompt section (built by
-  ``build_meta_guidance``), where the full kernel guidance sections, the
-  ``_meta`` readme, and any static adapter runtime rules now live.  The full
-  ordered appendix is no longer re-stamped on every tail result.
+- ``_meta.agent_meta`` — SPARSE / update-driven agent/current-state snapshot.
+  Attached to a tool result only when the *material* snapshot changes since the
+  last emitted ``agent_meta`` (not re-stamped onto every latest result when
+  unchanged).  Older emitted snapshots stay in history as update points.
+- ``_meta.guidance`` — a lightweight ref/hook pointing at the resident
+  ``meta_guidance`` system-prompt section (built by ``build_meta_guidance``),
+  where the full kernel guidance sections, the ``_meta`` readme, and any static
+  adapter runtime rules now live.  The full ordered appendix is no longer
+  re-stamped on every tail result.  It rides with ``agent_meta`` and is
+  attached/moved on the same sparse update cadence.
 - ``_meta.notifications`` / ``_meta.notification_guidance`` — latest-result-only
   channel-owned notification payloads plus kernel safety framing.
 
 Channel encoding:
 - Tool-result channel: ``stamp_meta`` records a per-tool runtime snapshot,
   which ``attach_active_runtime`` promotes into ``_meta.agent_meta`` plus
-  ``_meta.guidance`` on the *latest* result dict only (latest-only; the prior
-  holder's blocks are stripped).
+  ``_meta.guidance`` — but only when the material snapshot changed since the
+  last emitted one (sparse; on no change nothing is attached/moved and the prior
+  holder keeps its snapshot).
 - Text-input channel: `render_meta` formats the same dict into a prose
   prefix line. Inbox content is NOT rendered here — it lives in the
   user-turn body, drained by ``_concat_queued_messages`` upstream.
@@ -55,8 +60,9 @@ from .time_veil import now_iso
 # The single ``_meta`` envelope key and its four nested blocks.  Every dict
 # tool result carries ``result["_meta"]``; the blocks beneath it are:
 #   * ``tool_meta``            — permanent, per-result (every tool result)
-#   * ``agent_meta``           — latest-result-only agent/current state
-#   * ``guidance``             — latest-result-only kernel guidance
+#   * ``agent_meta``           — sparse/update-driven agent/current state
+#   * ``guidance``             — sparse/update-driven kernel guidance ref
+#                                (rides with agent_meta)
 #   * ``notifications`` +
 #     ``notification_guidance``— latest-result-only channel payloads
 # ---------------------------------------------------------------------------
@@ -316,8 +322,10 @@ DEFAULT_LARGE_RESULT_THRESHOLD = 3000
 TOOL_RESULT_CHARS_README = (
     "listing top 5 tool results over 1000 chars by char count "
     "(id, tool_name, chars; no preview); no need to summarize this helper "
-    "(it appears only on the latest tool result _meta and older copies are "
-    "stripped); these are summarize candidates, not a directive to summarize "
+    "(it rides on agent_meta, which is sparse/update-driven — re-emitted on a "
+    "later result when the material snapshot changes, so read the most recent "
+    "emitted agent_meta for the current list); these are summarize candidates, "
+    "not a directive to summarize "
     "every entry: prefer summarizing prior results that are already "
     "consumed/digested and useless, irrelevant, obsolete, or no longer needed "
     "in full, weighing context pressure, recoverability from logs, and future "
@@ -396,8 +404,8 @@ def _meta_block(result: dict) -> dict:
     """Return ``result["_meta"]``, creating an empty dict if absent.
 
     Centralizes the envelope so the per-result ``tool_meta`` writer and the
-    latest-only ``agent_meta``/``guidance``/notification movers all share one
-    container.
+    sparse ``agent_meta``/``guidance`` updater and latest-only notification
+    mover all share one container.
     """
     meta = result.get(META_ENVELOPE_KEY)
     if not isinstance(meta, dict):
@@ -453,9 +461,17 @@ def build_meta_readme() -> dict:
             "carry a 'molt' reminder string: a SUSTAINED-pressure warning that appears "
             "only after context has been high (>= 0.75) for several consecutive "
             "fresh provider rounds and clears when pressure drops — current "
-            "state, not a permanent event (cf. tool_meta.reconstruction). Latest "
-            "tool result only; older copies are stripped as newer results "
-            "arrive. agent_meta carries NO token diagnostics: all token/cache "
+            "state, not a permanent event (cf. tool_meta.reconstruction). SPARSE / "
+            "update-driven: agent_meta is attached to a tool result only when its "
+            "MATERIAL snapshot changes since the last emitted agent_meta — it is "
+            "NOT re-stamped onto the newest tool result merely because that result "
+            "is the latest when nothing material changed. Volatile bookkeeping "
+            "(elapsed_ms, active_turn_tool_calls, current_time, and the running "
+            "current_tool_result_chars.total_chars) does not count as a change. "
+            "So the most recent agent_meta may sit on an EARLIER result than the "
+            "newest one; scan backward for the last-emitted snapshot, and read "
+            "each emitted agent_meta as the agent state at that update point. "
+            "agent_meta carries NO token diagnostics: all token/cache "
             "facts — both per-provider-round and current-session aggregate — live "
             "permanently in tool_meta.token_usage instead (see "
             "meta_guidance.token_efficiency). "
@@ -472,7 +488,9 @@ def build_meta_readme() -> dict:
             "Lightweight ref/hook to the resident system-prompt section "
             "meta_guidance, where the full kernel guidance sections, this "
             "_meta envelope readme, and any static adapter runtime rules live. "
-            "Latest tool result only; carries no full guidance body."
+            "Rides with agent_meta on the same sparse/update-driven cadence "
+            "(attached only when agent_meta is re-emitted); carries no full "
+            "guidance body."
         ),
         NOTIFICATION_GUIDANCE_KEY: (
             "Kernel safety framing for channel notification handling. Latest "
@@ -1527,13 +1545,14 @@ def _render_context_fragment(agent, meta: dict) -> str:
 def stamp_meta(result: dict, meta: dict, elapsed_ms: int) -> dict:
     """Record per-tool runtime ``meta`` on the result for the boundary holder.
 
-    ``_meta.agent_meta`` / ``_meta.guidance`` are **latest-only** blocks: only
-    the freshest provider-visible tool result carries them.  Stamping them on
-    every result (the old behaviour) would leave stale snapshots in history, so
-    this function records the per-tool ``meta`` snapshot and measured
-    ``elapsed_ms`` under a transient ``_runtime_pending`` key, which
-    :func:`attach_active_runtime` consumes at the tool-batch boundary
-    (analogous to the notification holder) and then deletes.
+    ``_meta.agent_meta`` / ``_meta.guidance`` are **sparse / update-driven**
+    blocks: they are (re)attached only when the material agent snapshot changes.
+    Stamping them on every result (the old behaviour) would leave stale
+    snapshots in history, so this function records the per-tool ``meta`` snapshot
+    and measured ``elapsed_ms`` under a transient ``_runtime_pending`` key, which
+    :func:`attach_active_runtime` consumes at the tool-batch boundary (analogous
+    to the notification holder), compares against the last-emitted snapshot, and
+    then deletes.
 
     When ``meta`` is empty nothing is recorded — matching the pre-existing
     time-blind behaviour where no timing signal appears.
@@ -1552,8 +1571,10 @@ def stamp_meta(result: dict, meta: dict, elapsed_ms: int) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# agent_meta / guidance blocks — latest-result-only moving holder under _meta,
-# mirrors the notification payload pattern in ``attach_active_notifications``.
+# agent_meta / guidance blocks — sparse/update-driven moving holder under _meta.
+# Like the notification payload pattern in ``attach_active_notifications``, but
+# gated: the holder moves only when the material agent snapshot changes, so an
+# unchanged snapshot is not chased onto every latest tool result.
 # ---------------------------------------------------------------------------
 
 
@@ -1572,8 +1593,62 @@ def _strip_runtime_pending(tool_results: list) -> None:
             content.pop("_runtime_pending", None)
 
 
+# Volatile agent_meta bookkeeping that ticks every batch regardless of whether
+# the agent's material state changed.  These must NOT contribute to the
+# sparse-attach signature: if they did, agent_meta would be forced onto every
+# latest result and the "if no change, don't re-stamp" contract would never
+# hold.  ``current_time`` is normally popped before promotion, but is listed
+# defensively.
+_AGENT_META_VOLATILE_KEYS = frozenset({
+    "elapsed_ms",
+    "active_turn_tool_calls",
+    TOOL_META_CURRENT_TIME_KEY,
+})
+
+# Within ``current_tool_result_chars`` the running ``total_chars`` grows by a
+# little every batch as results accumulate, so it is volatile.  The material
+# signals — which large results exist (``top_results``), how many exceed the
+# hint threshold (``over_threshold_count``), and the ``threshold`` itself — are
+# kept in the signature so a genuinely new large result re-surfaces agent_meta.
+_TOOL_RESULT_CHARS_VOLATILE_KEYS = frozenset({"total_chars"})
+
+
+def agent_meta_signature(agent_meta: Mapping[str, Any]) -> str:
+    """Return a stable signature of the *material* agent_meta content.
+
+    ``_meta.agent_meta`` is sparse / update-driven: it is attached to a tool
+    result only when the material snapshot changed since the last emitted one
+    (see :func:`attach_active_runtime`).  This signature is the change detector.
+
+    Volatile bookkeeping that ticks every batch — ``elapsed_ms``,
+    ``active_turn_tool_calls``, ``current_time``, and the running
+    ``current_tool_result_chars.total_chars`` — is deliberately excluded so it
+    cannot defeat the "if no change" requirement by forcing agent_meta onto
+    every result.  Material signals (a new sustained-pressure ``context.molt``
+    reminder, changed dynamic ``adapter_comment`` scalars, a newly-large tool
+    result in ``current_tool_result_chars.top_results`` / a changed
+    ``over_threshold_count``) DO change the signature and re-surface agent_meta.
+    """
+    material: dict = {}
+    for key, value in (agent_meta or {}).items():
+        if key in _AGENT_META_VOLATILE_KEYS:
+            continue
+        if key == "current_tool_result_chars" and isinstance(value, Mapping):
+            material[key] = {
+                sub_key: sub_value
+                for sub_key, sub_value in value.items()
+                if sub_key not in _TOOL_RESULT_CHARS_VOLATILE_KEYS
+            }
+            continue
+        material[key] = value
+    try:
+        return _json.dumps(material, ensure_ascii=False, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        return str(sorted(material.items()))
+
+
 def _strip_agent_meta_and_guidance(holder: dict) -> None:
-    """Strip the latest-only ``agent_meta``/``guidance`` blocks from a holder.
+    """Strip sparse live ``agent_meta``/``guidance`` blocks from a holder.
 
     Notification keys and the permanent ``tool_meta`` are left intact; the
     ``_meta`` envelope is dropped entirely only if it becomes empty.
@@ -1592,38 +1667,48 @@ def attach_active_runtime(
     *,
     prior_holder: dict | None = None,
 ) -> dict | None:
-    """Move the live ``agent_meta``/``guidance`` blocks to the latest result only.
+    """Attach the live ``agent_meta``/``guidance`` blocks — sparsely.
 
-    Mirrors :func:`attach_active_notifications`:
+    ``_meta.agent_meta`` is **sparse / update-driven**, not latest-result-only:
+    it is attached to a tool result only when the *material* agent snapshot has
+    changed since the last emitted ``agent_meta`` (tracked by
+    ``agent._agent_meta_signature`` via :func:`agent_meta_signature`).  When the
+    snapshot has not materially changed, ``agent_meta`` is NOT attached to (nor
+    moved onto) the newest result merely because it is the latest — the prior
+    holder keeps its snapshot as a historical update point, and older emitted
+    snapshots remain in history rather than being chased to the tail every batch.
 
-      * Strip ``_meta.agent_meta`` / ``_meta.guidance`` from ``prior_holder``
-        (the previous live holder) so stale snapshots do not accumulate in
-        history.  The prior holder keeps its permanent ``_meta.tool_meta`` and
-        any notification keys.
-      * Promote the latest dict-shaped result's per-tool ``_runtime_pending``
-        snapshot (recorded by :func:`stamp_meta`) into ``_meta.agent_meta``
-        (kernel runtime state — no token diagnostics, which live in
-        ``tool_meta.token_usage`` — plus ``elapsed_ms`` + ``active_turn_tool_calls``)
-        and ``_meta.guidance`` (a lightweight ref to resident ``meta_guidance``,
-        whose body is built from the guidance catalog, generated ``meta_readme``,
-        and static adapter rules).
-      * Strip the transient ``_runtime_pending`` scaffolding from *all* results.
-      * Return the new holder dict (or ``None`` when no live runtime applies).
+    Mirrors :func:`attach_active_notifications`, but with the change gate:
 
-    ``active_turn_tool_calls`` is read from the agent's executor guard so the
-    counter lives under ``_meta.agent_meta`` (latest-only) rather than being
-    repeated on every result.  ``elapsed_ms`` comes from the latest result's
-    own ``_runtime_pending`` snapshot.
+      * Build the candidate ``agent_meta`` from the latest dict-shaped result's
+        per-tool ``_runtime_pending`` snapshot (recorded by :func:`stamp_meta`):
+        kernel runtime state — no token diagnostics, which live in
+        ``tool_meta.token_usage`` — plus ``elapsed_ms`` + ``active_turn_tool_calls``
+        + ``current_tool_result_chars`` + a slimmed dynamic ``adapter_comment``.
+      * Compute its material signature.  **Only when it differs** from
+        ``agent._agent_meta_signature`` do we: strip ``_meta.agent_meta`` /
+        ``_meta.guidance`` from ``prior_holder`` (so at most one *live* holder
+        carries them — older snapshots that were already historical are left in
+        place), promote ``agent_meta`` + the ``_meta.guidance`` ref onto the new
+        target, record the new signature, and return the new holder.
+      * When the signature is **unchanged**, nothing is attached or moved and
+        ``prior_holder`` is returned unchanged — its ``agent_meta`` stays put.
+      * The transient ``_runtime_pending`` scaffolding is stripped from *all*
+        results regardless of the change outcome.
 
-    No live runtime is produced (and the prior holder is still cleared) when the
-    batch has no dict-shaped target or the latest target carried no pending
+    Volatile bookkeeping (``elapsed_ms``, ``active_turn_tool_calls``,
+    ``current_time``, ``current_tool_result_chars.total_chars``) is excluded from
+    the signature so it cannot force ``agent_meta`` onto every result; see
+    :func:`agent_meta_signature`.
+
+    ``active_turn_tool_calls`` is read from the agent's executor guard.
+    ``elapsed_ms`` comes from the latest result's own ``_runtime_pending``
+    snapshot.
+
+    No live runtime is produced (and the prior holder is returned unchanged) when
+    the batch has no dict-shaped target or the latest target carried no pending
     snapshot (e.g. a time-blind agent whose ``meta`` is empty).
     """
-    # The prior holder always loses its latest-only blocks — at most one live
-    # holder carries agent_meta/guidance.
-    if prior_holder is not None:
-        _strip_agent_meta_and_guidance(prior_holder)
-
     target = _last_dict_result(tool_results)
     pending = target.pop("_runtime_pending", None) if target is not None else None
 
@@ -1631,13 +1716,15 @@ def attach_active_runtime(
     _strip_runtime_pending(tool_results)
 
     if target is None or not isinstance(pending, dict) or not pending:
-        return None
+        # No live runtime this batch: leave any prior holder (and its historical
+        # agent_meta) untouched.
+        return prior_holder
 
     agent_meta: dict = dict(pending)
     agent_meta.pop(TOOL_META_TOKEN_USAGE_PENDING_KEY, None)
     # Defensive backstop: normal ToolExecutor paths promote current_time into
     # tool_meta before the turn boundary.  Hand-built tests or future producers
-    # should still not be able to reintroduce time into latest-only agent_meta.
+    # should still not be able to reintroduce time into sparse agent_meta.
     agent_meta.pop(TOOL_META_CURRENT_TIME_KEY, None)
     calls = _active_turn_tool_calls(agent)
     if calls is not None:
@@ -1653,12 +1740,28 @@ def attach_active_runtime(
     if comment:
         agent_meta["adapter_comment"] = slim_adapter_comment_for_tail(comment)
 
-    # Guidance is resident in the ``meta_guidance`` system-prompt section; the
-    # tail only carries a lightweight ref/hook rather than re-stamping the whole
-    # ordered appendix (sections + the ``_meta`` readme) on every result.
+    # Sparse gate: only attach/move agent_meta when its material content changed
+    # since the last emitted snapshot.  Volatile bookkeeping is excluded so an
+    # unchanged agent state does not chase agent_meta onto every latest result.
+    signature = agent_meta_signature(agent_meta)
+    if signature == getattr(agent, "_agent_meta_signature", None):
+        # Unchanged: keep the prior holder's snapshot as a historical update
+        # point; do not re-stamp the tail.
+        return prior_holder
+
+    # Material change: the prior *live* holder sheds its latest-only blocks so at
+    # most one live holder carries them, then the new target receives agent_meta
+    # plus the lightweight guidance ref.
+    if prior_holder is not None:
+        _strip_agent_meta_and_guidance(prior_holder)
+
     meta = _meta_block(target)
     meta[AGENT_META_KEY] = agent_meta
     meta[GUIDANCE_KEY] = build_meta_guidance_ref()
+    try:
+        agent._agent_meta_signature = signature
+    except Exception:
+        pass
     return target
 
 
