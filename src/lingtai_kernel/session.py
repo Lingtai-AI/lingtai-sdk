@@ -733,6 +733,18 @@ class SessionManager:
                 )
         self.ensure_session()
 
+    def reset_current_session_token_usage(self) -> None:
+        """Re-baseline current-session token deltas at the current totals.
+
+        Lifetime totals stay intact, but fields returned by
+        :meth:`get_current_session_token_usage` restart from zero.  Successful
+        context molts use this to start a new per-molt cache-miss budget cycle
+        without pretending historical token usage disappeared.
+        """
+        self._session_baseline_input_tokens = self._total_input_tokens
+        self._session_baseline_cached_tokens = self._total_cached_tokens
+        self._session_baseline_api_calls = self._api_calls
+
     def restore_token_state(self, state: dict) -> None:
         """Restore cumulative token counters from a saved session.
 

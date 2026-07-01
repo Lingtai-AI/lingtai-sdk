@@ -63,8 +63,11 @@ molt automatically. Default to proactive task-boundary molt only when
 idle unless context pressure is present, summarize plus automatic reconstruction
 still cannot bring context below `0.6 * context_window`, the human explicitly
 asks for a reset, or conversation confusion makes the fresh briefing worth the
-molt cost. If you have already decided to molt, do not summarize first merely to
-prepare; read `psyche-manual`, tend the stores, and molt deliberately.
+molt cost. Independently, when `_meta.tool_meta.context.molt` reports the
+cache-miss budget reached (`cache_miss_budget` / `cache_miss_tokens`, default
+1,000,000 uncached-input tokens for the current session), molt to shed the
+carried context. If you have already decided to molt, do not summarize first
+merely to prepare; read `psyche-manual`, tend the stores, and molt deliberately.
 
 ### Write Skills As You Work
 

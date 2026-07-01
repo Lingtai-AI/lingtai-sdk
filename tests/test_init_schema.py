@@ -106,6 +106,34 @@ def test_summarize_notification_threshold_allows_zero():
     validate_init(data)  # 0 intentionally disables large-result notifications.
 
 
+def test_cache_miss_budget_accepts_positive_int():
+    data = _valid_init()
+    data["manifest"]["cache_miss_budget"] = 500_000
+    validate_init(data)  # positive int is valid
+
+
+def test_cache_miss_budget_rejects_zero():
+    data = _valid_init()
+    data["manifest"]["cache_miss_budget"] = 0
+    with pytest.raises(ValueError, match="manifest.cache_miss_budget"):
+        validate_init(data)
+
+
+def test_cache_miss_budget_rejects_negative():
+    data = _valid_init()
+    data["manifest"]["cache_miss_budget"] = -5
+    with pytest.raises(ValueError, match="manifest.cache_miss_budget"):
+        validate_init(data)
+
+
+def test_cache_miss_budget_rejects_bool():
+    data = _valid_init()
+    # bool is an int subclass in Python — must be rejected explicitly.
+    data["manifest"]["cache_miss_budget"] = True
+    with pytest.raises(ValueError, match="manifest.cache_miss_budget"):
+        validate_init(data)
+
+
 def test_wrong_type_capabilities():
     data = _valid_init()
     data["manifest"]["capabilities"] = ["file", "bash"]

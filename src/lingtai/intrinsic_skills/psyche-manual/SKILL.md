@@ -200,6 +200,12 @@ Context pressure is agent state, not a dismissible notification. Tool results su
 
 When this reminder appears, batch already-digested noisy history before summarizing. Repeated summarize calls while context stays above 75% substantially hurt token efficiency, so avoid summarizing one small piece at a time. If a batched summarize/reconstruction pass still leaves context above 75%, stop repeating summarize, tend durable stores, and molt deliberately. If context falls below the high-pressure threshold but remains above the recovery target, continue only when the current task still needs the carried context; otherwise molt at a natural task boundary. The reminder points back to this manual/procedure without inlining the full workflow.
 
+### Cache-miss budget
+
+A second `tool_meta.context.molt` reminder guards a soft **cache-miss token budget** — a per-molt/runtime-session cap on total cache-miss (uncached input) tokens. The current-session cache-miss total is `max(input_tokens - cached_tokens, 0)` from your current-session token deltas (the same per-session accounting behind `tool_meta.token_usage`, reset when the process starts/refreshes — not a lifetime counter). The budget defaults to **1,000,000** tokens and is set via `manifest.cache_miss_budget` in init.json.
+
+Once the current-session cache-miss total reaches or exceeds the budget, tool results restamp `_meta.tool_meta.context.molt` with `cache miss budget {N} reached, molt now`, and `_meta.tool_meta.context` reports `cache_miss_budget` (the configured budget) and `cache_miss_tokens` (the current cache-miss total). If the sustained context-pressure reminder above is also active, both warnings are preserved in `context.molt` (the budget line is appended). This is a soft cap — nothing is blocked — but the recommended action is to **molt now**: a large cache-miss total means the session keeps re-sending uncached context, so shedding it via molt restores cache efficiency.
+
 ## 8. Post-Wipe Recovery
 
 If you wake up after a *system-performed* molt (triggered by karma, `.clear`, or operator — NOT by context-pressure reminders), the post-molt notification points at a system-authored summary in `system/summaries/`. Your character and pad were reloaded, and recent conversation may be gone except for any entries the system explicitly kept. To reconstruct:

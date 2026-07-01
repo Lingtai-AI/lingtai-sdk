@@ -578,3 +578,28 @@ def test_health_check_noop_when_message_is_tool_results():
 
     mock_session.interface.close_pending_tool_calls.assert_not_called()
     assert not [e for e, _ in events if e == "health_check"]
+
+def test_reset_current_session_token_usage_rebaselines_deltas():
+    sm, _, _ = make_session_manager()
+
+    sm.send("hello")
+    current = sm.get_current_session_token_usage()
+    assert current["input_tokens"] == 100
+    assert current["cached_tokens"] == 20
+    assert current["api_calls"] == 1
+
+    sm.reset_current_session_token_usage()
+
+    current = sm.get_current_session_token_usage()
+    assert current["input_tokens"] == 0
+    assert current["cached_tokens"] == 0
+    assert current["api_calls"] == 0
+    assert current["session_cache_rate"] == 0.0
+    assert current["avg_input_tokens_per_api_call"] == 0
+
+    # Lifetime totals remain intact; only the current-session/molt-cycle
+    # baseline moves forward.
+    totals = sm.get_token_usage()
+    assert totals["input_tokens"] == 100
+    assert totals["cached_tokens"] == 20
+    assert totals["api_calls"] == 1

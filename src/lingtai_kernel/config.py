@@ -75,6 +75,17 @@ class AgentConfig:
     time_awareness: bool = True  # experimental: False strips LLM-visible timestamps (perception nerf)
     timezone_awareness: bool = True  # when True, now_iso emits OS local time; when False, UTC
     context_limit: int | None = None  # max context tokens; None = use model default
+    # Soft per-molt/runtime-session cache-miss token budget. Once the CURRENT
+    # runtime session's cache-miss (uncached input) total reaches or exceeds this
+    # value, a "molt now" reminder is restamped into _meta.tool_meta.context.molt
+    # (see meta_block.build_cache_miss_budget_context) and the budget value is
+    # surfaced under _meta.tool_meta.context. It is a soft cap — nothing is
+    # blocked; the agent is expected to molt. Reset/baseline follows the same
+    # per-session delta as get_current_session_token_usage (NOT a lifetime
+    # counter). Validated as a positive int (bool and <= 0 rejected) in
+    # lingtai/init_schema.py and hydrated from manifest.cache_miss_budget by
+    # lingtai/agent.py build_agent_config.
+    cache_miss_budget: int = 1_000_000
     # Legacy molt-threshold fields, retained ONLY for backward compatibility
     # (old AgentConfig constructions / serialized state still set them). They are
     # NOT the active warning threshold and are no longer read by the warning

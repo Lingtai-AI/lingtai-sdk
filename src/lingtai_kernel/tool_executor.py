@@ -18,6 +18,8 @@ from .meta_block import (
     TOOL_META_CONTEXT_KEY,
     TOOL_META_CONTEXT_PENDING_KEY,
     TOOL_META_CONTEXT_EVENT_PENDING_KEY,
+    TOOL_META_CONTEXT_CACHE_MISS_BUDGET_KEY,
+    TOOL_META_CONTEXT_CACHE_MISS_TOKENS_KEY,
     TOOL_META_TOKEN_USAGE_KEY,
     TOOL_META_TOKEN_USAGE_PENDING_KEY,
     TOOL_META_CURRENT_TIME_KEY,
@@ -446,9 +448,18 @@ class ToolExecutor:
             # Current sustained-pressure molt reminder — permanent per-result
             # metadata at tool_meta.context.molt (build_meta stashes it under a
             # transit key so it lands on tool_meta, not the sparse agent_meta).
+            # The same transit sub-object also carries the cache-miss budget guard
+            # (a "molt now" warning plus the cache_miss_budget / cache_miss_tokens
+            # fields), so promote those alongside the molt string when present.
             candidate_context = pending.pop(TOOL_META_CONTEXT_PENDING_KEY, None)
             if isinstance(candidate_context, dict) and candidate_context.get("molt"):
                 context_block = {"molt": candidate_context["molt"]}
+                for budget_key in (
+                    TOOL_META_CONTEXT_CACHE_MISS_BUDGET_KEY,
+                    TOOL_META_CONTEXT_CACHE_MISS_TOKENS_KEY,
+                ):
+                    if budget_key in candidate_context:
+                        context_block[budget_key] = candidate_context[budget_key]
             # The matching one-shot emission-event payload rides alongside; it is
             # only present when build_meta decided this is a NEW emission (deduped
             # against agent state), so logging it here counts genuine emissions

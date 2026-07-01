@@ -96,7 +96,12 @@ which values applied and tests can inject variants.
   `build_meta` (side-effect-free) routes the returned text into permanent
   `tool_meta.context.molt` via a transit key (`_tool_meta_context`) that
   `ToolExecutor._attach_tool_block` promotes, and always carries the
-  emission-event payload (`_tool_meta_context_event`) while active.
+  emission-event payload (`_tool_meta_context_event`) while active. The
+  cache-miss budget guard (`meta_block.build_cache_miss_budget_context`, NOT part
+  of this abstraction) reuses the SAME `_tool_meta_context` sub-object: when both
+  fire, `build_meta` appends its `molt now` line to the pressure prose and adds
+  `cache_miss_budget`/`cache_miss_tokens` — the channel-B emission event still
+  hashes only the pure pressure message, and the budget guard emits no event.
   `build_reconstruction_tool_meta` keeps the event assembly (molt text stays on
   `tool_meta.reconstruction.molt`). Both emission events fire only on a real
   attach.

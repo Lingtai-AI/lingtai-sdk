@@ -331,3 +331,50 @@ def test_current_molt_event_deduped_across_results_in_same_round(tmp_path):
     round_state["rid"] = 8
     executor.execute([ToolCall(name="read", args={}, id="tc-c")])
     assert sum(1 for e in events if e[0] == CURRENT_MOLT_EVENT) == 2
+
+
+# ---------------------------------------------------------------------------
+# Cache-miss budget warning: rides the SAME _tool_meta_context transit key and
+# is promoted into permanent tool_meta.context.molt with the budget fields
+# (cache_miss_budget / cache_miss_tokens) alongside — through the full executor
+# pipeline. Not a new event route: no emission-event payload is attached.
+# ---------------------------------------------------------------------------
+
+
+def _budget_meta(*, molt, budget, cache_miss):
+    return {
+        TOOL_META_CONTEXT_PENDING_KEY: {
+            "molt": molt,
+            "cache_miss_budget": budget,
+            "cache_miss_tokens": cache_miss,
+        }
+    }
+
+
+def test_budget_context_promoted_to_tool_meta_context_through_pipeline(tmp_path):
+    events, logger = _capture_logger()
+    executor, captured = _make_executor(
+        dispatch_fn=lambda tc: {"ok": True},
+        working_dir=tmp_path,
+        logger_fn=logger,
+        meta_fn=lambda: _budget_meta(
+            molt="cache miss budget 1000000 reached, molt now",
+            budget=1_000_000,
+            cache_miss=1_200_000,
+        ),
+    )
+    executor.execute([ToolCall(name="read", args={}, id="tc-1")])
+    _, wire = captured.call_args.args
+
+    ctx = _tool_meta(wire)["context"]
+    assert ctx["molt"] == "cache miss budget 1000000 reached, molt now"
+    assert ctx["cache_miss_budget"] == 1_000_000
+    assert ctx["cache_miss_tokens"] == 1_200_000
+    # The budget transit key is consumed by _attach_tool_block: it must not leak
+    # onto the wire (neither at the top level, nor left inside _runtime_pending,
+    # nor into the promoted tool_meta beyond molt + budget fields).
+    assert TOOL_META_CONTEXT_PENDING_KEY not in wire
+    assert TOOL_META_CONTEXT_PENDING_KEY not in wire.get("_runtime_pending", {})
+    assert TOOL_META_CONTEXT_PENDING_KEY not in _tool_meta(wire)
+    # Budget guard is not a new event route.
+    assert not any(e[0] == CURRENT_MOLT_EVENT for e in events)
