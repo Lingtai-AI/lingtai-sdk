@@ -289,6 +289,23 @@ def test_build_meta_readme_documents_cache_miss_budget_guard():
     assert "adapter_comment" in readme["agent_meta"]
 
 
+def test_build_meta_readme_documents_always_on_session_cache_miss_telemetry():
+    """The tool_meta readme must tell agents that token_usage carries always-on
+    current-session cache-miss/budget fields, and to molt proactively (not
+    summarize/reconstruct) when at/nearing budget."""
+    tool_meta_doc = build_meta_readme()["tool_meta"]
+    # The three always-on field names are documented.
+    assert "cache_miss_tokens" in tool_meta_doc
+    assert "cache_miss_budget" in tool_meta_doc
+    assert "cache_miss_remaining_tokens" in tool_meta_doc
+    # And they are described as riding on the session half of token_usage.
+    assert "ALWAYS-ON" in tool_meta_doc
+    # Jason's proactive-molt guidance is present in spirit.
+    lowered = tool_meta_doc.lower()
+    assert "molt proactively" in lowered
+    assert "reconstruct" in lowered
+
+
 def test_build_guidance_with_meta_readme_keeps_section_shape_without_packaged_guidance():
     guidance = build_guidance_with_meta_readme({})
 
@@ -752,12 +769,21 @@ _PROVIDER_TOKEN_USAGE_KEYS = {
     "thinking",
 }
 # Current-session half of the unified token_usage block (get_token_usage-derived).
+# ``cache_miss_tokens`` is always present with the session half (derivable from
+# the session counters); ``cache_miss_budget`` / ``cache_miss_remaining_tokens``
+# ride along only when a positive-int budget is resolvable from agent._config.
 _SESSION_TOKEN_USAGE_KEYS = {
     "session_cache_rate",
     "api_calls",
     "input_tokens",
     "cached_tokens",
     "avg_input_tokens_per_api_call",
+    "cache_miss_tokens",
+}
+# The two budget-derived always-on fields (present only with a configured budget).
+_SESSION_CACHE_MISS_BUDGET_KEYS = {
+    "cache_miss_budget",
+    "cache_miss_remaining_tokens",
 }
 
 
@@ -840,6 +866,9 @@ def test_build_tool_meta_token_usage_merges_session_aggregate_into_one_block():
         "input_tokens": 22_000,
         "cached_tokens": 5_500,
         "avg_input_tokens_per_api_call": 5_500,
+        # always-on cache-miss telemetry (no _config -> no budget-derived fields,
+        # but cache_miss_tokens is always present: 22_000 - 5_500 = 16_500)
+        "cache_miss_tokens": 16_500,
         # short guidance hook
         "ref": "See meta_guidance.token_efficiency for details.",
     }
@@ -1072,6 +1101,156 @@ def test_token_usage_block_carries_short_guidance_ref():
 
     assert compact["ref"] == "See meta_guidance.token_efficiency for details."
     assert "guidance_ref" not in compact
+
+
+# ---------------------------------------------------------------------------
+# Always-on current-session cache-miss/budget telemetry in the session half of
+# token_usage (Jason's follow-up to PR #641).  Distinct from the
+# tool_meta.context guard (build_cache_miss_budget_context), which surfaces only
+# at/above budget: these three fields ride on EVERY result whenever the session
+# aggregate is available so agents can always read current cache miss + budget.
+# ---------------------------------------------------------------------------
+
+
+def _session_agent_with_budget(
+    *, input_tokens, cached_tokens, api_calls=1, budget=1_000_000, with_config=True
+):
+    """SimpleNamespace agent exposing the current-session getter and a budget.
+
+    ``with_config=False`` drops ``_config`` entirely so the config-less-stub
+    path (cache_miss_tokens present; budget-derived fields omitted) is exercised.
+    """
+    kwargs = dict(
+        _session=SimpleNamespace(latest_token_usage_snapshot=lambda: None),
+        get_current_session_token_usage=lambda: {
+            "api_calls": api_calls,
+            "input_tokens": input_tokens,
+            "cached_tokens": cached_tokens,
+        },
+    )
+    if with_config:
+        kwargs["_config"] = SimpleNamespace(cache_miss_budget=budget)
+    return SimpleNamespace(**kwargs)
+
+
+def test_session_half_always_carries_cache_miss_tokens_and_budget_fields():
+    # With a configured budget, all three always-on fields appear even though the
+    # cache-miss total is far below budget (contrast the context guard, which
+    # would stay silent here).
+    agent = _session_agent_with_budget(
+        input_tokens=300_000, cached_tokens=100_000, budget=1_000_000
+    )
+
+    compact = build_tool_meta_token_usage(agent)
+
+    assert compact["cache_miss_tokens"] == 200_000  # 300k - 100k
+    assert compact["cache_miss_budget"] == 1_000_000
+    assert compact["cache_miss_remaining_tokens"] == 800_000  # 1M - 200k
+    # The full session half plus the two budget-derived fields are all present.
+    assert (_SESSION_TOKEN_USAGE_KEYS | _SESSION_CACHE_MISS_BUDGET_KEYS) <= set(compact)
+
+
+def test_session_half_cache_miss_tokens_clamps_to_zero():
+    # cached > input (odd provider accounting) -> cache_miss clamps to 0, and
+    # remaining is the full budget.
+    agent = _session_agent_with_budget(
+        input_tokens=100, cached_tokens=500, budget=1_000_000
+    )
+
+    compact = build_tool_meta_token_usage(agent)
+
+    assert compact["cache_miss_tokens"] == 0
+    assert compact["cache_miss_remaining_tokens"] == 1_000_000
+
+
+def test_session_half_remaining_clamps_to_zero_above_budget():
+    # cache_miss above budget -> remaining floors at 0, never negative.  The
+    # always-on fields keep reporting even past the guard trip point.
+    agent = _session_agent_with_budget(
+        input_tokens=1_500_000, cached_tokens=200_000, budget=1_000_000
+    )
+
+    compact = build_tool_meta_token_usage(agent)
+
+    assert compact["cache_miss_tokens"] == 1_300_000
+    assert compact["cache_miss_remaining_tokens"] == 0
+
+
+def test_session_half_omits_budget_fields_without_config():
+    # A config-less stub still gets cache_miss_tokens (session-derivable) but the
+    # budget-derived fields are omitted, never invented.
+    agent = _session_agent_with_budget(
+        input_tokens=300_000, cached_tokens=100_000, with_config=False
+    )
+
+    compact = build_tool_meta_token_usage(agent)
+
+    assert compact["cache_miss_tokens"] == 200_000
+    assert "cache_miss_budget" not in compact
+    assert "cache_miss_remaining_tokens" not in compact
+
+
+def test_session_half_omits_budget_fields_for_nonpositive_budget():
+    # A non-positive / non-int / bool budget disables the budget-derived fields,
+    # matching build_cache_miss_budget_context semantics; cache_miss_tokens stays.
+    for bad in (0, -5, None, True, "1000000"):
+        agent = _session_agent_with_budget(
+            input_tokens=300_000, cached_tokens=100_000, budget=bad
+        )
+        compact = build_tool_meta_token_usage(agent)
+        assert compact["cache_miss_tokens"] == 200_000
+        assert "cache_miss_budget" not in compact
+        assert "cache_miss_remaining_tokens" not in compact
+
+
+def test_session_half_honors_custom_budget():
+    agent = _session_agent_with_budget(
+        input_tokens=300_000, cached_tokens=100_000, budget=250_000
+    )
+
+    compact = build_tool_meta_token_usage(agent)
+
+    assert compact["cache_miss_budget"] == 250_000
+    assert compact["cache_miss_remaining_tokens"] == 50_000  # 250k - 200k
+
+
+def test_session_half_cache_miss_uses_current_session_not_lifetime():
+    # The always-on cache-miss telemetry MUST derive from the current-session
+    # getter, never the lifetime get_token_usage() giants.
+    agent = SimpleNamespace(
+        _config=SimpleNamespace(cache_miss_budget=1_000_000),
+        _session=SimpleNamespace(latest_token_usage_snapshot=lambda: None),
+        get_token_usage=lambda: {
+            "api_calls": 27_863,
+            "input_tokens": 5_000_000_000,
+            "cached_tokens": 4_000_000_000,
+        },
+        get_current_session_token_usage=lambda: {
+            "api_calls": 2,
+            "input_tokens": 200,
+            "cached_tokens": 40,
+        },
+    )
+
+    compact = build_tool_meta_token_usage(agent)
+
+    assert compact["cache_miss_tokens"] == 160  # 200 - 40, not the lifetime giant
+    assert compact["cache_miss_remaining_tokens"] == 999_840
+
+
+def test_build_meta_token_usage_carries_always_on_cache_miss_below_budget():
+    # Through build_meta: below the budget there is NO context guard, but the
+    # always-on session-half telemetry still reports current cache miss + budget.
+    agent = _budget_agent(budget=1_000_000, input_tokens=300_000, cached_tokens=100_000)
+
+    meta = build_meta(agent)
+
+    # No context guard below budget.
+    assert meta_block.TOOL_META_CONTEXT_PENDING_KEY not in meta
+    usage = meta[TOOL_META_TOKEN_USAGE_PENDING_KEY]
+    assert usage["cache_miss_tokens"] == 200_000
+    assert usage["cache_miss_budget"] == 1_000_000
+    assert usage["cache_miss_remaining_tokens"] == 800_000
 
 
 def test_build_meta_omits_context_before_decomp_runs():

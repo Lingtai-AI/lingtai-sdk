@@ -115,6 +115,24 @@ TOOL_META_CONTEXT_EVENT_PENDING_KEY = "_tool_meta_context_event"
 TOOL_META_CONTEXT_CACHE_MISS_BUDGET_KEY = "cache_miss_budget"
 TOOL_META_CONTEXT_CACHE_MISS_TOKENS_KEY = "cache_miss_tokens"
 
+# Always-on current-session cache-miss/budget telemetry surfaced inside the
+# current-session half of ``tool_meta.token_usage`` (see
+# :func:`_build_session_token_economy`).  Unlike the ``tool_meta.context`` guard
+# above — which appears ONLY once the session cache-miss total reaches/exceeds
+# the budget — these three fields ride on EVERY result whenever the session
+# aggregate token usage is available, so an agent can always read its current
+# cumulative cache miss and how much budget remains without recomputing
+# ``input_tokens - cached_tokens`` or remembering the default budget:
+#   * ``cache_miss_tokens``            = max(input_tokens - cached_tokens, 0)
+#   * ``cache_miss_budget``            = agent._config.cache_miss_budget
+#   * ``cache_miss_remaining_tokens``  = max(cache_miss_budget - cache_miss_tokens, 0)
+# The two budget-derived fields are omitted (never invented) when no positive-int
+# budget is resolvable from the agent config; ``cache_miss_tokens`` — derivable
+# from session data alone — is always emitted with the session half.
+TOKEN_USAGE_CACHE_MISS_TOKENS_KEY = "cache_miss_tokens"
+TOKEN_USAGE_CACHE_MISS_BUDGET_KEY = "cache_miss_budget"
+TOKEN_USAGE_CACHE_MISS_REMAINING_KEY = "cache_miss_remaining_tokens"
+
 
 def build_tool_meta_overflow_comment(tool_call_id: str | None) -> dict:
     """Return the ``tool_meta.comment.overflow`` hint for a capped/large result.
@@ -478,7 +496,21 @@ def build_meta_readme() -> dict:
             "provider-round token/cache snapshot — keys input, cache_miss, cache_rate, "
             "context_usage, window, output, thinking — with a current-session "
             "aggregate half — keys session_cache_rate, api_calls, input_tokens, "
-            "cached_tokens, avg_input_tokens_per_api_call. The session-stat fields "
+            "cached_tokens, avg_input_tokens_per_api_call, plus ALWAYS-ON "
+            "current-session cache-miss/budget telemetry: cache_miss_tokens "
+            "(current-session cumulative cache miss = max(input_tokens - "
+            "cached_tokens, 0)), cache_miss_budget (the configured budget), and "
+            "cache_miss_remaining_tokens (max(cache_miss_budget - cache_miss_tokens, "
+            "0)). These three ride on EVERY result whenever session aggregate token "
+            "usage is available (cache_miss_budget/cache_miss_remaining_tokens are "
+            "present only when a budget is configured), so you can always read your "
+            "current cumulative cache miss and remaining budget here without "
+            "recomputing input_tokens - cached_tokens or remembering the default "
+            "budget — distinct from the context.* guard above, which appears only "
+            "once you have reached/exceeded the budget. If you have reached or are "
+            "nearing the cache-miss budget, do NOT use summarize to reconstruct "
+            "context because reconstruction itself will create a large cache miss; "
+            "molt proactively. The session-stat fields "
             "are CURRENT runtime-session deltas (counted since this process "
             "started/last refreshed), NOT restored lifetime/cumulative totals. The "
             "block also carries a short ref sentence ('See "
@@ -860,6 +892,23 @@ def build_molt_context(agent, usage: float) -> str | None:
     return render_current_molt_context(streak=streak, usage=usage)
 
 
+def _resolve_cache_miss_budget(agent) -> int | None:
+    """Return the configured positive-int cache-miss budget, or ``None``.
+
+    Reads ``agent._config.cache_miss_budget``.  ``bool`` is an ``int`` subclass,
+    so it is rejected explicitly (a ``True`` budget must never mean ``1``); any
+    non-int or non-positive value disables the budget-derived telemetry.  Shared
+    by :func:`build_cache_miss_budget_context` (the at/above-budget guard) and
+    :func:`_build_session_token_economy` (the always-on session-half fields) so
+    both read the budget with identical semantics.
+    """
+    config = getattr(agent, "_config", None)
+    budget = getattr(config, "cache_miss_budget", None)
+    if isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0:
+        return None
+    return budget
+
+
 def build_cache_miss_budget_context(agent) -> dict | None:
     """Return the cache-miss budget guard sub-object, or ``None``.
 
@@ -895,11 +944,10 @@ def build_cache_miss_budget_context(agent) -> dict | None:
     if "psyche" not in getattr(agent, "_intrinsics", set()):
         return None
 
-    config = getattr(agent, "_config", None)
-    budget = getattr(config, "cache_miss_budget", None)
-    # Defensive: only a positive int arms the guard.  bool is an int subclass,
-    # so reject it explicitly (a True budget must never mean "1").
-    if isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0:
+    # Defensive: only a positive int arms the guard (shared with the always-on
+    # session-half telemetry so both read the budget identically).
+    budget = _resolve_cache_miss_budget(agent)
+    if budget is None:
         return None
 
     usage_fn = getattr(agent, "get_current_session_token_usage", None)
@@ -1131,8 +1179,24 @@ def _build_session_token_economy(agent) -> dict:
     ``session_cache_rate`` (cached/input clamped to a 0-1 fraction), ``api_calls``,
     ``input_tokens``/``cached_tokens``, and ``avg_input_tokens_per_api_call``,
     deriving the two rates from the raw counters so the result is consistent
-    regardless of which getter supplied them. Returns ``{}`` when no session usage
-    is available; numeric zeros are preserved.
+    regardless of which getter supplied them.
+
+    It also carries the ALWAYS-ON current-session cache-miss/budget telemetry so
+    an agent never has to recompute ``input_tokens - cached_tokens`` or remember
+    the default budget (contrast the ``tool_meta.context`` guard, which appears
+    only at/above budget):
+
+    * ``cache_miss_tokens`` = ``max(input_tokens - cached_tokens, 0)`` — the
+      current-session cumulative cache miss, on the same runtime-session-delta
+      basis as :func:`build_cache_miss_budget_context`.  Always emitted here,
+      since it needs only the session counters.
+    * ``cache_miss_budget`` = ``agent._config.cache_miss_budget`` and
+      ``cache_miss_remaining_tokens`` = ``max(cache_miss_budget - cache_miss_tokens, 0)``
+      — emitted only when a positive-int budget is resolvable from the agent
+      config (see :func:`_resolve_cache_miss_budget`); omitted, never invented,
+      for config-less stubs.
+
+    Returns ``{}`` when no session usage is available; numeric zeros are preserved.
     """
     usage_fn = getattr(agent, "get_current_session_token_usage", None)
     if not callable(usage_fn):
@@ -1155,13 +1219,21 @@ def _build_session_token_economy(agent) -> dict:
         if input_tokens > 0
         else 0.0
     )
-    return {
+    cache_miss = max(input_tokens - cached_tokens, 0)
+    economy = {
         "session_cache_rate": session_cache_rate,
         "api_calls": api_calls,
         "input_tokens": input_tokens,
         "cached_tokens": cached_tokens,
         "avg_input_tokens_per_api_call": avg_input,
+        # Always-on: derivable from the session counters alone.
+        TOKEN_USAGE_CACHE_MISS_TOKENS_KEY: cache_miss,
     }
+    budget = _resolve_cache_miss_budget(agent)
+    if budget is not None:
+        economy[TOKEN_USAGE_CACHE_MISS_BUDGET_KEY] = budget
+        economy[TOKEN_USAGE_CACHE_MISS_REMAINING_KEY] = max(budget - cache_miss, 0)
+    return economy
 
 
 def build_tool_meta_token_usage(agent) -> dict | None:
@@ -1175,9 +1247,11 @@ def build_tool_meta_token_usage(agent) -> dict | None:
     * provider-round (per-result evidence): ``input``, ``cache_miss``,
       ``cache_rate``, ``context_usage``, ``window``, ``output``, ``thinking``.
     * current-session aggregate: ``session_cache_rate``, ``api_calls``,
-      ``input_tokens``, ``cached_tokens``, ``avg_input_tokens_per_api_call``.
-      These are CURRENT runtime-session deltas (not restored lifetime totals);
-      see :func:`_build_session_token_economy`.
+      ``input_tokens``, ``cached_tokens``, ``avg_input_tokens_per_api_call``,
+      plus the always-on cache-miss/budget telemetry ``cache_miss_tokens`` and
+      (when a positive-int budget is configured) ``cache_miss_budget`` /
+      ``cache_miss_remaining_tokens``.  These are CURRENT runtime-session deltas
+      (not restored lifetime totals); see :func:`_build_session_token_economy`.
 
     Each half is emitted only when its source data is available; missing values
     are omitted, not invented; numeric zero/sentinel values are preserved. When
