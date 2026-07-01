@@ -111,8 +111,13 @@ files, not standalone top-level skills.
     stdio or `url`/`headers` for HTTP. The runtime serializes these registrations
     as YAML into every backend's oneshot context. The built-in LingTai backend
     also starts them as task-scoped MCP clients and exposes their tools for this
-    run; CLI backends receive the YAML context and may load it if their own
-    runtime supports MCP. Secret `env`/`headers` values are redacted in prompts.
+    run; Claude, Codex, OpenCode, and Qwen CLI backends additionally receive
+    daemon-generated native MCP configuration for `daemon_common`.
+    LingTai automatically adds the built-in `daemon_common` MCP to MCP-capable
+    daemon backends. Its `finish(status, summary?, reason?, artifacts?)` tool is
+    the hard terminal-success contract: only `finish(status="done")` permits
+    `done`; `failed`/`incomplete`, missing finish, or invalid completion prevents
+    silent success. Secret `env`/`headers` values are redacted in prompts.
   - `preset`: optional body/model/tool-shape override for this daemon.
   - `backend_options`: raw CLI flags for CLI backends only.
 - Treat `system_prompt` as the parent's behavioral contract for **all** tools

@@ -201,10 +201,11 @@ def test_emanate_claude_p_dispatches_legacy_print_runner(tmp_path):
         mgr._emanations[em_id]["future"].result(timeout=5)
 
     assert captured["backend"] == "claude-p"
-    # claude-p tasks are prefixed with the print-mode background-job operating
-    # contract (no notification re-entry), then the original task.
+    # claude-p tasks are prefixed with the daemon_common MCP completion
+    # contract, then the original task.
     assert captured["task"].endswith("Task:\nUse print mode")
-    assert "will NOT notify you" in captured["task"]
+    assert "call the MCP tool `finish`" in captured["task"]
+    assert "background-and-wait is invalid" in captured["task"]
 
 
 @pytest.mark.parametrize(

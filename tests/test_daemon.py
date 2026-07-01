@@ -1456,14 +1456,23 @@ def test_end_to_end_emanate_list_ask_reclaim(tmp_path, monkeypatch):
     resp1.tool_calls = [tc]
     resp1.usage = MagicMock(input_tokens=0, output_tokens=0,
                             thinking_tokens=0, cached_tokens=0)
+    finish_tc = ToolCall(
+        name="finish",
+        args={"status": "done", "summary": "Summarized architecture."},
+        id="tc-finish",
+    )
     resp2 = MagicMock()
-    resp2.text = "Task done. Summarized architecture."
-    resp2.tool_calls = []
-    resp2.usage = MagicMock(input_tokens=0, output_tokens=0,
+    resp2.text = "Finishing..."
+    resp2.tool_calls = [finish_tc]
+    resp2.usage = None
+    resp3 = MagicMock()
+    resp3.text = "Task done. Summarized architecture."
+    resp3.tool_calls = []
+    resp3.usage = MagicMock(input_tokens=0, output_tokens=0,
                             thinking_tokens=0, cached_tokens=0)
 
     mock_session = MagicMock()
-    mock_session.send = MagicMock(side_effect=[resp1, resp2])
+    mock_session.send = MagicMock(side_effect=[resp1, resp2, resp3])
     agent.service.create_session = MagicMock(return_value=mock_session)
     agent.service.make_tool_result = MagicMock(return_value="mock_result")
 
@@ -1893,14 +1902,23 @@ def test_e2e_emanate_writes_full_fs_artifact(tmp_path, monkeypatch):
     resp1.tool_calls = [tc]
     resp1.usage = MagicMock(input_tokens=100, output_tokens=20,
                              thinking_tokens=5, cached_tokens=10)
+    finish_tc = ToolCall(
+        name="finish",
+        args={"status": "done", "summary": "Found 3 TODOs."},
+        id="tc-finish",
+    )
     resp2 = MagicMock()
-    resp2.text = "Task done. Found 3 TODOs."
-    resp2.tool_calls = []
-    resp2.usage = MagicMock(input_tokens=80, output_tokens=15,
+    resp2.text = "Finishing..."
+    resp2.tool_calls = [finish_tc]
+    resp2.usage = None
+    resp3 = MagicMock()
+    resp3.text = "Task done. Found 3 TODOs."
+    resp3.tool_calls = []
+    resp3.usage = MagicMock(input_tokens=80, output_tokens=15,
                              thinking_tokens=3, cached_tokens=5)
 
     mock_session = MagicMock()
-    mock_session.send = MagicMock(side_effect=[resp1, resp2])
+    mock_session.send = MagicMock(side_effect=[resp1, resp2, resp3])
     agent.service.create_session = MagicMock(return_value=mock_session)
     agent.service.make_tool_result = MagicMock(return_value="mock_result")
     agent.service._base_url = "https://mock.example.com"
@@ -1926,7 +1944,7 @@ def test_e2e_emanate_writes_full_fs_artifact(tmp_path, monkeypatch):
     assert data["state"] == "done"
     assert data["finished_at"] is not None
     assert data["task"] == "find TODOs"
-    assert data["tool_call_count"] == 1
+    assert data["tool_call_count"] == 2
     assert data["result_preview"] == "Task done. Found 3 TODOs."
     assert data["tokens"]["input"] == 180
     assert data["tokens"]["output"] == 35

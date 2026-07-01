@@ -1,15 +1,4 @@
-"""Guard against claude-p daemons exiting while 'waiting' for a background job.
-
-The claude-p backend is one-shot ``claude --print``: there is no interactive
-session, no stdin, and no ``<task-notification>`` re-prompt. When the inner
-model backgrounds a job (``run_in_background``/``&``/wait-loop) and yields its
-turn expecting a completion notification, the process exits cleanly and the
-daemon used to mark the run ``done`` even though validation/commit/push were
-never finished. These tests pin the completion guard that refuses that false
-``done`` and the prevention warning in the CLI oneshot preamble.
-
-See reports/daemon-background-wait-root-cause-20260630.md.
-"""
+"""MCP completion contract for daemon-capable backends."""
 from __future__ import annotations
 
 import json
@@ -18,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from lingtai.core.daemon import _looks_like_background_wait_exit
 from tests._daemon_helpers import (
     FiniteFakeProc,
     make_daemon_agent,
@@ -26,61 +14,26 @@ from tests._daemon_helpers import (
 )
 
 
-# Real terminal final-message strings from the root-cause corpus (§3).
-BACKGROUND_WAIT_FINALS = [
-    "Both background jobs will notify me. Let me wait.",
-    (
-        "I'll stop polling and wait for the background task's completion "
-        "notification, which arrives automatically. Standing by for the full "
-        "suite result before committing."
-    ),
-    "Both background tasks will notify me on completion. I'll wait.",
-    "The background full-suite task will notify me when it completes.",
-    "I'll wait for the pytest completion notification.",
-    "Waiting for the full suite to complete. The background task will "
-    "re-invoke me on completion.",
-]
-
-# Normal successful / benign final messages must NOT trip the guard.
-NORMAL_FINALS = [
-    "Done. All 412 tests pass; committed 3e29cea and pushed the branch.",
-    "Validation complete: pytest green, branch pushed, PR ready.",
-    "I ran the suite synchronously with a 600s timeout and it passed.",
-    "Fixed the bug, added a regression test, and committed locally.",
-    "[no output]",
-    "",
-    "Summary: refactored the parser; no background jobs were used.",
-]
-
-
-@pytest.mark.parametrize("final", BACKGROUND_WAIT_FINALS)
-def test_detector_flags_background_wait_finals(final):
-    assert _looks_like_background_wait_exit(final) is True
-
-
-@pytest.mark.parametrize("final", NORMAL_FINALS)
-def test_detector_passes_normal_finals(final):
-    assert _looks_like_background_wait_exit(final) is False
-
-
-def test_detector_anchors_on_final_message_not_mid_stream():
-    # A run that *mentions* notifications mid-thought but ends by actually
-    # reporting completion must pass — the guard keys on the wait intent in
-    # the final result, not on the word "notify" appearing anywhere.
-    final = (
-        "Earlier I considered waiting for a background notification, but "
-        "instead I re-ran the suite synchronously. It passed and I committed "
-        "and pushed. Done."
+def _write_completion(run_dir, status: str, **extra) -> None:
+    payload = {
+        "schema": "lingtai.daemon_completion.v1",
+        "status": status,
+        "run_id": run_dir.run_id,
+    }
+    payload.update(extra)
+    (run_dir.path / "daemon_completion.json").write_text(
+        json.dumps(payload), encoding="utf-8",
     )
-    assert _looks_like_background_wait_exit(final) is False
 
 
-def _drive_print_runner(mgr, run_dir, em_id, final_text, monkeypatch):
-    """Drive the real ``_run_claude_code_emanation`` over a fake stream-json proc.
+def _mark_common_mcp_loaded(run_dir) -> None:
+    run_dir._state.setdefault("call_parameters", {})["mcp"] = [
+        {"name": "daemon_common", "transport": "stdio"}
+    ]
+    run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
 
-    The fake proc emits one assistant text block then a ``result`` event whose
-    ``result`` is *final_text*, exits 0, and never spawns a real process.
-    """
+
+def _drive_print_runner(mgr, run_dir, final_text, monkeypatch):
     stdout_lines = [
         json.dumps({"type": "system", "session_id": "sess-1"}),
         json.dumps({
@@ -108,65 +61,199 @@ def _drive_print_runner(mgr, run_dir, em_id, final_text, monkeypatch):
         daemon_mod.subprocess, "Popen", lambda *a, **k: fake,
     )
     return mgr._run_claude_code_emanation(
-        em_id,
+        "em-1",
         run_dir,
         "do the task",
         threading.Event(),
         threading.Event(),
+        backend_argv=[],
     )
 
 
-def test_print_runner_refuses_done_on_background_wait(tmp_path, monkeypatch):
+def test_claude_command_includes_per_run_mcp_config(tmp_path, monkeypatch):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    captured: dict[str, object] = {}
+
+    def fake_run(em_id, run_dir, task, cancel_event, timeout_event, backend_argv=None):
+        captured["argv"] = list(backend_argv or [])
+        captured["task"] = task
+        captured["run_dir"] = run_dir
+        _write_completion(run_dir, "done", summary="ok")
+        run_dir.mark_done("[fake done]")
+        return "[fake done]"
+
+    monkeypatch.setattr(mgr, "_run_claude_code_emanation", fake_run)
+
+    result = mgr.handle({
+        "action": "emanate",
+        "backend": "claude-p",
+        "tasks": [{"task": "Run validation.", "tools": []}],
+    })
+    assert result["status"] == "dispatched"
+    mgr._emanations[result["ids"][0]]["future"].result(timeout=5)
+
+    argv = captured["argv"]
+    assert "--mcp-config" in argv
+    assert "--strict-mcp-config" in argv
+    config_path = Path(argv[argv.index("--mcp-config") + 1])
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    common = config["mcpServers"]["daemon_common"]
+    assert common["args"] == ["-m", "lingtai.mcp_servers.daemon_common"]
+    assert common["env"]["LINGTAI_DAEMON_RUN_ID"] == captured["run_dir"].run_id
+    assert common["env"]["LINGTAI_DAEMON_COMPLETION_FILE"].endswith(
+        "daemon_completion.json"
+    )
+    task = captured["task"]
+    assert "call the MCP tool `finish`" in task
+    assert "background-and-wait is invalid" in task
+
+
+def test_done_sentinel_permits_done(tmp_path, monkeypatch):
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
     run_dir = make_daemon_run_dir(agent=agent, handle="em-1", backend="claude-p")
+    _mark_common_mcp_loaded(run_dir)
+    _write_completion(run_dir, "done", summary="completed")
 
-    with pytest.raises(RuntimeError):
-        _drive_print_runner(
-            mgr, run_dir, "em-1",
-            "Both background jobs will notify me. Let me wait.",
-            monkeypatch,
-        )
+    result = _drive_print_runner(mgr, run_dir, "Done. Suite green.", monkeypatch)
 
-    data = json.loads((run_dir.path / "daemon.json").read_text())
-    assert data["state"] == "failed"
-    # The full final text is preserved for the parent to inspect.
-    assert "background" in (run_dir.path / "result.txt").read_text().lower()
-
-
-def test_print_runner_marks_done_on_normal_success(tmp_path, monkeypatch):
-    agent = make_daemon_agent(tmp_path)
-    mgr = agent.get_capability("daemon")
-    run_dir = make_daemon_run_dir(agent=agent, handle="em-2", backend="claude-p")
-
-    result = _drive_print_runner(
-        mgr, run_dir, "em-2",
-        "Done. Suite green, committed and pushed.",
-        monkeypatch,
-    )
-
-    assert result == "Done. Suite green, committed and pushed."
+    assert result == "Done. Suite green."
     data = json.loads((run_dir.path / "daemon.json").read_text())
     assert data["state"] == "done"
 
 
-def test_compose_cli_task_warns_print_backends_about_background_jobs():
-    from lingtai.core.daemon import DaemonManager
+@pytest.mark.parametrize("status", ["failed", "incomplete"])
+def test_failed_or_incomplete_sentinel_prevents_done(tmp_path, monkeypatch, status):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    run_dir = make_daemon_run_dir(agent=agent, handle="em-1", backend="claude-p")
+    _mark_common_mcp_loaded(run_dir)
+    _write_completion(run_dir, status, reason="blocked")
 
-    composed = DaemonManager._compose_cli_task(
-        "Run the suite and push.", None, backend="claude-p",
+    with pytest.raises(RuntimeError):
+        _drive_print_runner(mgr, run_dir, "I could not validate.", monkeypatch)
+
+    data = json.loads((run_dir.path / "daemon.json").read_text())
+    assert data["state"] == "failed"
+    assert "I could not validate" in (run_dir.path / "result.txt").read_text()
+
+
+def test_missing_sentinel_prevents_done(tmp_path, monkeypatch):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    run_dir = make_daemon_run_dir(agent=agent, handle="em-1", backend="claude-p")
+    _mark_common_mcp_loaded(run_dir)
+
+    with pytest.raises(RuntimeError):
+        _drive_print_runner(mgr, run_dir, "Done without finish.", monkeypatch)
+
+    data = json.loads((run_dir.path / "daemon.json").read_text())
+    assert data["state"] == "failed"
+    assert "missing completion" in data["error"]["message"]
+
+
+def test_invalid_sentinel_prevents_done(tmp_path, monkeypatch):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    run_dir = make_daemon_run_dir(agent=agent, handle="em-1", backend="claude-p")
+    _mark_common_mcp_loaded(run_dir)
+    (run_dir.path / "daemon_completion.json").write_text(
+        json.dumps({"status": "wat"}), encoding="utf-8",
     )
-    low = composed.lower()
-    assert "Run the suite and push." in composed
-    assert "background" in low
-    assert "synchron" in low  # "synchronously"
+
+    with pytest.raises(RuntimeError):
+        _drive_print_runner(mgr, run_dir, "Done maybe.", monkeypatch)
+
+    data = json.loads((run_dir.path / "daemon.json").read_text())
+    assert data["state"] == "failed"
+    assert "completion status" in data["error"]["message"]
 
 
-def test_compose_cli_task_no_warning_for_non_print_backends():
-    from lingtai.core.daemon import DaemonManager
+def test_lingtai_backend_gets_default_common_mcp_registration(tmp_path, monkeypatch):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    captured: dict[str, object] = {}
 
-    composed = DaemonManager._compose_cli_task(
-        "Run the suite and push.", None, backend="codex",
-    )
-    # Non-Claude-print backends do not get the claude-print-specific warning.
-    assert composed == "Run the suite and push."
+    def fake_connect(registrations):
+        captured["registrations"] = registrations
+        return {}, {}, []
+
+    def fake_run(em_id, run_dir, schemas, dispatch, task, cancel_event,
+                 timeout_event, preset_llm, max_turns, mcp_clients):
+        captured["prompt"] = run_dir.prompt_path.read_text(encoding="utf-8")
+        _write_completion(run_dir, "done", summary="ok")
+        run_dir.mark_done("[fake done]")
+        return "[fake done]"
+
+    monkeypatch.setattr(mgr, "_connect_task_mcp_registrations", fake_connect)
+    monkeypatch.setattr(mgr, "_run_emanation", fake_run)
+
+    result = mgr.handle({
+        "action": "emanate",
+        "tasks": [{"task": "Do work.", "tools": []}],
+    })
+    assert result["status"] == "dispatched"
+    mgr._emanations[result["ids"][0]]["future"].result(timeout=5)
+
+    regs = captured["registrations"]
+    assert regs[0]["name"] == "daemon_common"
+    assert regs[0]["args"] == ["-m", "lingtai.mcp_servers.daemon_common"]
+    assert "LINGTAI_DAEMON_COMPLETION_FILE" in regs[0]["env"]
+    assert "call the MCP tool `finish`" in captured["prompt"]
+
+
+@pytest.mark.parametrize("backend", ["codex", "opencode", "qwen-code"])
+def test_cli_backend_receives_common_mcp_configuration(tmp_path, monkeypatch, backend):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    captured: dict[str, object] = {}
+    runner_attr = {
+        "codex": "_run_codex_emanation",
+        "opencode": "_run_opencode_emanation",
+        "qwen-code": "_run_qwen_code_emanation",
+    }[backend]
+
+    def fake_run(em_id, run_dir, task, cancel_event, timeout_event, backend_argv=None):
+        captured["argv"] = list(backend_argv or [])
+        captured["task"] = task
+        captured["mcp"] = run_dir._state["call_parameters"]["mcp"]
+        _write_completion(run_dir, "done", summary="ok")
+        run_dir.mark_done("[fake done]")
+        return "[fake done]"
+
+    monkeypatch.setattr(mgr, runner_attr, fake_run)
+
+    result = mgr.handle({
+        "action": "emanate",
+        "backend": backend,
+        "tasks": [{"task": f"Run with {backend}.", "tools": []}],
+    })
+    assert result["status"] == "dispatched"
+    mgr._emanations[result["ids"][0]]["future"].result(timeout=5)
+
+    assert captured["mcp"][0]["name"] == "daemon_common"
+    assert "call the MCP tool `finish`" in captured["task"]
+    argv = captured["argv"]
+    if backend == "codex":
+        joined = "\n".join(argv)
+        assert "mcp_servers.daemon_common.command" in joined
+        assert "mcp_servers.daemon_common.args" in joined
+        assert "mcp_servers.daemon_common.env" in joined
+    elif backend == "opencode":
+        idx = argv.index("__lingtai_opencode_config_content")
+        config = json.loads(argv[idx + 1])
+        common = config["mcp"]["daemon_common"]
+        assert common["command"][1:] == ["-m", "lingtai.mcp_servers.daemon_common"]
+        assert common["environment"]["LINGTAI_DAEMON_COMPLETION_FILE"].endswith(
+            "daemon_completion.json"
+        )
+    else:
+        idx = argv.index("__lingtai_qwen_system_settings_path")
+        settings_path = Path(argv[idx + 1])
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        common = settings["mcpServers"]["daemon_common"]
+        assert common["args"] == ["-m", "lingtai.mcp_servers.daemon_common"]
+        assert common["env"]["LINGTAI_DAEMON_COMPLETION_FILE"].endswith(
+            "daemon_completion.json"
+        )
