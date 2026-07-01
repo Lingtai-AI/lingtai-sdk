@@ -2053,4 +2053,3 @@ class BaseAgent:
         may still reference it) but is intentionally inert.
         """
         return None
-
