@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .workdir import workdir_layout
+from ._fsutil import atomic_write_text
 
 # Stable, namespaced literal stamped into every manifest produced by this
 # module.  Detectors require it for new manifests; older manifests that
@@ -197,7 +198,7 @@ def spill_oversized_result(
         try:
             spill_dir.mkdir(parents=True, exist_ok=True)
             spill_path = spill_dir / filename
-            spill_path.write_text(serialized_text, encoding="utf-8")
+            atomic_write_text(spill_path, serialized_text)
             spill_path_str = str(spill_path.relative_to(wd))
             spill_path_abs = str(spill_path.resolve())
         except OSError as exc:
@@ -488,8 +489,8 @@ def mark_expired_spill_manifests(working_dir: Path | str) -> int:
         new_lines.append(_json.dumps(entry, ensure_ascii=False, default=str))
 
     if changed:
-        history_path.write_text(
+        atomic_write_text(
+            history_path,
             "\n".join(new_lines) + ("\n" if new_lines else ""),
-            encoding="utf-8",
         )
     return expired_count
