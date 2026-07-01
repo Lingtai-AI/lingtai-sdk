@@ -51,6 +51,7 @@ ownership:
   - Qwen Code: `bash-manual` → `reference/bash-qwen-code/SKILL.md`
   - Oh-My-Pi / Pi Coding Agent: `bash-manual` →
     `reference/bash-oh-my-pi/SKILL.md`
+  - Kimi Code: `bash-manual` → `reference/bash-kimicode/SKILL.md`
 
 Candidate harnesses that are not daemon backends yet (Gemini CLI, Aider, Goose,
 OpenHands, Crush, and Zed/ACP bridges) are tracked under `bash-manual` as
@@ -92,6 +93,7 @@ resolving.
 | `mimocode` / `mimo` | `mimo run --format json <prompt>` | `mimo run --session <mimocode_session_id> --format json ...` via `ask` (async) | MiMo Code CLI backend (npm package `@mimo-ai/cli`, binary `mimo`). `mimo` canonicalizes to `mimocode`. Per-run MCP injection is not wired here yet because no local binary/docs path in this workspace confirmed a MiMo-specific config override compatible with LingTai's wrapper. |
 | `qwen-code` / `qwen` | `QWEN_CODE_SYSTEM_SETTINGS_PATH=<run>/qwen-daemon-settings.json qwen --yolo -p <prompt>` | Not supported yet; `ask` returns an explicit unsupported-backend error | Qwen Code CLI backend (npm package `@qwen-code/qwen-code`, binary `qwen`). `qwen` canonicalizes to `qwen-code`. The per-run settings file contains `mcpServers.daemon_common`. |
 | `oh-my-pi` / `omp` | `omp --mode json --approval-mode yolo <prompt>` | `omp --mode json --approval-mode yolo --session <oh_my_pi_session_id> ...` via `ask` (async) | Oh-My-Pi pi-coding-agent CLI backend (npm package `@oh-my-pi/pi-coding-agent`, binary `omp`). `--mode json` is non-interactive JSON event-stream print mode; the first `type:session` header line carries the resumable session id. `omp` canonicalizes to `oh-my-pi`. Per-run MCP injection is not wired yet pending evidence of its accepted config/env path. |
+| `kimicode` / `kimi` | `kimi --prompt <prompt> --output-format text` (per-run env: run-private `KIMI_CODE_HOME`, telemetry/auto-update off, `KIMI_MODEL_API_KEY` mapped from `KIMICODE_API_KEY`/`KIMI_API_KEY`/`MOONSHOT_API_KEY` when unset, provider/base-url/model/context defaults only when absent) | Not supported yet; `ask` returns an explicit unsupported-backend error | MoonshotAI Kimi Code CLI backend (official `MoonshotAI/kimi-code`, binary `kimi`, observed v0.20.2). `kimi` canonicalizes to `kimicode`. LingTai owns `--prompt`/`--output-format` and forbids `--yolo` (the CLI refuses `--prompt` + `--yolo`); session/`--continue` flags are reserved because resume is not wired. Stable session-id output was not verified, so `ask`/resume is intentionally unsupported. Per-run MCP injection is not wired here yet (help shows `acp` but no clear `--mcp` server-loading path). Secret env values are never logged. |
 | `cursor` | `agent -p <prompt>` | `agent -p --resume <cursor_session_id> ...` via `ask` (async) | Cursor Agent CLI backend. Per-run MCP injection is not wired yet; local `agent --help` could not be inspected in this environment because the CLI attempted macOS keychain access and failed before printing help. |
 
 **Per-task system prompt.** Every task item may include `system_prompt`. Use it
@@ -120,8 +122,11 @@ added automatically and its `finish` tool is the hard terminal-success contract.
 Claude print backends receive a per-run `--mcp-config` file; Codex receives
 `-c mcp_servers.daemon_common.*` overrides; OpenCode receives
 `OPENCODE_CONFIG_CONTENT`; and Qwen receives a per-run settings file path.
-MiMo, Oh-My-Pi, and Cursor are not declared unsupported: they have documented
-MCP entrypoints that still need daemon-native config wiring and tests. Secret
+MiMo, Oh-My-Pi, Kimi Code, and Cursor are not declared unsupported: they have
+documented (or plausible) MCP entrypoints that still need daemon-native config
+wiring and tests. Kimi Code additionally has no verified arbitrary-MCP
+server-loading flag yet (its help exposes `acp` but no clear `--mcp`), so it
+ships no-MCP for now. Secret
 `env`/`headers` values are redacted in prompts. The daemon-eligible `email`
 intrinsic is available only
 when explicitly requested in the task `tools` list, so result-only/no-tool
@@ -135,7 +140,7 @@ it may share if email is involved.
 **When to use CLI backends:** Use them when the task benefits from a different
 agent runtime's tool surface (for example Claude Code's built-in file editing or
 Codex's sandboxed execution) rather than the LingTai emanation's curated tool
-set. `mimocode`/`mimo`, `qwen-code`/`qwen`, and `oh-my-pi`/`omp` are accepted as canonical backend names plus short aliases; persisted daemon entries use the canonical name.
+set. `mimocode`/`mimo`, `qwen-code`/`qwen`, `oh-my-pi`/`omp`, and `kimicode`/`kimi` are accepted as canonical backend names plus short aliases; persisted daemon entries use the canonical name.
 
 **Claude backend naming:** Select `claude-p` for Claude Code daemon work; it is
 the print-mode backend that wraps Claude Code's official `--print`/stream-json
@@ -175,14 +180,16 @@ search/web access, effort levels, sandbox/policy switches, etc.) without the
 daemon needing to hard-code every flag.
 
 This is intentionally a passthrough, not a fixed table. Claude Code, Codex,
-OpenCode, MiMo Code, Qwen Code, Oh-My-Pi, and Cursor rev their flag lists between
-releases. Before adding new options, run the installed CLI's `--help` in `bash`
-to discover what it supports today (`claude --help`, `codex exec --help`,
-`opencode run --help`, `mimo run --help`, `qwen --help`, `omp --help`, or
-`agent --help`). Anything here is illustrative, not authoritative. Note that
-each backend reserves its own harness-owned flags (e.g. Oh-My-Pi reserves
-`--mode`, `--approval-mode yolo`, and the session/`--resume` flags) — passing a
-reserved flag in `backend_options` refuses the whole batch with a clear error.
+OpenCode, MiMo Code, Qwen Code, Oh-My-Pi, Kimi Code, and Cursor rev their flag
+lists between releases. Before adding new options, run the installed CLI's
+`--help` in `bash` to discover what it supports today (`claude --help`,
+`codex exec --help`, `opencode run --help`, `mimo run --help`, `qwen --help`,
+`omp --help`, `kimi --help`, or `agent --help`). Anything here is illustrative,
+not authoritative. Note that each backend reserves its own harness-owned flags
+(e.g. Oh-My-Pi reserves `--mode`, `--approval-mode yolo`, and the
+session/`--resume` flags; Kimi Code reserves `--prompt`, `--output-format`,
+`--yolo`, and session/`--continue`) — passing a reserved flag in
+`backend_options` refuses the whole batch with a clear error.
 
 ```jsonc
 // Print-mode Claude backend (the recommended Claude backend)

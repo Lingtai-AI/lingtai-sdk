@@ -84,6 +84,11 @@ files, not standalone top-level skills.
   description: |
     Oh-My-Pi / Pi Coding Agent (`omp`) subprocess usage, JSON mode, approval
     mode, and session-resume caveats.
+- name: bash-kimicode
+  location: reference/bash-kimicode/SKILL.md
+  description: |
+    Kimi Code (`kimi`) subprocess usage: one-shot `--prompt`/`--output-format`
+    mode, the `--prompt` + `--yolo` conflict, and why ask/resume is unsupported.
 - name: bash-gemini-cli
   location: reference/bash-gemini-cli/SKILL.md
   description: |
@@ -120,7 +125,7 @@ files, not standalone top-level skills.
 
 | Need / keywords | Read |
 |---|---|
-| Running a long-running agent/coding CLI as a sub-process: `claude -p`, `codex exec`, `opencode run`, Cursor Agent, MiMo Code, Qwen Code, Oh-My-Pi, Gemini CLI, Aider, Goose, OpenHands, Crush; "run an agent in the background"; avoid blocking the turn | `reference/bash-claude-code/SKILL.md`, `reference/bash-openai-codex/SKILL.md`, `reference/bash-opencode/SKILL.md`, or the matching `reference/bash-*/SKILL.md`; keep the core async/poll rules below resident |
+| Running a long-running agent/coding CLI as a sub-process: `claude -p`, `codex exec`, `opencode run`, Cursor Agent, MiMo Code, Qwen Code, Oh-My-Pi, Kimi Code, Gemini CLI, Aider, Goose, OpenHands, Crush; "run an agent in the background"; avoid blocking the turn | `reference/bash-claude-code/SKILL.md`, `reference/bash-openai-codex/SKILL.md`, `reference/bash-opencode/SKILL.md`, or the matching `reference/bash-*/SKILL.md`; keep the core async/poll rules below resident |
 | Human asks for time-driven recurring work: "every hour", "daily", "weekdays at 9", "write/check/send on a schedule"; choose cron vs event watcher; create launchd/systemd/crontab wiring; understand wake-by-mailbox-drop; write scheduler prompt/script hygiene | `reference/scheduled-work/SKILL.md` |
 | Need a one-shot reminder or wakeup nudge while work is pending; `.notification/cron.json`; atomic reminder writer; rest checklist | `reference/notification-reminders/SKILL.md` |
 | Scheduled job is silent, fires twice, exits immediately, gets killed by launchd, fails to deliver mail, or must be retired/cleaned up | `reference/debugging-cleanup/SKILL.md` |
@@ -131,8 +136,8 @@ files, not standalone top-level skills.
    `grep`, a quick build)? Use `bash` synchronously; this manual is not needed
    unless the command is risky, scheduled, or failing mysteriously.
 2. **Long-running agent/coding CLI** (`claude -p`, `codex exec`, `opencode run`,
-   Cursor Agent, MiMo Code, Qwen Code, Oh-My-Pi, Gemini CLI, Aider, Goose,
-   OpenHands, Crush, or any sub-agent that may think/run tools for minutes)?
+   Cursor Agent, MiMo Code, Qwen Code, Oh-My-Pi, Kimi Code, Gemini CLI, Aider,
+   Goose, OpenHands, Crush, or any sub-agent that may think/run tools for minutes)?
    **Never run it synchronously.** Use `bash(async=true)` and poll — see the
    resident rule below.
 3. **Time itself is the trigger?** Read `reference/scheduled-work/SKILL.md`.

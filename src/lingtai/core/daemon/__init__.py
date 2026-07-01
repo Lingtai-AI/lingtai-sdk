@@ -106,7 +106,7 @@ def _parent_host_tool_floor() -> frozenset[str]:
 # (GH Lingtai-AI/lingtai#189). Strip these for Claude Code subprocesses
 # only: print-mode Claude (claude-p/claude-code) and interactive Claude
 # (claude/claude-interactive). Other backends (codex, lingtai, opencode,
-# mimocode, qwen-code, oh-my-pi, cursor) are unaffected.
+# mimocode, qwen-code, oh-my-pi, cursor, kimicode) are unaffected.
 _CLAUDE_CODE_STRIP_ENV = (
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
@@ -327,6 +327,27 @@ _QWEN_RESERVED_BACKEND_FLAGS = {
     "--approval-mode",
 }
 
+# Kimi Code owns the prompt/output-format flags that drive LingTai's
+# non-interactive text-capture harness; overriding them via backend_options
+# would break output capture. ``--yolo`` is forbidden because Kimi's official
+# CLI refuses ``--prompt`` combined with ``--yolo``. Session/continue flags are
+# reserved because daemon(action='ask') resume is not wired for Kimi yet (no
+# verified stable session-id contract), so callers must not try to hijack a
+# session through backend_options. (Short ``-p``/``-y``/``-S``/``-c`` cannot be
+# emitted by backend_options, which only creates long ``--flag`` tokens, but
+# they are listed for clarity and defense-in-depth.)
+_KIMICODE_RESERVED_BACKEND_FLAGS = {
+    "--prompt",
+    "-p",
+    "--output-format",
+    "--yolo",
+    "-y",
+    "--session",
+    "-S",
+    "--continue",
+    "-c",
+}
+
 # Oh-My-Pi owns the mode/headless/approval/session flags that drive LingTai's
 # non-interactive JSON harness; overriding them via backend_options would break
 # JSON event capture, re-enable interactive prompting, or hijack the session.
@@ -352,11 +373,17 @@ _BACKEND_ALIASES = {
     "mimo": "mimocode",
     "qwen": "qwen-code",
     "omp": "oh-my-pi",
+    "kimi": "kimicode",
 }
 
 _QWEN_CODE_ASK_UNSUPPORTED_MESSAGE = (
     "qwen-code daemon backend does not support daemon(action='ask') yet; "
     "start a new qwen-code emanation instead."
+)
+
+_KIMICODE_ASK_UNSUPPORTED_MESSAGE = (
+    "kimicode daemon backend does not support daemon(action='ask') yet; "
+    "start a new kimicode emanation instead."
 )
 
 
@@ -482,6 +509,14 @@ _BACKEND_SPECS: dict[str, _BackendSpec] = {
         ask_unsupported_msg=None,
         reserved_flags=frozenset(_OH_MY_PI_RESERVED_BACKEND_FLAGS),
     ),
+    "kimicode": _BackendSpec(
+        id="kimicode",
+        is_cli=True,
+        runner_attr="_run_kimicode_emanation",
+        ask_handler_attr=None,
+        ask_unsupported_msg=_KIMICODE_ASK_UNSUPPORTED_MESSAGE,
+        reserved_flags=frozenset(_KIMICODE_RESERVED_BACKEND_FLAGS),
+    ),
     "cursor": _BackendSpec(
         id="cursor",
         is_cli=True,
@@ -504,6 +539,8 @@ _BACKEND_SCHEMA_ENUM = [
     "qwen",
     "oh-my-pi",
     "omp",
+    "kimicode",
+    "kimi",
     "cursor",
 ]
 
@@ -684,6 +721,7 @@ def get_schema(lang: str = "en") -> dict:
                     "'mimocode' / 'mimo' (MiMo Code CLI), "
                     "'qwen-code' / 'qwen' (Qwen Code CLI), "
                     "'oh-my-pi' / 'omp' (Oh-My-Pi pi-coding-agent CLI), "
+                    "'kimicode' / 'kimi' (MoonshotAI Kimi Code CLI; ask/resume not supported yet), "
                     "'cursor' (coding tasks via Cursor Agent CLI). "
                     "CLI backends use external tools with no LLM overhead from the parent."
                 ),
@@ -3419,6 +3457,7 @@ class DaemonManager:
             "opencode_session_id": old.get("opencode_session_id"),
             "mimocode_session_id": old.get("mimocode_session_id"),
             "oh_my_pi_session_id": old.get("oh_my_pi_session_id"),
+            "kimicode_session_id": old.get("kimicode_session_id"),
             "cursor_session_id": old.get("cursor_session_id"),
             "migration": {
                 "reason": reason,
@@ -4580,6 +4619,175 @@ class DaemonManager:
             exc = RuntimeError(
                 attributed
                 or f"qwen-code CLI exited with code {proc.returncode}: "
+                f"{detail[-500:]}"
+            )
+            run_dir.mark_failed(exc)
+            raise exc
+
+        text = output or (f"[no stdout; stderr tail follows]\n{stderr_tail[-500:]}" if stderr_tail else "[no output]")
+        self._require_done_completion(run_dir, text)
+        run_dir.mark_done(text)
+        return text
+
+    def _build_kimicode_prompt(self, task: str) -> str:
+        """Compose the prompt sent to Kimi Code one-shot (``--prompt``) mode."""
+        return self._build_opencode_prompt(task)
+
+    @staticmethod
+    def _kimicode_run_env(run_dir: DaemonRunDir) -> dict[str, str]:
+        """Build the per-run environment overlay for a Kimi Code invocation.
+
+        Returns only the keys to *add/override* on top of ``os.environ`` (the
+        caller merges them). Contract sourced from the runyuan Kimi Code brief
+        (no secrets):
+
+        * ``KIMI_CODE_HOME`` — pinned to a run-private directory so concurrent
+          daemon emanations never share Kimi's on-disk state.
+        * Telemetry + auto-update disabled unconditionally for headless runs.
+        * ``KIMI_MODEL_API_KEY`` — mapped from the first of
+          ``KIMICODE_API_KEY`` / ``KIMI_API_KEY`` / ``MOONSHOT_API_KEY`` that is
+          set, but only if ``KIMI_MODEL_API_KEY`` is not already provided. The
+          value is never logged.
+        * Model / provider / base URL / max-context defaults are applied only
+          when absent, so an operator's explicit environment always wins.
+        """
+        env: dict[str, str] = {}
+        kimi_home = run_dir.path / "kimi-code-home"
+        try:
+            kimi_home.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            # Fall back to the run dir itself; Kimi will create subdirs it needs.
+            kimi_home = run_dir.path
+        env["KIMI_CODE_HOME"] = str(kimi_home)
+        env["KIMI_DISABLE_TELEMETRY"] = "1"
+        env["KIMI_CODE_NO_AUTO_UPDATE"] = "1"
+
+        # API key: map only if the canonical var is not already set. Read from
+        # the live process env; the value is copied verbatim and never logged.
+        if not os.environ.get("KIMI_MODEL_API_KEY"):
+            for src in ("KIMICODE_API_KEY", "KIMI_API_KEY", "MOONSHOT_API_KEY"):
+                val = os.environ.get(src)
+                if val:
+                    env["KIMI_MODEL_API_KEY"] = val
+                    break
+
+        # Provider defaults — applied only when the operator has not set them.
+        defaults = {
+            "KIMI_MODEL_NAME": "kimi-for-coding",
+            "KIMI_MODEL_PROVIDER_TYPE": "kimi",
+            "KIMI_MODEL_BASE_URL": "https://api.kimi.com/coding/v1",
+            "KIMI_MODEL_MAX_CONTEXT_SIZE": "262144",
+        }
+        for key, default in defaults.items():
+            if not os.environ.get(key):
+                env[key] = default
+        return env
+
+    def _run_kimicode_emanation(
+        self,
+        em_id: str,
+        run_dir: DaemonRunDir,
+        task: str,
+        cancel_event: threading.Event,
+        timeout_event: threading.Event | None = None,
+        backend_argv: list[str] | None = None,
+    ) -> str:
+        """Run a Kimi Code (``kimi``) CLI session as the emanation backend.
+
+        MoonshotAI's official ``kimi`` binary runs one-shot via
+        ``kimi --prompt <prompt> --output-format text``. LingTai owns the
+        ``--prompt`` and ``--output-format`` flags (and forbids ``--yolo``,
+        which the CLI refuses alongside ``--prompt``), so free-form
+        ``backend_options`` are inserted *before* those owned flags. Kimi Code
+        does not expose a verified stable machine-readable session-id / resume
+        contract here, so stdout/stderr are recorded verbatim and
+        ``daemon(action='ask')`` is intentionally unsupported for this backend.
+
+        The per-run environment (see ``_kimicode_run_env``) pins a run-private
+        ``KIMI_CODE_HOME``, disables telemetry/auto-update, maps a Kimi/Moonshot
+        API key onto ``KIMI_MODEL_API_KEY`` when absent, and fills in provider
+        defaults only when the operator has not already set them. Secret values
+        are never logged.
+        """
+        if cancel_event.is_set():
+            return _mark_cancelled_or_timeout(run_dir, timeout_event)
+
+        kimi_env = self._kimicode_run_env(run_dir)
+        backend_argv = list(backend_argv or [])
+
+        prompt = self._build_kimicode_prompt(task)
+        # Required infrastructure flags (``--prompt`` / ``--output-format``)
+        # come last so the free-form backend_argv sits between the executable
+        # and the owned flags; the prompt is never a trailing positional here
+        # (Kimi takes it via ``--prompt``).
+        cmd = ["kimi"]
+        if backend_argv:
+            cmd.extend(backend_argv)
+        cmd.extend(["--prompt", prompt, "--output-format", "text"])
+        self._log("daemon_kimicode_start", em_id=em_id, cmd_head=" ".join(cmd[:1]))
+
+        try:
+            env = os.environ.copy()
+            env.update(kimi_env)
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=str(self._agent._working_dir),
+                env=env,
+                start_new_session=True,
+            )
+        except FileNotFoundError:
+            exc = RuntimeError("'kimi' CLI not found on PATH")
+            run_dir.mark_failed(exc)
+            raise exc
+        except OSError as e:
+            exc = RuntimeError(f"Failed to start kimicode CLI: {e}")
+            run_dir.mark_failed(exc)
+            raise exc
+        self._register_cli_proc(proc, group_id=run_dir.group_id)
+
+        stdout_lines: list[str] = []
+        stderr_thread = _spawn_stderr_drainer(
+            proc, run_dir, thread_name=f"daemon-kimicode-stderr-{em_id}",
+        )
+        stderr_lines = stderr_thread.lines
+
+        try:
+            assert proc.stdout is not None
+            for raw_line in proc.stdout:
+                if cancel_event.is_set():
+                    _kill_process_group(proc)
+                    return _mark_cancelled_or_timeout(run_dir, timeout_event)
+                line = raw_line.rstrip("\n")
+                if not line:
+                    continue
+                stdout_lines.append(line)
+                try:
+                    run_dir.record_cli_output(line, stream="stdout")
+                except Exception:
+                    pass
+            proc.wait()
+        except Exception as e:
+            _kill_process_group(proc)
+            run_dir.mark_failed(e)
+            raise
+        finally:
+            stderr_thread.join(timeout=2.0)
+            self._unregister_cli_proc(proc, group_id=run_dir.group_id)
+
+        stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
+        output = "\n".join(stdout_lines).strip()
+
+        if proc.returncode != 0:
+            detail = stderr_tail or output
+            attributed = self._attributed_cli_exit(
+                proc, "kimicode", detail[-500:], run_dir,
+            )
+            exc = RuntimeError(
+                attributed
+                or f"kimicode CLI exited with code {proc.returncode}: "
                 f"{detail[-500:]}"
             )
             run_dir.mark_failed(exc)
