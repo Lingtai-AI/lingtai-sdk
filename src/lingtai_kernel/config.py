@@ -104,3 +104,11 @@ class AgentConfig:
     soul_voice: str = "inner"  # consultation prompt profile — "inner" (terse, "you are the soul, speak as inner voice"), "observer" (structured stepped-back hook framing), or "custom" (use soul_voice_prompt). One unified prompt per profile; the per-fire cue text differentiates insights (current diary) vs past (future-self diary).
     soul_voice_prompt: str = ""  # custom voice prompt — only used when soul_voice == "custom". Set/cleared by the agent via soul(action="voice", set="custom", prompt="..."). Length-capped at SOUL_VOICE_PROMPT_MAX in soul.py.
     snapshot_interval: float | None = None  # seconds between git snapshots; None = off
+
+    def __post_init__(self):
+        # Clamp max_aed_attempts to at least 1.  A value of 0 or negative
+        # causes the AED retry loop in turn.py to spin forever: aed_attempts
+        # starts at 1 (incremented before the equality check) and never equals
+        # 0 or a negative max.  See issue #654.
+        if self.max_aed_attempts < 1:
+            self.max_aed_attempts = 1

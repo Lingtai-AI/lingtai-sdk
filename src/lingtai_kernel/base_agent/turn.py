@@ -769,7 +769,7 @@ def _run_loop(agent) -> None:
                         f"[{agent.agent_name}] AED attempt {aed_attempts}/{agent._config.max_aed_attempts}: {err_desc}",
                     )
 
-                    if aed_attempts == agent._config.max_aed_attempts:
+                    if aed_attempts >= agent._config.max_aed_attempts:
                         if not agent._preset_fallback_attempted and agent._can_fallback_preset():
                             agent._preset_fallback_attempted = True
                             agent._log("preset_auto_fallback",
