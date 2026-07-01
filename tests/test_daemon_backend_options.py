@@ -22,6 +22,7 @@ from lingtai.core.daemon import (
     _backend_options_to_argv,
     _BACKEND_SCHEMA_ENUM,
     _BACKEND_SPECS,
+    _cli_backend_loads_common_mcp as _source_cli_backend_loads_common_mcp,
     _normalize_backend,
 )
 from tests._daemon_helpers import (
@@ -454,6 +455,8 @@ def test_backend_schema_enum_matches_ordered_contract():
         "qwen",
         "oh-my-pi",
         "omp",
+        "kimicode",
+        "kimi",
         "cursor",
     ]
     assert list(_BACKEND_SCHEMA_ENUM) == expected
@@ -470,6 +473,7 @@ def test_backend_metadata_consistency_keeps_hidden_legacy_claude():
         "mimo": "mimocode",
         "qwen": "qwen-code",
         "omp": "oh-my-pi",
+        "kimi": "kimicode",
     }
     assert all(target in _BACKEND_SPECS for target in _BACKEND_ALIASES.values())
     assert _BACKEND_SPECS["claude-code"].runner_attr == "_run_claude_code_emanation"
@@ -480,6 +484,7 @@ def test_normalize_backend_aliases_only_true_aliases():
     assert _normalize_backend("mimo") == "mimocode"
     assert _normalize_backend("qwen") == "qwen-code"
     assert _normalize_backend("omp") == "oh-my-pi"
+    assert _normalize_backend("kimi") == "kimicode"
     assert _normalize_backend(None) == "lingtai"
     assert _normalize_backend("") == "lingtai"
     assert _normalize_backend("claude-code") == "claude-code"
@@ -712,6 +717,330 @@ def test_qwen_code_ask_is_explicitly_unsupported(tmp_path):
     assert ask["message"] == (
         "qwen-code daemon backend does not support daemon(action='ask') yet; "
         "start a new qwen-code emanation instead."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Kimi Code backend
+# ---------------------------------------------------------------------------
+
+
+def test_schema_includes_kimicode_backend():
+    from lingtai.core.daemon import get_schema
+
+    backend = get_schema("en")["properties"]["backend"]
+    for name in ("kimicode", "kimi"):
+        assert name in backend["enum"]
+    assert "Kimi Code" in backend["description"]
+
+
+@pytest.mark.parametrize("backend", ["kimi", "kimicode"])
+def test_kimicode_alias_and_canonical_dispatch_to_backend(tmp_path, backend):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    captured: dict = {}
+
+    def fake_run(em_id, run_dir, task, cancel_event, timeout_event, backend_argv=None):
+        captured["backend"] = run_dir._state["backend"]
+        captured["model"] = run_dir._state["model"]
+        captured["backend_argv"] = list(backend_argv or [])
+        run_dir.mark_done("[fake done]")
+        return "[fake done]"
+
+    with patch.object(mgr, "_run_kimicode_emanation", side_effect=fake_run):
+        result = mgr.handle({
+            "action": "emanate",
+            "backend": backend,
+            "tasks": [{"task": "Use Kimi Code.", "tools": [],
+                       "backend_options": {"model": "kimi-for-coding"}}],
+        })
+        assert result["status"] == "dispatched"
+        em_id = result["ids"][0]
+        mgr._emanations[em_id]["future"].result(timeout=5)
+
+    assert captured["backend"] == "kimicode"
+    assert captured["model"] == "kimicode"
+    assert captured["backend_argv"] == ["--model", "kimi-for-coding"]
+
+
+def test_kimicode_cmd_appends_backend_argv_before_owned_flags(tmp_path):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    captured_cmd: list[list[str]] = []
+    captured_env: list[dict] = []
+
+    run_dir = make_daemon_run_dir(
+        agent,
+        handle="em-kimi",
+        task="dummy",
+        tools=[],
+        model="kimicode",
+        max_turns=10,
+        timeout_s=60,
+        parent_addr=agent._working_dir.name,
+        parent_pid=1,
+        system_prompt="[stub]",
+        backend="kimicode",
+    )
+
+    def fake_popen(cmd, *a, **kw):
+        captured_cmd.append(list(cmd))
+        captured_env.append(dict(kw.get("env") or {}))
+        return FiniteFakeProc(stdout_lines=["kimi done\n"])
+
+    with patch("lingtai.core.daemon.subprocess.Popen", side_effect=fake_popen):
+        mgr._run_kimicode_emanation(
+            "em-kimi", run_dir, "Refactor with Kimi.",
+            threading.Event(), threading.Event(),
+            backend_argv=["--model", "kimi-for-coding"],
+        )
+
+    cmd = captured_cmd[0]
+    assert cmd[0] == "kimi"
+    # Free-form backend_argv comes right after the executable...
+    assert cmd[1:3] == ["--model", "kimi-for-coding"]
+    # ...and the harness-owned flags come last, with the prompt behind --prompt.
+    assert cmd[-2:] == ["--output-format", "text"]
+    assert cmd[-4] == "--prompt"
+    assert "Refactor with Kimi." in cmd[-3]
+    assert "--yolo" not in cmd
+    assert run_dir._state["last_output"] == "kimi done"
+
+
+def test_kimicode_run_env_defaults_and_home(tmp_path, monkeypatch):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    captured_env: list[dict] = []
+
+    run_dir = make_daemon_run_dir(
+        agent,
+        handle="em-kimi-env",
+        task="dummy",
+        tools=[],
+        model="kimicode",
+        max_turns=10,
+        timeout_s=60,
+        parent_addr=agent._working_dir.name,
+        parent_pid=1,
+        system_prompt="[stub]",
+        backend="kimicode",
+    )
+
+    # No canonical key set; a source key is present and must be mapped.
+    monkeypatch.delenv("KIMI_MODEL_API_KEY", raising=False)
+    monkeypatch.delenv("KIMI_API_KEY", raising=False)
+    monkeypatch.delenv("MOONSHOT_API_KEY", raising=False)
+    monkeypatch.delenv("KIMI_MODEL_NAME", raising=False)
+    monkeypatch.setenv("KIMICODE_API_KEY", "sk-secret-kimi")
+
+    def fake_popen(cmd, *a, **kw):
+        captured_env.append(dict(kw.get("env") or {}))
+        return FiniteFakeProc(stdout_lines=["ok\n"])
+
+    with patch("lingtai.core.daemon.subprocess.Popen", side_effect=fake_popen):
+        mgr._run_kimicode_emanation(
+            "em-kimi-env", run_dir, "Do it.",
+            threading.Event(), threading.Event(),
+        )
+
+    env = captured_env[0]
+    # Run-private KIMI_CODE_HOME lives under the run dir.
+    assert env["KIMI_CODE_HOME"].startswith(str(run_dir.path))
+    assert env["KIMI_DISABLE_TELEMETRY"] == "1"
+    assert env["KIMI_CODE_NO_AUTO_UPDATE"] == "1"
+    # Source key mapped onto the canonical var.
+    assert env["KIMI_MODEL_API_KEY"] == "sk-secret-kimi"
+    # Provider defaults applied when absent.
+    assert env["KIMI_MODEL_NAME"] == "kimi-for-coding"
+    assert env["KIMI_MODEL_PROVIDER_TYPE"] == "kimi"
+    assert env["KIMI_MODEL_BASE_URL"] == "https://api.kimi.com/coding/v1"
+    assert env["KIMI_MODEL_MAX_CONTEXT_SIZE"] == "262144"
+
+
+def test_kimicode_run_env_respects_existing_operator_values(tmp_path, monkeypatch):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    captured_env: list[dict] = []
+
+    run_dir = make_daemon_run_dir(
+        agent,
+        handle="em-kimi-op",
+        task="dummy",
+        tools=[],
+        model="kimicode",
+        max_turns=10,
+        timeout_s=60,
+        parent_addr=agent._working_dir.name,
+        parent_pid=1,
+        system_prompt="[stub]",
+        backend="kimicode",
+    )
+
+    # Operator already set the canonical key and a model name — never override.
+    monkeypatch.setenv("KIMI_MODEL_API_KEY", "operator-key")
+    monkeypatch.setenv("KIMICODE_API_KEY", "should-be-ignored")
+    monkeypatch.setenv("KIMI_MODEL_NAME", "operator-model")
+
+    def fake_popen(cmd, *a, **kw):
+        captured_env.append(dict(kw.get("env") or {}))
+        return FiniteFakeProc(stdout_lines=["ok\n"])
+
+    with patch("lingtai.core.daemon.subprocess.Popen", side_effect=fake_popen):
+        mgr._run_kimicode_emanation(
+            "em-kimi-op", run_dir, "Do it.",
+            threading.Event(), threading.Event(),
+        )
+
+    env = captured_env[0]
+    assert env["KIMI_MODEL_API_KEY"] == "operator-key"
+    assert env["KIMI_MODEL_NAME"] == "operator-model"
+
+
+@pytest.mark.parametrize(
+    ("present_key", "expected_value"),
+    [
+        ("KIMI_API_KEY", "sk-kimi-fallback"),
+        ("MOONSHOT_API_KEY", "sk-moonshot-fallback"),
+    ],
+)
+def test_kimicode_run_env_api_key_fallback_sources(
+    tmp_path, monkeypatch, present_key, expected_value
+):
+    """When ``KIMICODE_API_KEY`` is absent, the next source in the fallback
+    order (``KIMI_API_KEY`` then ``MOONSHOT_API_KEY``) maps onto the canonical
+    ``KIMI_MODEL_API_KEY``."""
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    captured_env: list[dict] = []
+
+    run_dir = make_daemon_run_dir(
+        agent,
+        handle="em-kimi-fallback",
+        task="dummy",
+        tools=[],
+        model="kimicode",
+        max_turns=10,
+        timeout_s=60,
+        parent_addr=agent._working_dir.name,
+        parent_pid=1,
+        system_prompt="[stub]",
+        backend="kimicode",
+    )
+
+    # No canonical key and no higher-priority source; only the parametrized
+    # fallback source is present and must be mapped.
+    monkeypatch.delenv("KIMI_MODEL_API_KEY", raising=False)
+    monkeypatch.delenv("KIMICODE_API_KEY", raising=False)
+    monkeypatch.delenv("KIMI_API_KEY", raising=False)
+    monkeypatch.delenv("MOONSHOT_API_KEY", raising=False)
+    monkeypatch.setenv(present_key, expected_value)
+
+    def fake_popen(cmd, *a, **kw):
+        captured_env.append(dict(kw.get("env") or {}))
+        return FiniteFakeProc(stdout_lines=["ok\n"])
+
+    with patch("lingtai.core.daemon.subprocess.Popen", side_effect=fake_popen):
+        mgr._run_kimicode_emanation(
+            "em-kimi-fallback", run_dir, "Do it.",
+            threading.Event(), threading.Event(),
+        )
+
+    env = captured_env[0]
+    assert env["KIMI_MODEL_API_KEY"] == expected_value
+
+
+def test_kimicode_run_env_api_key_fallback_precedence(tmp_path, monkeypatch):
+    """When multiple source keys are present, the fallback order is honored:
+    ``KIMICODE_API_KEY`` beats ``KIMI_API_KEY`` beats ``MOONSHOT_API_KEY``."""
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    captured_env: list[dict] = []
+
+    run_dir = make_daemon_run_dir(
+        agent,
+        handle="em-kimi-precedence",
+        task="dummy",
+        tools=[],
+        model="kimicode",
+        max_turns=10,
+        timeout_s=60,
+        parent_addr=agent._working_dir.name,
+        parent_pid=1,
+        system_prompt="[stub]",
+        backend="kimicode",
+    )
+
+    monkeypatch.delenv("KIMI_MODEL_API_KEY", raising=False)
+    monkeypatch.setenv("KIMICODE_API_KEY", "sk-kimicode-wins")
+    monkeypatch.setenv("KIMI_API_KEY", "sk-kimi-loses")
+    monkeypatch.setenv("MOONSHOT_API_KEY", "sk-moonshot-loses")
+
+    def fake_popen(cmd, *a, **kw):
+        captured_env.append(dict(kw.get("env") or {}))
+        return FiniteFakeProc(stdout_lines=["ok\n"])
+
+    with patch("lingtai.core.daemon.subprocess.Popen", side_effect=fake_popen):
+        mgr._run_kimicode_emanation(
+            "em-kimi-precedence", run_dir, "Do it.",
+            threading.Event(), threading.Event(),
+        )
+
+    env = captured_env[0]
+    # Highest-priority source wins over the two lower-priority fallbacks.
+    assert env["KIMI_MODEL_API_KEY"] == "sk-kimicode-wins"
+
+
+def test_kimicode_not_in_common_mcp_loading_set():
+    """Regression guard: kimicode ships no-MCP, so it must stay out of the
+    daemon_common MCP-loading set. If a refactor accidentally added kimicode
+    here, Kimi runs would be expected to emit a ``finish`` completion signal
+    they cannot produce."""
+    assert _source_cli_backend_loads_common_mcp("kimicode") is False
+    # Sanity: the guard would actually fire — a backend that does load MCP.
+    assert _source_cli_backend_loads_common_mcp("qwen-code") is True
+
+
+@pytest.mark.parametrize("bad_flag", ["prompt", "output-format", "yolo", "session", "continue"])
+def test_kimicode_rejects_harness_owned_backend_options(tmp_path, bad_flag):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+
+    result = mgr.handle({
+        "action": "emanate",
+        "backend": "kimicode",
+        "tasks": [{"task": "bad", "tools": [],
+                   "backend_options": {bad_flag: "override"}}],
+    })
+
+    assert result["status"] == "error"
+    assert f"--{bad_flag} is reserved by the kimicode daemon backend" in result["message"]
+    assert mgr._emanations == {}
+
+
+def test_kimicode_ask_is_explicitly_unsupported(tmp_path):
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+
+    def fake_run(em_id, run_dir, task, cancel_event, timeout_event, backend_argv=None):
+        run_dir.mark_done("[fake done]")
+        return "[fake done]"
+
+    with patch.object(mgr, "_run_kimicode_emanation", side_effect=fake_run):
+        result = mgr.handle({
+            "action": "emanate",
+            "backend": "kimicode",
+            "tasks": [{"task": "Kimi once.", "tools": []}],
+        })
+        assert result["status"] == "dispatched"
+        em_id = result["ids"][0]
+        mgr._emanations[em_id]["future"].result(timeout=5)
+
+    ask = mgr.handle({"action": "ask", "id": em_id, "message": "follow up"})
+
+    assert ask["status"] == "error"
+    assert ask["message"] == (
+        "kimicode daemon backend does not support daemon(action='ask') yet; "
+        "start a new kimicode emanation instead."
     )
 
 
