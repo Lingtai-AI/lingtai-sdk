@@ -2,6 +2,28 @@
 from __future__ import annotations
 
 
+def _update_default_preset(agent, preset_name: str) -> None:
+    """Best-effort: persist *preset_name* as manifest.preset.default in
+    init.json so future refreshes/molts keep the user's choice.
+
+    Failures are logged but never fatal — the runtime swap already succeeded.
+    """
+    import json as _json
+    try:
+        init_path = agent._working_dir / "init.json"
+        data = _json.loads(init_path.read_text(encoding="utf-8"))
+        preset_block = data.setdefault("manifest", {}).setdefault("preset", {})
+        if preset_block.get("default") != preset_name:
+            preset_block["default"] = preset_name
+            init_path.write_text(
+                _json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            agent._log("preset_default_persisted", preset=preset_name)
+    except Exception as exc:
+        agent._log("preset_default_persist_failed", preset=preset_name, error=str(exc))
+
+
 # ---------------------------------------------------------------------------
 # refresh
 # ---------------------------------------------------------------------------
@@ -161,6 +183,9 @@ def _refresh(agent, args: dict) -> dict:
                 agent._activate_default_preset()
             else:
                 agent._activate_preset(preset_name)
+                # Persist the choice as default so future refreshes/molts
+                # don't silently revert to the previous default preset.
+                _update_default_preset(agent, preset_name)
         except KeyError:
             agent._log("preset_swap_failed",
                        requested=preset_name,
