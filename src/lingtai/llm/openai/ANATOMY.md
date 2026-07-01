@@ -39,7 +39,7 @@ OpenAI adapter — wraps the `openai` SDK for Chat Completions and Responses API
 | `OpenAIChatSession` | 492–1003 | Chat Completions session with context overflow auto-recovery; sends optional `prompt_cache_key` |
 | `OpenAIResponsesSession` | 1006–1204 | Responses API session with server-side `previous_response_id` chaining, optional `context_management` compaction, and optional `prompt_cache_key` |
 | `OpenAIAdapter` | 1207–1520 | `LLMAdapter` implementation; dispatches to Completions or Responses path; receives injected `compact_threshold`; derives the default `prompt_cache_key` via `_default_prompt_cache_key` / `_resolve_prompt_cache_key` |
-| `CodexResponsesSession` | `adapter.py:1641` | Responses session for ChatGPT-backed Codex running the `full`/`incremental` additive continuation state machine over a selectable transport (REST default, WebSocket opt-in): `store=false` always, encrypted reasoning include, cache-affinity headers, honest client/account identity, and honest Codex metadata envelope. |
+| `CodexResponsesSession` | `adapter.py:2223` | Responses session for ChatGPT-backed Codex running the `full`/`incremental` additive continuation state machine over a selectable transport (REST default, WebSocket opt-in): `store=false` always, encrypted reasoning include/replay, encrypted-reasoning self-heal, cache-affinity headers, honest client/account identity, and honest Codex metadata envelope. |
 | `CodexOpenAIAdapter` | `adapter.py:2017` | Codex provider specialization: forces Responses mode, derives stable per-agent cache/session ids plus a LingTai installation id from the configured anchor, and wires account/metadata hints into Codex sessions. |
 
 ### adapter.py helpers
@@ -124,13 +124,21 @@ Flow:
      wire delta, and never sends `previous_response_id`.
    - WebSocket (`codex_ws`): `full` sends the full input; `incremental` sends the
      strict-additive delta plus `previous_response_id`.
-5. After success: record the assistant response into the interface and recompute
+5. If Codex rejects a full replay with `The encrypted content for item ... could
+   not be verified`, treat it as stale raw reasoning state: `_strip_codex_encrypted_reasoning_items`
+   (`adapter.py:3242-3286`) removes replay-only `encrypted_content` anchors from
+   `ThinkingBlock.provider_data`, `_reset_ws_epoch` (`adapter.py:2856-2885`) clears
+   stale baselines/response-id state, and the adapter retries the same visible
+   transcript once as `rest_full_self_heal` / `stateless_full_self_heal`
+   (`adapter.py:3556-3640`). Summary text, assistant text, and tool calls remain
+   in the canonical interface; only the opaque provider blob is dropped.
+6. After success: record the assistant response into the interface and recompute
    the converter-stable delta baseline (`_ws_record_baseline_from_interface`) so the
    next turn can strict-prefix-match and stay incremental.
 **Usage metadata axes:** `UsageMetadata.extra` carries `codex_transport`
 (`rest`/`websocket`), `codex_transfer_mode` (`full`/`incremental`), and the
 transport-qualified `codex_request_mode` (`rest_full` / `rest_incremental` /
-`ws_full` / `ws_incremental` / `rest_full_fallback`), plus the safe delta-decision
+`ws_full` / `ws_incremental` / `rest_full_fallback` / `rest_full_self_heal` / `stateless_full_self_heal`), plus the safe delta-decision
 diagnostic (`codex_ws_delta_reason` and counts — never prompt/secret content). The
 WS-named `codex_ws_*` diagnostic keys are reused on REST (transport-neutral
 metadata); `codex_request_mode` never reads `ws_*` on a REST request.
@@ -233,7 +241,7 @@ In-flight Responses/Codex sessions therefore have a **no-op `update_system_promp
 
 - **CC streaming** (`send_stream`, line 622) — `stream=True, stream_options={include_usage: True}`. Uses `StreamingAccumulator` for text + tool deltas. Reasoning deltas captured from `delta.reasoning` or `delta.reasoning_content` (OpenRouter compatibility, lines 726-733). Overflow recovery wraps the stream open + first chunk (lines 668-690).
 - **Responses streaming** (`send_stream`, line 891) — event types: `response.reasoning_summary_text.delta/done` (summary thoughts only), `response.output_text.delta`, `response.function_call_arguments.delta`, `response.output_item.added/done`, `response.completed`.
-- **Codex streaming** — forces `stream=True` even on `send()`. Runs the `full`/`incremental` planner per request over the selected transport (REST default / WebSocket opt-in): REST carries the whole converted interface in both modes; WebSocket carries the whole interface for `full` and delta + `previous_response_id` for `incremental`. Captured summary thoughts are persisted as ThinkingBlocks so `to_responses_input` replays reasoning items before function calls. Optional diagnostics (`LINGTAI_CODEX_RESPONSES_TRACE=1`) append safe per-event metadata to `logs/codex_responses_trace.jsonl` without changing accumulator/persistence behavior.
+- **Codex streaming** — forces `stream=True` even on `send()`. Runs the `full`/`incremental` planner per request over the selected transport (REST default / WebSocket opt-in): REST carries the whole converted interface in both modes; WebSocket carries the whole interface for `full` and delta + `previous_response_id` for `incremental`. Captured summary thoughts and raw encrypted reasoning items are persisted as ThinkingBlocks so `to_responses_input` replays reasoning items before function calls; if Codex later rejects a raw encrypted item as unverifiable, the adapter strips only that opaque replay state and retries once with summary/plain transcript. Optional diagnostics (`LINGTAI_CODEX_RESPONSES_TRACE=1`) append safe per-event metadata to `logs/codex_responses_trace.jsonl` without changing accumulator/persistence behavior.
 
 ### Authentication paths
 
