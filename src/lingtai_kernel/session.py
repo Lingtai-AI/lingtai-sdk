@@ -12,6 +12,10 @@ from typing import Any, Callable, TYPE_CHECKING
 
 from .config import (
     AgentConfig,
+    # Re-exported for backward compatibility: the streak logic now lives in
+    # ``ContextPressureReminder`` and reads these off ``config`` directly, but
+    # ``from lingtai_kernel.session import CONTEXT_PRESSURE_*`` remains a public
+    # import path (see tests/test_context_pressure_streak.py).
     CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,
     CONTEXT_PRESSURE_WARN_AFTER_ROUNDS,
     CONTEXT_PRESSURE_RECOVERY_TARGET,
@@ -28,14 +32,23 @@ from .llm_utils import (
     track_llm_usage,
 )
 from .logging import get_logger
+from .reminders.context_pressure import ContextPressureReminder
 from .token_counter import count_tokens, count_tool_tokens
+
+__all__ = [
+    "SessionManager",
+    "CONTEXT_PRESSURE_RECONSTRUCTION_RATIO",
+    "CONTEXT_PRESSURE_WARN_AFTER_ROUNDS",
+    "CONTEXT_PRESSURE_RECOVERY_TARGET",
+]
 
 logger = get_logger()
 
 # Sustained context-pressure (channel B) constants are kernel-fixed and live in
-# config.py alongside the molt thresholds (imported above), giving one source of
-# truth shared by SessionManager (the streak) and meta_block (the warning). See
-# config.py for the full rationale.
+# config.py alongside the molt thresholds; the ``ContextPressureReminder``
+# abstraction (reminders/context_pressure.py) owns the streak/warn/prose logic
+# that reads them, and SessionManager delegates to it. See config.py for the
+# full rationale.
 
 if TYPE_CHECKING:
     from .llm.interface import ChatInterface
@@ -135,15 +148,14 @@ class SessionManager:
         self._latest_input_tokens = 0
         self._latest_token_usage_snapshot: dict[str, Any] | None = None
 
-        # Sustained context-pressure streak (channel B). Transient runtime
-        # state — not persisted, since a fresh/restored session has fresh
-        # pressure. ``_context_pressure_streak`` counts consecutive fresh
-        # provider rounds at/above CONTEXT_PRESSURE_RECONSTRUCTION_RATIO;
-        # ``_context_pressure_last_round_id`` dedups multiple observations of
-        # the same provider round (one provider response can be re-read by many
-        # build_meta / tool-result stamps in a single batch).
-        self._context_pressure_streak = 0
-        self._context_pressure_last_round_id: int | None = None
+        # Sustained context-pressure / molt reminder (channel B). Transient
+        # runtime state — not persisted, since a fresh/restored session has
+        # fresh pressure. The streak state machine, warn decision, and reminder
+        # prose all live in the unified ``ContextPressureReminder`` abstraction
+        # (``reminders/context_pressure.py``); SessionManager delegates to it and
+        # keeps the legacy ``context_pressure_streak`` / ``note_context_pressure_round``
+        # surface as thin compatibility shims for meta_block and existing tests.
+        self._context_pressure = ContextPressureReminder()
 
         # Streaming state
         self._text_already_streamed = False
@@ -398,13 +410,24 @@ class SessionManager:
         return tokens / ctx_window if tokens > 0 else 0.0
 
     # ------------------------------------------------------------------
-    # Sustained context-pressure streak (channel B)
+    # Sustained context-pressure / molt reminder (channel B)
+    #
+    # The state machine, warn decision, and reminder prose live in
+    # ``ContextPressureReminder``. These are thin compatibility shims: meta_block
+    # (``build_molt_context`` / ``build_reconstruction_tool_meta``) and the
+    # streak tests still read ``context_pressure_streak`` /
+    # ``context_pressure_warning_active`` and call ``note_context_pressure_round``.
     # ------------------------------------------------------------------
+
+    @property
+    def context_pressure_reminder(self) -> ContextPressureReminder:
+        """The unified molt/context-pressure reminder for this session."""
+        return self._context_pressure
 
     @property
     def context_pressure_streak(self) -> int:
         """Consecutive fresh provider rounds at/above the reconstruction ratio."""
-        return self._context_pressure_streak
+        return self._context_pressure.streak
 
     @property
     def context_pressure_warning_active(self) -> bool:
@@ -415,37 +438,18 @@ class SessionManager:
         streak remains at/above the warn count and drops the moment context
         relaxes below the threshold (which resets the streak).
         """
-        return self._context_pressure_streak >= CONTEXT_PRESSURE_WARN_AFTER_ROUNDS
+        return self._context_pressure.active
 
     def note_context_pressure_round(self, usage: float, *, round_id: int) -> None:
         """Record one *fresh provider round*'s context usage for the streak.
 
-        ``round_id`` identifies the provider round (the kernel passes the
-        ``_api_calls`` counter, which increments exactly once per real provider
-        response).  Re-observing the same ``round_id`` is a no-op so duplicate
-        ``build_meta`` / tool-result stamps in a single batch cannot advance the
-        streak — only genuinely new provider rounds do.
-
-        ``usage`` is the fraction of the context window in use:
-          * ``>= CONTEXT_PRESSURE_RECONSTRUCTION_RATIO`` → high round, advance.
-          * ``0 <= usage < ratio``                       → relieved, reset to 0.
-          * ``< 0`` (sentinel, decomposition not ready)  → leave streak untouched.
+        Delegates to :meth:`ContextPressureReminder.note_round`; retained as the
+        SessionManager-level entry point that ``_track_usage`` and existing tests
+        call.  ``round_id`` (the ``_api_calls`` counter) dedups multiple
+        observations of one provider round; usage semantics are documented on
+        the reminder.
         """
-        if round_id == self._context_pressure_last_round_id:
-            return
-        try:
-            pressure = float(usage)
-        except (TypeError, ValueError):
-            return
-        if pressure < 0:
-            # Unknown/sentinel usage: neither a high round nor a real relief.
-            # Don't advance and don't spuriously reset an existing streak.
-            return
-        self._context_pressure_last_round_id = round_id
-        if pressure >= CONTEXT_PRESSURE_RECONSTRUCTION_RATIO:
-            self._context_pressure_streak += 1
-        else:
-            self._context_pressure_streak = 0
+        self._context_pressure.note_round(usage, round_id=round_id)
 
     # ------------------------------------------------------------------
     # Token tracking

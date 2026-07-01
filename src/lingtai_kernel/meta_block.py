@@ -55,11 +55,14 @@ import time as _time
 from collections.abc import Mapping
 
 from .config import (
-    MOLT_NOTICE_THRESHOLD,
     CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,
     CONTEXT_PRESSURE_RECOVERY_TARGET,
 )
 from .i18n import t as _t
+from .reminders.context_pressure import (
+    render_current_molt_context,
+    render_reconstruction_molt,
+)
 from .time_veil import now_iso
 
 # ---------------------------------------------------------------------------
@@ -779,19 +782,6 @@ def build_runtime_guidance() -> dict:
 
 
 
-def _format_ratio_percent(value: float | int | str | None) -> str:
-    """Return a human-readable percentage for context-pressure reminders."""
-    try:
-        pct = float(value) * 100
-    except Exception:
-        return "an unknown amount"
-    if pct < 0:
-        return "an unknown amount"
-    if abs(pct - round(pct)) < 0.05:
-        return f"{pct:.0f}%"
-    return f"{pct:.1f}%"
-
-
 def build_molt_context(agent, usage: float) -> str | None:
     """Return `_meta.agent_meta.context.molt` as a natural-language reminder.
 
@@ -816,27 +806,20 @@ def build_molt_context(agent, usage: float) -> str | None:
     session = getattr(agent, "_session", None)
     if session is None:
         return None
+    # The warning decision + prose live in ``ContextPressureReminder``; the
+    # psyche-intrinsic gate and session lookup stay here (they are agent/session
+    # concerns, not reminder concerns). Prefer the real reminder object; fall
+    # back to the session's compat streak/active surface so lightweight test
+    # stand-ins (a SimpleNamespace with only context_pressure_* attributes) still
+    # render identical prose.
+    reminder = getattr(session, "context_pressure_reminder", None)
+    if reminder is not None:
+        return reminder.current_molt_context(usage)
+
     if not getattr(session, "context_pressure_warning_active", False):
         return None
-
-    try:
-        pressure = float(usage)
-    except Exception:
-        pressure = -1.0
-
     streak = int(getattr(session, "context_pressure_streak", 0))
-    usage_text = _format_ratio_percent(pressure)
-    recovery_text = _format_ratio_percent(CONTEXT_PRESSURE_RECOVERY_TARGET)
-    return (
-        f"Context has stayed high across {streak} consecutive fresh model calls "
-        f"(currently {usage_text} of the context window). This is a context-pressure "
-        "reminder, not an immediate command: when continuing, batch tool results "
-        "you have already digested before summarizing. Repeated summarize calls "
-        "while context stays above 75% substantially hurt token efficiency. "
-        f"The recovery target is {recovery_text}, but if a batched summarize/"
-        "reconstruction pass still leaves context above 75%, stop repeating "
-        "summarize, tend durable stores, and molt deliberately. See psyche-manual."
-    )
+    return render_current_molt_context(streak=streak, usage=usage)
 
 
 def build_reconstruction_tool_meta(agent) -> dict | None:
@@ -942,32 +925,24 @@ def build_reconstruction_tool_meta(agent) -> dict | None:
         },
     }
 
+    # The warning decision + prose (channel A) live in the reminder abstraction;
+    # this function owns only the event assembly (provider-vs-local after-context
+    # resolution, event shape). Delegate to the session's reminder when present,
+    # falling back to the pure renderer for session stand-ins without one. Pass
+    # the event's own recovery_target so the decision uses exactly the value
+    # stamped into the event.
+    reminder = getattr(session, "context_pressure_reminder", None)
     recovery_target = event["recovery_target"]
-    try:
-        above_recovery = after_usage >= float(recovery_target)
-    except Exception:
-        above_recovery = False
-    if above_recovery:
-        after_text = _format_ratio_percent(after_usage)
-        recovery_text = _format_ratio_percent(recovery_target)
-        if after_usage >= CONTEXT_PRESSURE_RECONSTRUCTION_RATIO:
-            event["molt"] = (
-                "The runtime already rebuilt the provider context after summarization, "
-                f"but the rebuilt context is still at {after_text} of the context "
-                "window, above the 75% high-context threshold. Repeated summarize "
-                "calls while context stays above 75% substantially hurt token "
-                "efficiency; stop repeating summarize, tend durable stores, and molt "
-                "deliberately. See psyche-manual."
-            )
-        else:
-            event["molt"] = (
-                "The runtime already rebuilt the provider context after summarization, "
-                f"but the rebuilt context is still at {after_text} of the context "
-                f"window, at or above the {recovery_text} recovery target. "
-                "If more digested tool results can be summarized, do that as one "
-                "batch; otherwise tend durable stores and molt deliberately. See "
-                "psyche-manual."
-            )
+    if reminder is not None:
+        molt = reminder.annotate_reconstruction(
+            after_usage, recovery_target=recovery_target
+        )
+    else:
+        molt = render_reconstruction_molt(
+            after_usage=after_usage, recovery_target=recovery_target
+        )
+    if molt:
+        event["molt"] = molt
     return event
 
 
