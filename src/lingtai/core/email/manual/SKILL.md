@@ -6,8 +6,8 @@ description: >
   search/delete/archive/contacts, reply discipline (always reply on the
   channel the message arrived on), addressing (bare paths like `human`,
   `mimo-1`), self-send for persistent notes that survive molt, time
-  capsules (delayed self-send via `delay`), scheduled email (recurring
-  alarms via `schedule={action: "create", ...}`), the unread digest
+  capsules (delayed self-send via `delay`; for recurring alarms use the
+  host scheduler — see `bash-manual` and `system-manual`), the unread digest
   notification contract, and addon ownership. This is for INTERNAL email
   only — for real internet email via IMAP/SMTP, see the `mcp-manual`
   skill (the lingtai-imap addon owns that surface).

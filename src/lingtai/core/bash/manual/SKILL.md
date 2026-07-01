@@ -176,7 +176,9 @@ it detects this shape, but prefer it from the start:
   `glob('**/…')` over big trees with:
   `rg --files --hidden -g '!**/{.git,node_modules,daemons,.worktrees}/**' <root>`
   then filter the file list — `rg` honors `.gitignore` and skips the expensive
-  directories by default.
+  directories by default. If `rg` is not installed, fall back to
+  `find <root> -type f -not -path '*/.git/*' -not -path '*/node_modules/*' ...`
+  (slower, but never silently fails).
 - Narrow the root, add `-maxdepth`, or raise `timeout` only when the tree is
   genuinely large and you have a reason to walk all of it.
 
