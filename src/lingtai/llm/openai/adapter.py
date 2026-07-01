@@ -56,6 +56,29 @@ _CODEX_RESPONSES_TRACE_FILE = "codex_responses_trace.jsonl"
 _AUTO_PROMPT_CACHE_KEY = object()
 
 
+def _is_codex_unverifiable_encrypted_content_error(exc: BaseException) -> bool:
+    """Return True for Codex 400s caused by stale encrypted reasoning blobs.
+
+    The ChatGPT Codex Responses endpoint may reject a replayed reasoning item
+    with messages like ``The encrypted content for item rs_... could not be
+    verified``.  That is a narrow history-state failure: the opaque encrypted
+    reasoning blob is no longer accepted, but the visible transcript can usually
+    continue if we fall back to summary/plain replay.
+    """
+
+    parts = [str(exc)]
+    for attr in ("message", "body"):
+        value = getattr(exc, attr, None)
+        if value is None:
+            continue
+        if isinstance(value, (dict, list)):
+            parts.append(json.dumps(value, default=str, ensure_ascii=False))
+        else:
+            parts.append(str(value))
+    text = "\n".join(parts).lower()
+    return "encrypted content" in text and "could not be verified" in text
+
+
 # Codex REST cache-affinity headers (issue #378). The official Codex client
 # sends ``session_id`` / ``thread_id`` headers on its
 # ``/backend-api/codex/responses`` calls; a probe showed they materially
@@ -3215,6 +3238,51 @@ class CodexResponsesSession(OpenAIResponsesSession):
     def adapter_comment(self):
         """Legacy compatibility hook; Codex adapter comments are disabled."""
         return None
+
+    def _strip_codex_encrypted_reasoning_items(self) -> int:
+        """Remove replay-only encrypted reasoning blobs from canonical history.
+
+        Codex encrypted reasoning items are opaque provider state.  When the
+        backend says one cannot be verified, replaying the same blobs will fail
+        forever (AED loops).  Keep the assistant transcript/tool calls intact and
+        preserve any summary text, but drop the raw encrypted replay anchors so
+        ``to_responses_input`` emits summary_text-only reasoning or omits empty
+        thought blocks.
+        """
+
+        stripped = 0
+        for entry in self._interface.entries:
+            if entry.role != "assistant":
+                continue
+            for block in entry.content:
+                if not isinstance(block, ThinkingBlock):
+                    continue
+                provider_data = block.provider_data
+                if not isinstance(provider_data, dict):
+                    continue
+                raw_item = provider_data.get("openai_responses_reasoning_item")
+                encrypted_content = (
+                    raw_item.get("encrypted_content")
+                    if isinstance(raw_item, dict)
+                    else None
+                )
+                if not (
+                    isinstance(raw_item, dict)
+                    and raw_item.get("type") == "reasoning"
+                    and isinstance(encrypted_content, str)
+                    and encrypted_content
+                    and encrypted_content != "<REDACTED:secret>"
+                ):
+                    continue
+                provider_data.pop("openai_responses_reasoning_item", None)
+                stripped += 1
+        if stripped:
+            # Baselines/previous_response_id chains may still contain the removed
+            # raw reasoning items.  Rebase the next request from sanitized local
+            # history instead of trying to continue the poisoned epoch.
+            self._reset_ws_epoch("encrypted_reasoning_self_heal")
+        return stripped
+
     def reset_provider_turn_state(self) -> None:
         self.reset_ws_turn()
 
@@ -3488,42 +3556,88 @@ class CodexResponsesSession(OpenAIResponsesSession):
                     stream = self._client.responses.create(**kwargs)
                 except Exception as exc:
                     if not (previous_response_id or request_store):
-                        # No continuation was in flight (first full turn): a real
-                        # error, not a recoverable incremental rejection.
-                        if rest_continuation:
-                            self._ws_session.last_request = rest_prev_last_request
-                            self._ws_session.last_response = rest_prev_last_response
-                            self._ws_pending_baseline_input = None
-                        raise
-                    fallback_error_type = type(exc).__name__
-                    fallback_error_message = str(exc)
-                    logger.info(
-                        "Codex incremental Responses request failed; falling back to full replay store=false: %s: %s",
-                        fallback_error_type,
-                        fallback_error_message[:240],
-                    )
-                    # Safe fallback for any future REST stateful variant that
-                    # carries continuation state on the wire: re-send the FULL input
-                    # with no ``previous_response_id`` and ``store=false``. Current
-                    # REST incremental is already a full-input/cache-epoch request,
-                    # so ordinary REST errors are allowed to surface instead of being
-                    # hidden by an identical retry. The reason rides into the token
-                    # ledger via ``codex_fallback_error_type`` / ``codex_request_mode``.
-                    fallback_kwargs = dict(kwargs)
-                    fallback_kwargs["input"] = full_replay_input_items
-                    fallback_kwargs["store"] = False
-                    fallback_kwargs.pop("previous_response_id", None)
-                    request_mode = "rest_full_fallback" if self._transport == "rest" else "stateless_full_fallback"
-                    previous_response_id = None
-                    request_store = False
-                    if rest_continuation:
-                        # Re-park the baseline against the FULL request we actually
-                        # sent, so the next turn can still chain off this full turn.
-                        self._ws_session.last_request = self._ws_frame_request(
-                            fallback_kwargs, full_replay_input_items
+                        # No continuation was in flight (first full turn): usually a
+                        # real error, not a recoverable incremental rejection.  The
+                        # Codex encrypted-reasoning verifier is the narrow exception:
+                        # a stale opaque reasoning blob can brick every replay until
+                        # it is removed from local history, while visible transcript
+                        # text/tool calls remain valid.
+                        if _is_codex_unverifiable_encrypted_content_error(exc):
+                            stripped_reasoning_items = self._strip_codex_encrypted_reasoning_items()
+                            if stripped_reasoning_items:
+                                fallback_error_type = type(exc).__name__
+                                fallback_error_message = str(exc)
+                                logger.info(
+                                    "Codex encrypted reasoning replay failed; stripped %s raw reasoning item(s) and retrying full replay",
+                                    stripped_reasoning_items,
+                                )
+                                retry_full_replay_input_items = self._frozen_responses_input(
+                                    self._interface
+                                )
+                                retry_full_replay_input_items.extend(prebuilt_items)
+                                retry_kwargs = dict(kwargs)
+                                retry_kwargs["input"] = retry_full_replay_input_items
+                                retry_kwargs["store"] = False
+                                retry_kwargs.pop("previous_response_id", None)
+                                request_mode = (
+                                    "rest_full_self_heal"
+                                    if self._transport == "rest"
+                                    else "stateless_full_self_heal"
+                                )
+                                previous_response_id = None
+                                request_store = False
+                                full_replay_input_items = retry_full_replay_input_items
+                                if rest_continuation:
+                                    self._ws_session.last_request = self._ws_frame_request(
+                                        retry_kwargs, retry_full_replay_input_items
+                                    )
+                                    self._ws_pending_baseline_input = list(
+                                        retry_full_replay_input_items
+                                    )
+                                    continuation_turn_recorded = True
+                                stream = self._client.responses.create(**retry_kwargs)
+                            else:
+                                if rest_continuation:
+                                    self._ws_session.last_request = rest_prev_last_request
+                                    self._ws_session.last_response = rest_prev_last_response
+                                    self._ws_pending_baseline_input = None
+                                raise
+                        else:
+                            if rest_continuation:
+                                self._ws_session.last_request = rest_prev_last_request
+                                self._ws_session.last_response = rest_prev_last_response
+                                self._ws_pending_baseline_input = None
+                            raise
+                    else:
+                        fallback_error_type = type(exc).__name__
+                        fallback_error_message = str(exc)
+                        logger.info(
+                            "Codex incremental Responses request failed; falling back to full replay store=false: %s: %s",
+                            fallback_error_type,
+                            fallback_error_message[:240],
                         )
-                        self._ws_pending_baseline_input = list(full_replay_input_items)
-                    stream = self._client.responses.create(**fallback_kwargs)
+                        # Safe fallback for any future REST stateful variant that
+                        # carries continuation state on the wire: re-send the FULL input
+                        # with no ``previous_response_id`` and ``store=false``. Current
+                        # REST incremental is already a full-input/cache-epoch request,
+                        # so ordinary REST errors are allowed to surface instead of being
+                        # hidden by an identical retry. The reason rides into the token
+                        # ledger via ``codex_fallback_error_type`` / ``codex_request_mode``.
+                        fallback_kwargs = dict(kwargs)
+                        fallback_kwargs["input"] = full_replay_input_items
+                        fallback_kwargs["store"] = False
+                        fallback_kwargs.pop("previous_response_id", None)
+                        request_mode = "rest_full_fallback" if self._transport == "rest" else "stateless_full_fallback"
+                        previous_response_id = None
+                        request_store = False
+                        if rest_continuation:
+                            # Re-park the baseline against the FULL request we actually
+                            # sent, so the next turn can still chain off this full turn.
+                            self._ws_session.last_request = self._ws_frame_request(
+                                fallback_kwargs, full_replay_input_items
+                            )
+                            self._ws_pending_baseline_input = list(full_replay_input_items)
+                        stream = self._client.responses.create(**fallback_kwargs)
             for event in stream:
                 thoughts_before = acc.thoughts
                 pending_thought_chars_before = len("".join(acc._thought_parts))

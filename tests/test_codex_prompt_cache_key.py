@@ -24,6 +24,7 @@ from lingtai.llm.openai.adapter import (
     _lingtai_user_agent,
 )
 from lingtai_kernel.llm.base import FunctionSchema
+from lingtai_kernel.llm.interface import TextBlock, ThinkingBlock
 
 
 # NOTE: these HTTP-path prompt-cache tests build Codex sessions WITHOUT an
@@ -56,6 +57,24 @@ class FakeResponses:
 class FakeClient:
     def __init__(self, events: list[Event]):
         self.responses = FakeResponses(events)
+
+
+class FailOnceResponses:
+    def __init__(self, events: list[Event], error: Exception):
+        self.events = events
+        self.error = error
+        self.kwargs: list[dict] = []
+
+    def create(self, **kwargs):
+        self.kwargs.append(kwargs)
+        if len(self.kwargs) == 1:
+            raise self.error
+        return iter(self.events)
+
+
+class FailOnceClient:
+    def __init__(self, events: list[Event], error: Exception):
+        self.responses = FailOnceResponses(events, error)
 
 
 def _usage() -> SimpleNamespace:
@@ -210,6 +229,78 @@ def test_codex_prompt_cache_key_is_stable_across_requests():
 
     keys = [kw["prompt_cache_key"] for kw in session._client.responses.kwargs]
     assert keys == ["lingtai-codex:gpt-5.5:v1", "lingtai-codex:gpt-5.5:v1"]
+
+
+def test_codex_self_heals_unverifiable_encrypted_reasoning_replay():
+    """A stale Codex encrypted reasoning blob is stripped and retried once.
+
+    The visible assistant transcript remains replayable: raw encrypted provider
+    state is removed, but the summary text survives as summary_text reasoning.
+    """
+
+    error = RuntimeError(
+        "Error code: 400 - {'error': {'message': 'The encrypted content for "
+        "item rs_bad could not be verified. Reason: Encrypted content could "
+        "not be decrypted.'}}"
+    )
+    session = CodexResponsesSession(
+        client=FailOnceClient([_completed()], error),
+        model="gpt-5.5",
+        instructions="system",
+        tools=None,
+        tool_choice=None,
+        extra_kwargs={},
+    )
+    session._interface.add_user_message("prior user")
+    session._interface.add_assistant_message(
+        [
+            ThinkingBlock(
+                text="safe summary",
+                provider_data={
+                    "openai_responses_reasoning_item": {
+                        "type": "reasoning",
+                        "id": "rs_bad",
+                        "summary": [{"type": "summary_text", "text": "safe summary"}],
+                        "encrypted_content": "opaque-broken-ciphertext",
+                    }
+                },
+            ),
+            TextBlock(text="visible answer"),
+        ],
+        model="gpt-5.5",
+        provider="codex",
+    )
+
+    response = session.send("continue")
+
+    assert len(session._client.responses.kwargs) == 2
+    first_input = session._client.responses.kwargs[0]["input"]
+    second_input = session._client.responses.kwargs[1]["input"]
+    assert any(
+        item.get("type") == "reasoning"
+        and item.get("encrypted_content") == "opaque-broken-ciphertext"
+        for item in first_input
+    )
+    assert not any(
+        item.get("type") == "reasoning" and "encrypted_content" in item
+        for item in second_input
+    )
+    assert any(
+        item.get("type") == "reasoning"
+        and item.get("summary") == [{"type": "summary_text", "text": "safe summary"}]
+        for item in second_input
+    )
+    assert any(
+        item.get("role") == "assistant" and item.get("content") == "visible answer"
+        for item in second_input
+    )
+    prior_assistant = [e for e in session._interface.entries if e.role == "assistant"][0]
+    prior_thinking = next(
+        block for block in prior_assistant.content if isinstance(block, ThinkingBlock)
+    )
+    assert "openai_responses_reasoning_item" not in prior_thinking.provider_data
+    assert response.usage.extra["codex_request_mode"] == "rest_full_self_heal"
+    assert response.usage.extra["codex_fallback_error_type"] == "RuntimeError"
 
 
 def test_lone_prompt_cache_key_stays_body_only_no_headers():
