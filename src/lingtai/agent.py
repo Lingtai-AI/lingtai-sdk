@@ -769,6 +769,26 @@ class Agent(BaseAgent):
         self._mcp_inbox_poller = MCPInboxPoller(self)
         self._mcp_inbox_poller.start()
 
+    def _expand_agent_placeholders(self, value):
+        """Substitute per-agent placeholders in an MCP launch string.
+
+        Lets a single shared MCP registry template scope each agent to its own
+        namespace without per-agent hand-editing — e.g. a NoKV workbench root
+        ``--workbench-root /agents/{agent_id}/wb``. ``{agent_id}`` and
+        ``{agent_address}`` resolve to the agent's stable working-dir name (its
+        address); ``{agent_dir}`` resolves to the absolute working directory.
+        Non-string values and strings without a placeholder pass through
+        unchanged, so ordinary MCP args are never touched.
+        """
+        if not isinstance(value, str) or "{" not in value:
+            return value
+        agent_id = self._working_dir.name
+        return (
+            value.replace("{agent_id}", agent_id)
+            .replace("{agent_address}", agent_id)
+            .replace("{agent_dir}", str(self._working_dir))
+        )
+
     def connect_mcp(
         self,
         command: str,
@@ -786,6 +806,14 @@ class Agent(BaseAgent):
             List of registered tool names.
         """
         from .services.mcp import MCPClient
+
+        # Expand per-agent placeholders (e.g. {agent_id}) so a shared registry
+        # template gives each agent its own scope. See _expand_agent_placeholders.
+        command = self._expand_agent_placeholders(command)
+        if args:
+            args = [self._expand_agent_placeholders(a) for a in args]
+        if env:
+            env = {k: self._expand_agent_placeholders(v) for k, v in env.items()}
 
         client = MCPClient(command=command, args=args, env=env)
         client.start()

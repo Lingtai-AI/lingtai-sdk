@@ -145,8 +145,8 @@ def test_skills_setup_hard_copies_intrinsics(tmp_path):
         assert nokv_md.is_file()
         nokv_body = nokv_md.read_text(encoding="utf-8")
         assert "name: nokv-workbench" in nokv_body
-        assert "nokv_workbench_find" in nokv_body
-        assert "nokv_workbench_commit" in nokv_body
+        assert "workbench_find" in nokv_body
+        assert "workbench_commit" in nokv_body
         assert "metadata/run_manifest.json" in nokv_body
         assert (
             nokv_md.parent / "assets" / "mcp_registry.example.jsonl"

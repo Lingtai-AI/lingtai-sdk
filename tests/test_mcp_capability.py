@@ -151,11 +151,17 @@ def test_nokv_workbench_registry_example_is_valid():
     assert record["name"] == "nokv-workbench"
     assert record["transport"] == "stdio"
     assert record["args"] == [
+        "--server-bind",
+        "127.0.0.1:7777",
+        "--object-backend",
+        "rustfs",
+        "--s3-bucket",
+        "nokv-lingtai-workbench",
         "mcp",
         "--profile",
         "workbench",
         "--workbench-root",
-        "/workbenches",
+        "/agents/{agent_id}/wb",
     ]
 
     init = json.loads(init_path.read_text(encoding="utf-8"))
@@ -163,6 +169,20 @@ def test_nokv_workbench_registry_example_is_valid():
     assert spec["type"] == "stdio"
     assert spec["command"] == record["command"]
     assert spec["args"] == record["args"]
+
+
+def test_expand_agent_placeholders_scopes_workbench_root(tmp_path):
+    # Per-agent root injection: a shared registry template resolves to a root
+    # unique to each agent, so agents cannot address each other's workbenches.
+    agent, workdir = _mk_agent(tmp_path)  # workdir.name == "agent"
+    assert agent._expand_agent_placeholders("/agents/{agent_id}/wb") == "/agents/agent/wb"
+    # {agent_address} is an alias for the stable working-dir name.
+    assert agent._expand_agent_placeholders("/agents/{agent_address}/wb") == "/agents/agent/wb"
+    # {agent_dir} expands to the absolute working directory.
+    assert agent._expand_agent_placeholders("{agent_dir}/x") == f"{workdir}/x"
+    # Strings without a placeholder and non-strings pass through untouched.
+    assert agent._expand_agent_placeholders("--profile") == "--profile"
+    assert agent._expand_agent_placeholders(None) is None
 
 
 # ---------------------------------------------------------------------------
