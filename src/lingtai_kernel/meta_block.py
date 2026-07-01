@@ -288,7 +288,6 @@ def dynamic_adapter_comment(agent: AgentState) -> Mapping[str, Any] | None:
         try:
             comment = comment_fn()
         except Exception:
-            logger.debug("llm_dynamic_adapter_comment_failed", exc_info=True)
             comment = None
         if comment:
             if not isinstance(comment, Mapping):
