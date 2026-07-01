@@ -308,7 +308,19 @@ class WorkingDir:
             )
 
             gitignore = self._path / ".gitignore"
-            gitignore.write_text("")
+            # Exclude secrets and transient lifecycle files from git tracking.
+            # Without this, snapshot()'s `git add -A` would commit .secrets/
+            # (MCP addon credentials such as bot tokens) to git history.
+            gitignore.write_text(
+                "# Secrets — MCP addon credentials (bot tokens, API keys)\n"
+                ".secrets/\n"
+                "\n"
+                "# Transient lifecycle signal files\n"
+                ".sleep\n"
+                ".suspend\n"
+                ".agent.heartbeat\n"
+                ".timemachine.pid\n"
+            )
 
             system_dir = self._path / "system"
             system_dir.mkdir(exist_ok=True)
