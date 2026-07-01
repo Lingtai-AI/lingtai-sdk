@@ -101,6 +101,8 @@ class _Agent:
         self._chat = _Chat()
         self.agent_name = "rt-agent"
         self._notification_live_holder = None
+        self._notification_fp = ()
+        self._notification_payload_signature = None
         self._runtime_live_holder = None
         self._intrinsics = {}
         self._working_dir = tmp_path
@@ -225,3 +227,69 @@ def test_material_change_reattaches_and_strips_prior(tmp_path):
     # The previous holder sheds its agent_meta/guidance now that a newer live
     # holder carries the changed snapshot.
     assert "_meta" not in first_holder or "agent_meta" not in first_holder["_meta"]
+
+
+# ---------------------------------------------------------------------------
+# Sparse / update-driven notifications at the turn boundary.  Mirrors the
+# agent_meta sparse invariant above but for ``_meta.notifications``: an
+# unchanged notification payload is NOT chased onto every newest ordinary tool
+# result; a material change re-attaches it and strips the prior holder.
+# ---------------------------------------------------------------------------
+
+
+def _write_email_notif(tmp_path: Path, *, digest: str = "Email preview line") -> None:
+    notif_dir = tmp_path / ".notification"
+    notif_dir.mkdir(parents=True, exist_ok=True)
+    (notif_dir / "email.json").write_text(
+        '{"header": "1 unread", "icon": "M", "priority": "normal", '
+        '"data": {"digest": "' + digest + '"}}'
+    )
+
+
+def test_notification_unchanged_not_restamped_on_newer_result_at_boundary(tmp_path):
+    _write_email_notif(tmp_path)
+    agent = _Agent(tmp_path, [_stamped("T1"), _stamped("T2")])
+
+    _process_response(
+        agent,
+        LLMResponse(text="", tool_calls=[ToolCall(id="call_1", name="bash", args={"c": "x"})]),
+        ledger_source="test",
+    )
+    first_holder = agent._notification_live_holder
+    assert first_holder is not None
+    assert "notifications" in first_holder["_meta"]
+
+    _second_batch(agent)
+
+    # Sparse: the notification holder did not move; the newer ordinary result
+    # carries no notification payload, and the prior holder keeps it.
+    assert agent._notification_live_holder is first_holder
+    assert "notifications" in first_holder["_meta"]
+    second_result = agent._chat.committed[-1][0].content
+    assert "notifications" not in second_result.get("_meta", {})
+
+
+def test_notification_material_change_reattaches_at_boundary(tmp_path):
+    _write_email_notif(tmp_path)
+    agent = _Agent(tmp_path, [_stamped("T1"), _stamped("T2")])
+
+    _process_response(
+        agent,
+        LLMResponse(text="", tool_calls=[ToolCall(id="call_1", name="bash", args={"c": "x"})]),
+        ledger_source="test",
+    )
+    first_holder = agent._notification_live_holder
+    assert "notifications" in first_holder["_meta"]
+
+    # Materially change the notification payload before the second batch.
+    _write_email_notif(tmp_path, digest="Three new emails")
+
+    _second_batch(agent)
+
+    new_holder = agent._notification_live_holder
+    assert new_holder is not first_holder
+    assert new_holder["_meta"]["notifications"]["email"]["data"] == {
+        "digest": "Three new emails"
+    }
+    # The previous holder sheds its notification payload.
+    assert "_meta" not in first_holder or "notifications" not in first_holder["_meta"]

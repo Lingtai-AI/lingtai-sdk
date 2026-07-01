@@ -22,15 +22,21 @@ the result dict:
   adapter runtime rules now live.  The full ordered appendix is no longer
   re-stamped on every tail result.  It rides with ``agent_meta`` and is
   attached/moved on the same sparse update cadence.
-- ``_meta.notifications`` / ``_meta.notification_guidance`` — latest-result-only
-  channel-owned notification payloads plus kernel safety framing.
+- ``_meta.notifications`` / ``_meta.notification_guidance`` — SPARSE /
+  update-driven channel-owned notification payloads plus kernel safety framing.
+  Attached on first appearance and re-attached only when the notification
+  payload *materially* changes (or on a deliberate ``notification(action=check)``
+  read) — NOT re-stamped onto every newest tool result when unchanged.  The
+  prior holder keeps the payload as the current-state carrier between updates.
 
 Channel encoding:
 - Tool-result channel: ``stamp_meta`` records a per-tool runtime snapshot,
   which ``attach_active_runtime`` promotes into ``_meta.agent_meta`` plus
   ``_meta.guidance`` — but only when the material snapshot changed since the
   last emitted one (sparse; on no change nothing is attached/moved and the prior
-  holder keeps its snapshot).
+  holder keeps its snapshot).  ``attach_active_notifications`` promotes the
+  channel-owned notification payload into ``_meta.notifications`` /
+  ``_meta.notification_guidance`` on the same sparse/update-driven cadence.
 - Text-input channel: `render_meta` formats the same dict into a prose
   prefix line. Inbox content is NOT rendered here — it lives in the
   user-turn body, drained by ``_concat_queued_messages`` upstream.
@@ -64,7 +70,7 @@ from .time_veil import now_iso
 #   * ``guidance``             — sparse/update-driven kernel guidance ref
 #                                (rides with agent_meta)
 #   * ``notifications`` +
-#     ``notification_guidance``— latest-result-only channel payloads
+#     ``notification_guidance``— sparse/update-driven channel payloads
 # ---------------------------------------------------------------------------
 META_ENVELOPE_KEY = "_meta"
 TOOL_META_KEY = "tool_meta"
@@ -404,8 +410,8 @@ def _meta_block(result: dict) -> dict:
     """Return ``result["_meta"]``, creating an empty dict if absent.
 
     Centralizes the envelope so the per-result ``tool_meta`` writer and the
-    sparse ``agent_meta``/``guidance`` updater and latest-only notification
-    mover all share one container.
+    sparse ``agent_meta``/``guidance`` updater and the sparse/update-driven
+    notification mover all share one container.
     """
     meta = result.get(META_ENVELOPE_KEY)
     if not isinstance(meta, dict):
@@ -421,8 +427,8 @@ def build_meta_readme() -> dict:
     system-prompt section (via :func:`build_meta_guidance`), not stamped onto
     every tool result; the tail ``_meta.guidance`` carries only a lightweight
     ref back to that section.  Each entry states what the block is for and
-    whether it is per-result or latest-only — no policy, just structural
-    orientation.
+    whether it is per-result, sparse/update-driven, or current-state — no policy,
+    just structural orientation.
     """
     return {
         TOOL_META_KEY: (
@@ -493,12 +499,21 @@ def build_meta_readme() -> dict:
             "guidance body."
         ),
         NOTIFICATION_GUIDANCE_KEY: (
-            "Kernel safety framing for channel notification handling. Latest "
-            "tool result only."
+            "Kernel safety framing for channel notification handling. Rides with "
+            "notifications on the same sparse/update-driven cadence (attached only "
+            "when notifications is (re)attached)."
         ),
         NOTIFICATIONS_KEY: (
             "Channel notification payloads. Static safety framing lives under "
-            "notification_guidance/meta_guidance; per-channel duplicate guidance is omitted. Latest tool result only; channel-owned. "
+            "notification_guidance/meta_guidance; per-channel duplicate guidance is omitted. "
+            "SPARSE / update-driven and channel-owned: attached on first "
+            "appearance and re-attached only when the notification payload "
+            "MATERIALLY changes (or on a deliberate notification(action=check) "
+            "read) — NOT re-stamped onto the newest tool result merely because "
+            "that result is the latest when the payload is unchanged. The most "
+            "recent notifications may therefore sit on an EARLIER result than the "
+            "newest one; scan backward for the last-emitted payload and read it "
+            "as the current channel state. "
             "Not part of the formal tool-result payload; do not summarize "
             "notification contents as the result body."
         ),
@@ -612,7 +627,7 @@ TOKEN_USAGE_GUIDANCE_REF = (
 
 
 def build_meta_guidance_ref() -> dict:
-    """Return the lightweight ``_meta.guidance`` hook for the latest tool result."""
+    """Return the lightweight ``_meta.guidance`` hook for a sparse runtime block."""
     return {"ref": META_GUIDANCE_SECTION_ID}
 
 def _render_guidance_sections_markdown(guidance: dict) -> list[str]:
@@ -655,11 +670,11 @@ def build_meta_guidance(agent) -> str:
       * the runtime guidance sections from the Markdown guidance catalog (e.g.
         summarize/molt best practice);
       * the ``_meta`` envelope readme (which blocks exist and whether each is
-        per-result or latest-only);
+        per-result, sparse/update-driven, or current-state);
       * the active adapter's *static* runtime rules (from
         :func:`static_adapter_comment`), if any.
 
-    Dynamic per-result state (tool_meta, latest context/molt hints,
+    Dynamic per-result / sparse state (tool_meta, current context/molt hints,
     notifications, current_tool_result_chars, adapter epoch counters, cache
     ledger summary, …) is deliberately NOT rendered here — it stays in the tail
     ``_meta`` so this section can remain a stable, cache-friendly prefix.
@@ -828,8 +843,8 @@ def build_reconstruction_tool_meta(agent) -> dict | None:
     """Build the one-shot delayed-summarize reconstruction event (channel A).
 
     Permanent per-result evidence, destined for ``_meta.tool_meta.reconstruction``.
-    Distinct from :func:`build_molt_context` (channel B, latest-only current
-    state): this records a *historical event* — the runtime actually rebuilt the
+    Distinct from :func:`build_molt_context` (channel B, current-state reminder
+    inside sparse ``agent_meta``): this records a *historical event* — the runtime actually rebuilt the
     provider context around the compacted history when context crossed the 0.75
     reconstruction threshold.
 
@@ -1174,18 +1189,20 @@ def build_meta(agent) -> dict:
         meta["adapter_comment"] = slim_adapter_comment_for_tail(comment)
 
     # Notifications are deliberately NOT included here. Active-state
-    # notification payload is a moving single-slot block that lives on the
-    # latest tool-call result only — see ``attach_active_notifications``.
-    # Putting it in ``build_meta`` would stamp it onto every tool result
-    # and accumulate forever in history. The IDLE-state synthesized
-    # notification pair and the ACTIVE-state tool-result holder both use the
-    # same canonical ``notifications`` payload shape instead.
+    # notification payload is a moving single-slot block attached SPARSELY /
+    # update-driven — on first appearance and re-attached only on a material
+    # change (or a deliberate notification(action=check) read) — by
+    # ``attach_active_notifications`` at the tool-batch boundary.  Putting it in
+    # ``build_meta`` would stamp it onto every tool result and accumulate
+    # forever in history. The IDLE-state synthesized notification pair and the
+    # ACTIVE-state tool-result holder both use the same canonical
+    # ``notifications`` payload shape instead.
 
     return meta
 
 
 # ---------------------------------------------------------------------------
-# Active-state notification stamping — moving canonical payload, latest result only.
+# Active-state notification stamping — sparse/update-driven canonical payload.
 # ---------------------------------------------------------------------------
 
 
@@ -1292,7 +1309,7 @@ def build_synthetic_meta_envelope(
 
 
 def _collect_active_notifications_payload(agent) -> dict | None:
-    """Return the canonical notification payload for the latest tool result.
+    """Return the canonical active notification payload.
 
     Reads ``.notification/*.json`` via :func:`collect_notifications` and wraps
     it with the same guidance fields used by the synthesized notification pair.
@@ -1398,31 +1415,106 @@ def clear_active_notification_holder(agent) -> None:
     skeletonize_notification_holder(agent)
 
 
+def notification_payload_signature(payload: Mapping[str, Any] | None) -> str:
+    """Return a stable signature of the *material* notification payload.
+
+    ``_meta.notifications`` is **sparse / update-driven** (mirrors the #618
+    ``agent_meta`` cadence): while notifications stay active but their material
+    content is unchanged, the payload is NOT chased onto every newest tool
+    result — the prior holder keeps it.  This signature is the change detector
+    used by :func:`attach_active_notifications`.
+
+    The whole ``build_notification_payload`` output is signed — the per-channel
+    ``notifications`` payloads *and* the ``notification_guidance`` (whose
+    ``sources`` list changes when a channel appears or disappears).  A channel
+    coming or going is a material change worth re-surfacing, so signing the full
+    payload is the least-surprising definition.  Unlike ``agent_meta`` there is
+    no volatile per-batch bookkeeping to exclude: the payload is channel-owned
+    current state, so every field is material.
+    """
+    try:
+        return _json.dumps(payload or {}, ensure_ascii=False, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        return str(sorted((payload or {}).items()))
+
+
+def _is_notification_check_placeholder(content) -> bool:
+    """Return True when ``content`` is a voluntary ``notification(action=check)``
+    placeholder result.
+
+    The ``notification`` intrinsic's ``check`` action returns a dict carrying
+    ``_notification_placeholder: True`` (see
+    ``intrinsics/notification/__init__._check``).  A deliberate check is a read
+    request: its result must receive the current notification payload even when
+    the payload is materially unchanged, so the sparse change-gate is bypassed
+    when the target is such a placeholder.  The IDLE/ASLEEP synthesized pair
+    also carries this key but is built by ``_inject_notification_pair`` on its
+    own fingerprint-gated path and never reaches here.
+    """
+    return isinstance(content, dict) and content.get("_notification_placeholder") is True
+
+
+def _commit_notification_fp(agent) -> None:
+    """Commit the current filesystem notification fingerprint onto the agent.
+
+    Best-effort: a fingerprint failure must never break the caller.  Committing
+    ``_notification_fp`` is the bridge that stops the IDLE-path synthesized pair
+    from re-delivering state already represented by a tool-result holder — so
+    even an unchanged / equivalently-rewritten payload commits it, preventing a
+    forever-retry against the IDLE sync path.
+    """
+    try:
+        from pathlib import Path
+        from .notifications import notification_fingerprint
+
+        working_dir = getattr(agent, "_working_dir", None)
+        if working_dir is not None and hasattr(agent, "_notification_fp"):
+            agent._notification_fp = notification_fingerprint(Path(working_dir))
+    except Exception:
+        pass
+
+
 def attach_active_notifications(
     agent,
     tool_results: list,
     *,
     prior_holder: dict | None = None,
 ) -> dict | None:
-    """Move the canonical notification payload to the latest tool result only.
+    """Attach the canonical notification payload — sparsely / update-driven.
+
+    ``_meta.notifications`` is **sparse / update-driven**, not
+    latest-result-only: while notifications stay active but their *material*
+    payload is unchanged (tracked by ``agent._notification_payload_signature``
+    via :func:`notification_payload_signature`), the payload is NOT moved onto
+    the newest tool result merely because that result is the latest.  The prior
+    holder keeps its payload as the current-state carrier, and ordinary
+    unrelated tool results do not restamp it.  Mirrors the #618
+    :func:`attach_active_runtime` change-gate, preserving notification
+    semantics (channel-owned current state, just update-driven rather than
+    newest-result-only).
 
     Contract:
-        * Skeletonize ``prior_holder`` if it exists — for a normal tool
-          result dict this strips notification payload keys; for a synthesized
-          pair's content dict this replaces all content with the skeleton
-          placeholder.  Either way the prior holder is cleared from
-          ``agent._notification_live_holder`` before the new holder is
-          registered.
-        * If active notifications exist, stamp the same ``notifications`` +
-          ``notification_guidance`` payload shape used by the synthesized
-          notification pair under ``_meta`` on the latest dict-shaped tool
-          result, commit the
-          current filesystem fingerprint onto ``agent._notification_fp`` so the
-          IDLE-path synthesized pair will not later re-deliver the same
-          unchanged state, and return that dict as the new holder.
-        * If there are no active notifications, no stamping happens,
-          ``_notification_fp`` is left untouched, and ``None`` is returned
-          (callers should also clear their holder).
+        * When there are no active notifications, no stamping happens,
+          ``_notification_fp`` is left untouched, ``prior_holder`` (if any) is
+          skeletonized, ``_notification_payload_signature`` is reset to ``None``
+          (so a later reappearance of the same payload attaches afresh as the
+          first active payload), and ``None`` is returned.
+        * When active notifications exist but this batch has no dict-shaped
+          result to receive them, the prior holder is kept intact,
+          ``_notification_fp`` is left uncommitted, and ``prior_holder`` is
+          returned — the state can still be delivered later.
+        * When the payload's material signature is UNCHANGED and the target is
+          an ordinary tool result, the payload is NOT moved/restamped and the
+          prior holder is NOT skeletonized; ``prior_holder`` is returned.  The
+          fingerprint is still committed so equivalent rewrites / same-material
+          payloads do not retry forever against the IDLE synthesized pair.
+        * When the payload materially CHANGED, or the target is a deliberate
+          ``notification(action="check")`` placeholder (a read request that must
+          always receive the current payload), the prior holder is skeletonized,
+          the same ``notifications`` + ``notification_guidance`` payload shape
+          used by the synthesized notification pair is stamped under ``_meta`` on
+          the latest dict-shaped result, the fingerprint is committed, the new
+          signature is recorded, and that dict is returned as the new holder.
 
     ``post-molt`` is intentionally not special-cased here.  The dangerous race
     is narrower: the ``psyche.molt`` tool call writes ``post-molt.json`` before
@@ -1446,9 +1538,15 @@ def attach_active_notifications(
     if not payload:
         # Underlying notification files are gone/empty. The prior holder is
         # now stale, so skeletonize it and report that no live holder remains.
+        # Reset the sparse signature so a later reappearance of the same payload
+        # attaches again as the first active payload.
         if prior_holder is not None:
             agent._notification_live_holder = prior_holder
             skeletonize_notification_holder(agent)
+        try:
+            agent._notification_payload_signature = None
+        except Exception:
+            pass
         return None
 
     target = _last_dict_result(tool_results)
@@ -1460,8 +1558,26 @@ def attach_active_notifications(
         # the IDLE synthesized-pair path.
         return prior_holder
 
-    # We have both live notifications and a new target. Only now is it safe
-    # to strip/skeletonize the previous holder.
+    # Sparse gate: attach/move only when the payload materially changed since the
+    # last emitted one, OR the target is a deliberate notification(action=check)
+    # read (which must always receive the current payload).
+    signature = notification_payload_signature(payload)
+    is_check_read = _is_notification_check_placeholder(target)
+    unchanged = signature == getattr(agent, "_notification_payload_signature", None)
+
+    if unchanged and not is_check_read and prior_holder is not None:
+        # No material change on an ordinary batch with an existing holder: do
+        # not move/restamp and do not skeletonize the prior holder — it keeps
+        # the payload as the current-state carrier.  Still commit the
+        # fingerprint so equivalent rewrites / same-material payloads do not
+        # retry forever against the IDLE-path synthesized pair.  If the holder
+        # has somehow been lost, fall through and reattach so the payload stays
+        # visible instead of committing an invisible state.
+        _commit_notification_fp(agent)
+        return prior_holder
+
+    # Material change (or deliberate check read). Only now is it safe to
+    # strip/skeletonize the previous holder.
     if prior_holder is not None:
         agent._notification_live_holder = prior_holder
         skeletonize_notification_holder(agent)
@@ -1472,19 +1588,16 @@ def attach_active_notifications(
     # Register this dict as the new live holder.
     agent._notification_live_holder = target
 
-    # Commit the fingerprint so the IDLE-path `_sync_notifications` will
-    # see fp == agent._notification_fp and skip the synthesized pair for
-    # this same unchanged state.  Best-effort: a fingerprint failure must
-    # not break the (already successful) stamping.
+    # Record the new signature so a subsequent unchanged batch is recognized.
     try:
-        from pathlib import Path
-        from .notifications import notification_fingerprint
-
-        working_dir = getattr(agent, "_working_dir", None)
-        if working_dir is not None and hasattr(agent, "_notification_fp"):
-            agent._notification_fp = notification_fingerprint(Path(working_dir))
+        agent._notification_payload_signature = signature
     except Exception:
         pass
+
+    # Commit the fingerprint so the IDLE-path `_sync_notifications` will
+    # see fp == agent._notification_fp and skip the synthesized pair for
+    # this same unchanged state.
+    _commit_notification_fp(agent)
 
     return target
 
@@ -1749,9 +1862,9 @@ def attach_active_runtime(
         # point; do not re-stamp the tail.
         return prior_holder
 
-    # Material change: the prior *live* holder sheds its latest-only blocks so at
-    # most one live holder carries them, then the new target receives agent_meta
-    # plus the lightweight guidance ref.
+    # Material change: the prior *live* holder sheds its sparse runtime blocks so
+    # at most one live holder carries them, then the new target receives
+    # agent_meta plus the lightweight guidance ref.
     if prior_holder is not None:
         _strip_agent_meta_and_guidance(prior_holder)
 

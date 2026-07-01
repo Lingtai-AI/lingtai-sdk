@@ -519,7 +519,19 @@ class BaseAgent:
         # never accumulates stale notification data across results.
         # See `meta_block.skeletonize_notification_holder` and
         # `meta_block.attach_active_notifications`.
+        #
+        # The notification payload is SPARSE / update-driven (mirrors the #618
+        # `agent_meta` cadence), not latest-result-only: while notifications stay
+        # active but their material content is unchanged, the payload is NOT
+        # chased onto every newest tool result — the prior holder keeps it.  It
+        # only moves/re-stamps when the notification payload materially changes,
+        # or when the target is a deliberate `notification(action="check")` read.
         self._notification_live_holder: dict | None = None
+        # Material signature of the last emitted `_meta.notifications` payload;
+        # the change gate for the sparse notification attach above.  ``None``
+        # until the first active payload, and reset to ``None`` whenever
+        # notifications go empty so a later reappearance attaches afresh.
+        self._notification_payload_signature: str | None = None
 
         # Provider-visible tool result currently carrying the live `_meta.agent_meta`
         # / `_meta.guidance` blocks (kernel runtime state + guidance ref).
@@ -1465,7 +1477,7 @@ class BaseAgent:
         call_id = f"notif_{int(time.time()*1000):x}_{secrets.token_hex(2)}"
 
         # Meta freshness fields — same build_meta current-state hints real tool
-        # results use for latest-only runtime state, embedded in BOTH call.args
+        # results use for runtime state snapshots, embedded in BOTH call.args
         # and result.content so every synthesized pair tokenizes
         # uniquely even when the notification payload repeats. The monotonic
         # injection_seq is added on top to guarantee novelty within the same

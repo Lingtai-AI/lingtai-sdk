@@ -1367,7 +1367,10 @@ def test_reconstruction_tool_meta_is_one_shot():
 
 
 # ---------------------------------------------------------------------------
-# attach_active_notifications — moving single-slot, latest-result-only stamping.
+# attach_active_notifications — moving single-slot, SPARSE / update-driven
+# stamping.  The payload attaches on first appearance and re-attaches only when
+# it materially changes (or on a deliberate notification(action=check) read);
+# an unchanged payload is NOT chased onto every newest ordinary tool result.
 # ---------------------------------------------------------------------------
 
 
@@ -1375,8 +1378,16 @@ def _notif_agent(working_dir):
     """Minimal agent stand-in. ``attach_active_notifications`` reads
     ``agent._working_dir`` and, on successful stamping, commits the
     current notification fingerprint to ``agent._notification_fp`` so
-    the IDLE-path synthesized pair does not re-deliver the same state."""
-    return SimpleNamespace(_working_dir=working_dir, _notification_fp=())
+    the IDLE-path synthesized pair does not re-deliver the same state.
+
+    ``_notification_payload_signature`` starts ``None`` (no payload emitted yet)
+    so the first active payload always attaches; the sparse change-gate in
+    ``attach_active_notifications`` updates it thereafter."""
+    return SimpleNamespace(
+        _working_dir=working_dir,
+        _notification_fp=(),
+        _notification_payload_signature=None,
+    )
 
 
 def _write_email_notif(tmp_path):
@@ -1388,14 +1399,15 @@ def _write_email_notif(tmp_path):
     )
 
 
-def test_attach_active_notifications_moves_to_latest_and_clears_prior(tmp_path):
+def test_attach_active_notifications_first_payload_attaches(tmp_path):
     from lingtai_kernel.notifications import notification_fingerprint
 
     _write_email_notif(tmp_path)
     agent = _notif_agent(tmp_path)
     assert agent._notification_fp == ()
 
-    # First batch: a single dict-shaped tool result, no prior holder.
+    # First batch: a single dict-shaped tool result, no prior holder.  The very
+    # first active payload always attaches (no prior signature to compare).
     first = ToolResultBlock(id="t1", name="x", content={"ok": True})
     holder = attach_active_notifications(agent, [first], prior_holder=None)
     assert holder is first.content
@@ -1415,23 +1427,180 @@ def test_attach_active_notifications_moves_to_latest_and_clears_prior(tmp_path):
         "sources": ["email"],
     }
     assert "notification_guidance" not in first.content["_meta"]["notifications"]["email"]
+    # The sparse change-gate recorded a non-null signature for this payload.
+    assert agent._notification_payload_signature is not None
     # Successful stamping must commit the fingerprint, so the IDLE-path
     # synthesized pair will treat this same state as already delivered.
     expected_fp = notification_fingerprint(tmp_path)
     assert expected_fp != ()
     assert agent._notification_fp == expected_fp
 
-    # Second batch: a new dict result. The old dict must shed the canonical
-    # notification payload; only the new dict carries it.
+
+def test_attach_active_notifications_unchanged_payload_not_restamped(tmp_path):
+    # Sparse contract: an UNCHANGED notification payload must NOT be chased onto
+    # a newer ordinary tool result merely because that result is the latest.
+    # The prior holder keeps the payload as the current-state carrier.
+    _write_email_notif(tmp_path)
+    agent = _notif_agent(tmp_path)
+
+    first = ToolResultBlock(id="t1", name="x", content={"ok": True})
+    holder = attach_active_notifications(agent, [first], prior_holder=None)
+    assert "notifications" in first.content["_meta"]
+
+    # Second batch: the notification files are unchanged.  An ordinary tool
+    # result must NOT receive the payload; the prior holder keeps it.
     second = ToolResultBlock(id="t2", name="x", content={"ok": False})
-    new_holder = attach_active_notifications(
-        agent, [second], prior_holder=holder
+    new_holder = attach_active_notifications(agent, [second], prior_holder=holder)
+
+    assert new_holder is holder
+    # Newer ordinary result carries no notification payload.
+    assert "_meta" not in second.content or "notifications" not in second.content["_meta"]
+    # Prior holder still carries it — it was NOT skeletonized.
+    assert "notifications" in first.content["_meta"]
+    assert first.content["_meta"]["notifications"]["email"]["data"] == {
+        "digest": "Email preview line"
+    }
+
+
+def test_attach_active_notifications_changed_payload_reattaches_and_strips_prior(tmp_path):
+    # When the notification payload materially changes, it re-attaches to the
+    # newest result and the prior holder sheds its now-stale payload.
+    from lingtai_kernel.notifications import notification_fingerprint
+
+    _write_email_notif(tmp_path)
+    agent = _notif_agent(tmp_path)
+
+    first = ToolResultBlock(id="t1", name="x", content={"ok": True})
+    holder = attach_active_notifications(agent, [first], prior_holder=None)
+    assert "notifications" in first.content["_meta"]
+    first_sig = agent._notification_payload_signature
+
+    # Materially change the email channel payload.
+    (tmp_path / ".notification" / "email.json").write_text(
+        '{"header": "3 unread", "icon": "📬", "priority": "normal", '
+        '"data": {"digest": "Three new emails"}}'
     )
+
+    second = ToolResultBlock(id="t2", name="x", content={"ok": False})
+    new_holder = attach_active_notifications(agent, [second], prior_holder=holder)
+
     assert new_holder is second.content
+    # The signature advanced with the material change.
+    assert agent._notification_payload_signature != first_sig
     # First holder shed its notification keys (and its now-empty _meta envelope).
     assert "_meta" not in first.content or "notifications" not in first.content["_meta"]
+    assert second.content["_meta"]["notifications"]["email"]["data"] == {
+        "digest": "Three new emails"
+    }
+    assert agent._notification_fp == notification_fingerprint(tmp_path)
+
+
+def test_attach_active_notifications_unchanged_commits_fp_to_avoid_retry(tmp_path):
+    # Even when an unchanged payload is not restamped, the fingerprint is
+    # committed so an equivalent rewrite / same-material payload does not retry
+    # forever against the IDLE-path synthesized pair.
+    from lingtai_kernel.notifications import notification_fingerprint
+
+    _write_email_notif(tmp_path)
+    agent = _notif_agent(tmp_path)
+
+    first = ToolResultBlock(id="t1", name="x", content={"ok": True})
+    holder = attach_active_notifications(agent, [first], prior_holder=None)
+
+    # Rewrite the same material payload (fingerprint changes: mtime/size may
+    # differ), but the canonical payload signature is identical.
+    (tmp_path / ".notification" / "email.json").write_text(
+        '{"header": "1 unread", "icon": "📬", "priority": "normal", '
+        '"data": {"digest": "Email preview line"}}'
+    )
+    agent._notification_fp = (("stale.json", 1, 1),)
+
+    second = ToolResultBlock(id="t2", name="x", content={"ok": False})
+    new_holder = attach_active_notifications(agent, [second], prior_holder=holder)
+
+    # Not restamped (unchanged material), but the fingerprint IS committed.
+    assert new_holder is holder
+    assert "_meta" not in second.content or "notifications" not in second.content["_meta"]
+    assert agent._notification_fp == notification_fingerprint(tmp_path)
+
+
+def test_attach_active_notifications_unchanged_signature_without_holder_reattaches(tmp_path):
+    # Defensive regression: if the signature says "unchanged" but the live
+    # holder was lost (e.g. after unusual recovery), do NOT commit an invisible
+    # notification state. Fall through and attach the payload to the target.
+    _write_email_notif(tmp_path)
+    agent = _notif_agent(tmp_path)
+
+    first = ToolResultBlock(id="t1", name="x", content={"ok": True})
+    holder = attach_active_notifications(agent, [first], prior_holder=None)
+    assert holder is first.content
+    assert "notifications" in first.content["_meta"]
+
+    # Simulate holder loss while the material signature remains recorded.
+    agent._notification_live_holder = None
+    second = ToolResultBlock(id="t2", name="x", content={"ok": False})
+    new_holder = attach_active_notifications(agent, [second], prior_holder=None)
+
+    assert new_holder is second.content
     assert "notifications" in second.content["_meta"]
-    assert second.content["_meta"]["notifications"]["email"]["data"] == {"digest": "Email preview line"}
+
+
+
+def test_attach_active_notifications_check_read_receives_unchanged_payload(tmp_path):
+    # A deliberate notification(action=check) placeholder result is a read
+    # request: it must receive the current payload even when unchanged.
+    _write_email_notif(tmp_path)
+    agent = _notif_agent(tmp_path)
+
+    # First, an ordinary batch establishes the holder + signature.
+    first = ToolResultBlock(id="t1", name="x", content={"ok": True})
+    holder = attach_active_notifications(agent, [first], prior_holder=None)
+    assert "notifications" in first.content["_meta"]
+
+    # Now the agent voluntarily calls notification(action=check): its result is
+    # the placeholder dict.  Even though the payload is unchanged, the check
+    # result must receive the payload (deliberate read) and become the holder.
+    check_result = ToolResultBlock(
+        id="t2",
+        name="notification",
+        content={"_notification_placeholder": True, "message": "voluntary check"},
+    )
+    new_holder = attach_active_notifications(agent, [check_result], prior_holder=holder)
+
+    assert new_holder is check_result.content
+    assert "notifications" in check_result.content["_meta"]
+    assert check_result.content["_meta"]["notifications"]["email"]["data"] == {
+        "digest": "Email preview line"
+    }
+    # The prior ordinary holder shed its payload when the check took over.
+    assert "_meta" not in first.content or "notifications" not in first.content["_meta"]
+
+
+def test_attach_active_notifications_empty_resets_signature_for_reappearance(tmp_path):
+    # When notifications go empty the signature resets to None, so a later
+    # reappearance of the SAME payload attaches again as the first active one.
+    _write_email_notif(tmp_path)
+    agent = _notif_agent(tmp_path)
+
+    first = ToolResultBlock(id="t1", name="x", content={"ok": True})
+    holder = attach_active_notifications(agent, [first], prior_holder=None)
+    assert agent._notification_payload_signature is not None
+
+    # Notifications cleared.
+    (tmp_path / ".notification" / "email.json").unlink()
+    empty_batch = ToolResultBlock(id="t2", name="x", content={"ok": False})
+    result = attach_active_notifications(agent, [empty_batch], prior_holder=holder)
+    assert result is None
+    assert agent._notification_payload_signature is None
+    # Prior holder shed its payload.
+    assert "_meta" not in first.content or "notifications" not in first.content["_meta"]
+
+    # Same payload reappears — must attach afresh (first-active semantics).
+    _write_email_notif(tmp_path)
+    third = ToolResultBlock(id="t3", name="x", content={"ok": True})
+    new_holder = attach_active_notifications(agent, [third], prior_holder=None)
+    assert new_holder is third.content
+    assert "notifications" in third.content["_meta"]
 
 
 def test_attach_active_notifications_uses_canonical_mcp_payload(tmp_path):

@@ -321,10 +321,11 @@ class ToolExecutor:
         """Attach the batch-scoped ACTIVE-turn progress *notice* when present.
 
         The running counter (``active_turn_tool_calls``) is intentionally NOT
-        written here: it is latest-only state and lives under
-        ``_meta.agent_meta.active_turn_tool_calls`` (stamped by
-        ``attach_active_runtime`` at the tool-batch boundary).  Repeating the
-        counter on every result left stale snapshots in history.
+        written here: it lives under the sparse/update-driven
+        ``_meta.agent_meta.active_turn_tool_calls`` snapshot (stamped by
+        ``attach_active_runtime`` at the tool-batch boundary when material
+        agent_meta changes).  Repeating the counter on every result left stale
+        snapshots in history.
 
         The ``active_turn_tool_call_notice`` is a transient soft self-check that
         the guard only emits when a notice interval is crossed and clears after
