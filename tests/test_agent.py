@@ -723,6 +723,16 @@ def test_base_agent_has_no_non_kernel_imports():
                   "services.tts", "services.image_gen", "services.transcription", "services.music_gen",
                   "capabilities", "addons", "agent"}
 
+    def _matches_non_kernel(module: str, nk: str) -> bool:
+        # Match on dotted-path segment boundaries, not raw substring, so a
+        # legitimately-kernel sibling like ``agent_session`` is not caught by the
+        # ``agent`` (wrapper ``lingtai.agent``) rule. ``services.mcp`` etc. still
+        # match as a contiguous run of full segments.
+        module_segs = module.split(".")
+        nk_segs = nk.split(".")
+        n = len(nk_segs)
+        return any(module_segs[i:i + n] == nk_segs for i in range(len(module_segs) - n + 1))
+
     for source_path in sources:
         source = source_path.read_text()
         tree = ast.parse(source)
@@ -730,4 +740,6 @@ def test_base_agent_has_no_non_kernel_imports():
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 if isinstance(node, ast.ImportFrom) and node.module:
                     for nk in non_kernel:
-                        assert nk not in node.module, f"{source_path.name} imports from non-kernel: {node.module}"
+                        assert not _matches_non_kernel(node.module, nk), (
+                            f"{source_path.name} imports from non-kernel: {node.module}"
+                        )

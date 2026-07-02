@@ -1923,6 +1923,48 @@ class BaseAgent:
         """
         return self.get_runtime_session_token_usage()
 
+    def runtime_session(self):
+        """Return the current RUNTIME-SESSION object (live lifecycle segment).
+
+        No id; a fresh empty object per process start / refresh / restart / molt.
+        See :meth:`SessionManager.runtime_session` and
+        docs/references/runtime-vs-agent-session-objects.md.
+        """
+        return self._session.runtime_session()
+
+    def agent_session(self):
+        """Return the current AGENT-SESSION object (molt generation), or ``None``.
+
+        Keyed by ``molt_count`` (no new id). Rebuilt from the durable trajectory
+        at start/refresh by :meth:`rebuild_agent_session`. ``None`` before the
+        first rebuild is installed.
+        """
+        return self._session.agent_session()
+
+    def rebuild_agent_session(self):
+        """(Re)build the AGENT-SESSION for the current ``molt_count`` and install it.
+
+        Uses the optimized rebuild path (indexed ``log.sqlite`` → bounded reverse
+        JSONL scan → full scan last resort; see
+        :func:`agent_session.rebuild_agent_session_from_events`), so the normal
+        case does NOT full-scan a large ``events.jsonl``. The rebuilt since-molt
+        aggregate is installed on the session manager so the injected
+        ``token_usage.session`` half and other since-molt consumers can read a
+        single owner. Returns the rebuilt :class:`AgentSession`.
+
+        Never raises for a missing/empty trajectory — a brand-new agent yields a
+        zeroed boot session at the current ``molt_count``.
+        """
+        from ..agent_session import rebuild_agent_session_from_events
+
+        session = rebuild_agent_session_from_events(
+            self._working_dir,
+            molt_count=int(getattr(self, "_molt_count", 0) or 0),
+            logger_fn=self._log,
+        )
+        self._session.install_agent_session(session)
+        return session
+
     def get_chat_state(self) -> dict:
         """Serialize current chat session for persistence."""
         return self._session.get_chat_state()

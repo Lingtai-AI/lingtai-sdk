@@ -32,6 +32,7 @@ from .llm_utils import (
     send_with_timeout_stream,
     track_llm_usage,
 )
+from .agent_session import AgentSession, RuntimeSession, new_runtime_session
 from .logging import get_logger
 from .reminders.context_pressure import ContextPressureReminder
 from .token_counter import count_tokens, count_tool_tokens
@@ -143,6 +144,21 @@ class SessionManager:
         self._session_baseline_input_tokens = 0
         self._session_baseline_cached_tokens = 0
         self._session_baseline_api_calls = 0
+
+        # Explicit named session objects (see agent_session.py and
+        # docs/references/runtime-vs-agent-session-objects.md). These NAME the
+        # two notions the token bookkeeping above already tracks implicitly; they
+        # carry no id and grow no product state.
+        #
+        # - ``_runtime_session``: the current runtime lifecycle segment. A fresh
+        #   empty object per process start / refresh / restart / molt boundary.
+        # - ``_agent_session``: the current agent mind segment, keyed by the
+        #   agent's ``molt_count``. Rebuilt from the durable trajectory at start
+        #   (see ``install_agent_session``); ``None`` until a rebuild is
+        #   installed, in which case since-molt consumers fall back to the live
+        #   ``get_token_usage`` counters.
+        self._runtime_session: RuntimeSession = new_runtime_session()
+        self._agent_session: AgentSession | None = None
         self._last_tool_context = "send_message"
         self._system_prompt_tokens = 0
         self._tools_tokens = 0
@@ -706,6 +722,85 @@ class SessionManager:
         return self.get_runtime_session_token_usage()
 
     # ------------------------------------------------------------------
+    # Explicit session objects (runtime session / agent session)
+    # ------------------------------------------------------------------
+
+    def runtime_session(self) -> RuntimeSession:
+        """Return the current RUNTIME-SESSION object (the live lifecycle segment).
+
+        No id; a fresh empty object was minted at construction and is re-minted
+        at each runtime boundary (refresh/restart/molt) via
+        :meth:`reset_runtime_session`. The since-refresh token deltas remain owned
+        by the baselines (:meth:`get_runtime_session_token_usage`); this object
+        only names and time-stamps the segment and grows no product state.
+        """
+        return self._runtime_session
+
+    def reset_runtime_session(self) -> RuntimeSession:
+        """Mint a fresh RUNTIME-SESSION object at a runtime boundary.
+
+        Called on refresh/restart/molt. It only replaces the named object; the
+        since-refresh token baselines are re-anchored separately by
+        :meth:`reset_runtime_session_token_usage`. No id is assigned.
+        """
+        self._runtime_session = new_runtime_session()
+        return self._runtime_session
+
+    def agent_session(self) -> AgentSession | None:
+        """Return the current AGENT-SESSION object, or ``None`` if none installed.
+
+        Identity is ``molt_count`` (no new id). It is rebuilt from the durable
+        trajectory at start/refresh by ``BaseAgent.rebuild_agent_session`` and
+        installed via :meth:`install_agent_session`; before that install the
+        since-molt view falls back to the live :meth:`get_token_usage` counters.
+        """
+        return self._agent_session
+
+    def install_agent_session(self, session: AgentSession | None) -> None:
+        """Install (or clear) the current agent-session object.
+
+        The installed object is the *rebuilt* since-molt aggregate at the moment
+        of install (start/refresh). Live provider rounds after install keep
+        accumulating on the ``_total_*`` counters, so the current since-molt total
+        is ``installed baseline + live deltas`` — which is exactly what
+        :meth:`get_token_usage` reports once :meth:`restore_token_state` has been
+        seeded with the rebuilt baseline (see ``lifecycle._start``). The object is
+        retained for the named accessor and rebuild-tier diagnostics.
+        """
+        self._agent_session = session
+
+    def agent_session_token_usage(self) -> dict:
+        """Return the since-molt token aggregate for the injected ``session`` half.
+
+        This is the AGENT-SESSION view meta_block should consume: it reflects the
+        since-current-molt totals that SURVIVE refresh. It is computed from the
+        live cumulative counters (:meth:`get_token_usage`) — which, once the
+        startup restore is seeded from the rebuilt agent session, are since-molt
+        rather than lifetime — so it stays correct as live rounds accrue after a
+        rebuild. The installed :class:`AgentSession` object supplies the boundary/
+        rebuild-tier metadata; the numbers come from the same counters
+        meta_block already trusts, keeping a single source of truth.
+        """
+        usage = self.get_token_usage()
+        api_calls = max(0, int(usage.get("api_calls", 0) or 0))
+        input_tokens = max(0, int(usage.get("input_tokens", 0) or 0))
+        cached_tokens = max(0, int(usage.get("cached_tokens", 0) or 0))
+        session_cache_rate = (
+            round(min(cached_tokens / input_tokens, 1.0), 5)
+            if input_tokens > 0
+            else 0.0
+        )
+        avg_input = int(round(input_tokens / api_calls)) if api_calls > 0 else 0
+        return {
+            "session_cache_rate": session_cache_rate,
+            "api_calls": api_calls,
+            "input_tokens": input_tokens,
+            "cached_tokens": cached_tokens,
+            "cache_miss_tokens": max(input_tokens - cached_tokens, 0),
+            "avg_input_tokens_per_api_call": avg_input,
+        }
+
+    # ------------------------------------------------------------------
     # Session persistence
     # ------------------------------------------------------------------
 
@@ -764,10 +859,15 @@ class SessionManager:
         Runtime session = since last refresh/process start. This helper does NOT
         reset the injected ``_meta.tool_meta.token_usage.session`` half; it only
         changes the baseline used by :meth:`get_runtime_session_token_usage`.
+
+        The named :class:`RuntimeSession` object is re-minted here so it follows
+        the same boundary as its numeric baselines (fresh empty object per
+        refresh/restart/molt; no id).
         """
         self._session_baseline_input_tokens = self._total_input_tokens
         self._session_baseline_cached_tokens = self._total_cached_tokens
         self._session_baseline_api_calls = self._api_calls
+        self.reset_runtime_session()
 
     def reset_current_session_token_usage(self) -> None:
         """DEPRECATED compat alias for :meth:`reset_runtime_session_token_usage`."""
