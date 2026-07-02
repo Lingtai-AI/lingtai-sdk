@@ -55,6 +55,7 @@ import time as _time
 from collections.abc import Mapping
 
 from .config import (
+    CONTEXT_PRESSURE_HIGH_RATIO,
     CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,
     CONTEXT_PRESSURE_RECOVERY_TARGET,
 )
@@ -62,6 +63,7 @@ from .i18n import t as _t
 from .reminders.context_pressure import (
     current_molt_emission_descriptor,
     render_current_molt_context,
+    render_reconstruction_emergency_hint,
     render_reconstruction_molt,
 )
 from .time_veil import now_iso
@@ -104,6 +106,7 @@ TOOL_META_CURRENT_TIME_KEY = "current_time"
 TOOL_META_CONTEXT_KEY = "context"
 TOOL_META_CONTEXT_PENDING_KEY = "_tool_meta_context"
 TOOL_META_CONTEXT_EVENT_PENDING_KEY = "_tool_meta_context_event"
+TOOL_META_CONTEXT_REBUILD_KEY = "rebuild"
 
 # Cache-miss budget guard — the two compact numeric fields surfaced under
 # ``tool_meta.context`` alongside the ``molt`` warning when the current-session
@@ -477,10 +480,13 @@ def build_meta_readme() -> dict:
             "Per-result tool/call metadata (id, timestamp, optional current_time, "
             "char_count, elapsed_ms, optional token_usage, optional context). "
             "Present on every tool result; "
-            "permanent. context, when present, carries the SUSTAINED-pressure "
-            "context.molt reminder string — a warning that appears only after "
-            "context has been high (>= 0.75) for several consecutive fresh provider "
-            "rounds and clears when pressure drops. It lives here (permanent, "
+            "permanent. context, when present, may carry context.rebuild — a "
+            "lightweight line stamped continuously once context is >= 0.75 saying "
+            "the agent may manually rebuild via summarize(rebuild_only=true). It "
+            "may also carry the SUSTAINED-pressure context.molt reminder string — "
+            "a stronger warning that appears only after context has been high "
+            "(>= 0.75) for several consecutive fresh provider rounds and clears "
+            "when pressure drops. The context block lives here (permanent, "
             "restamped on every result while active) rather than in the sparse "
             "agent_meta so the reminder persists. context also carries the "
             "cache-miss budget guard: a soft per-molt/session cap on total "
@@ -521,13 +527,19 @@ def build_meta_readme() -> dict:
             "invented. Copied here so agents can inspect historical high-context "
             "summarize/rebuild costs after newer results arrive. May also "
             "carry a one-shot 'reconstruction' event when the runtime just "
-            "performed a delayed-summarize context reconstruction: it records "
-            "the before (A) and after (B) context tokens/usage, context_window, "
-            "trigger_threshold (0.75) and recovery_target (0.6); if B is still "
-            "at/above the recovery target it includes a natural-language molt "
-            "reminder at reconstruction.molt (a one-shot; distinct from the "
-            "sustained-pressure tool_meta.context.molt above). This is permanent "
-            "evidence of a past event, not current state."
+            "rebuilt provider context for delayed summarize or manual rebuild-only: "
+            "it records the event type (delayed_summarize_reconstruction or "
+            "summarize_rebuild_only_reconstruction), the before (A) and after (B) "
+            "context tokens/usage, context_window, trigger_threshold (0.95 "
+            "automatic rebuild trigger), threshold_high (0.75 manual/high-context "
+            "hint), and recovery_target (0.6). Automatic 95% rebuild events also "
+            "carry reconstruction.proactive_hint, noting that one manual "
+            "summarize(rebuild_only=true) after the 75% hint could have relieved "
+            "pressure earlier; manual rebuild-only events do not carry that hint. "
+            "If B is still at/above the recovery target, the event includes a "
+            "natural-language molt reminder at reconstruction.molt (a one-shot; "
+            "distinct from the sustained-pressure tool_meta.context.molt above). "
+            "This is permanent evidence of a past event, not current state."
         ),
         AGENT_META_KEY: (
             "Agent/current-state snapshot (elapsed_ms, active_turn_tool_calls, "
@@ -851,6 +863,9 @@ def build_runtime_guidance() -> dict:
 
 
 def build_molt_context(agent, usage: float) -> str | None:
+    # NOTE: the lighter 75% manual-rebuild hint is built by
+    # ``build_context_rebuild_hint`` below.  This function remains the stronger
+    # sustained-pressure molt reminder.
     """Return the sustained-pressure molt reminder string, or ``None``.
 
     The returned text is attached to PERMANENT ``_meta.tool_meta.context.molt``
@@ -890,6 +905,31 @@ def build_molt_context(agent, usage: float) -> str | None:
         return None
     streak = int(getattr(session, "context_pressure_streak", 0))
     return render_current_molt_context(streak=streak, usage=usage)
+
+
+def build_context_rebuild_hint(agent, usage: float) -> str | None:
+    """Return the lightweight 75% manual provider-context rebuild hint.
+
+    This is not a molt warning and not an event route.  It is a current-state line
+    stamped under ``_meta.tool_meta.context.rebuild`` whenever context is at/above
+    ``CONTEXT_PRESSURE_HIGH_RATIO`` and the system intrinsic is available, so the
+    agent may explicitly request a one-shot rebuild via
+    ``system(action='summarize', rebuild_only=true)`` instead of waiting for the
+    95% automatic delayed-summarize trigger.
+    """
+    if "system" not in getattr(agent, "_intrinsics", set()):
+        return None
+    try:
+        pressure = float(usage)
+    except (TypeError, ValueError):
+        return None
+    if pressure < CONTEXT_PRESSURE_HIGH_RATIO:
+        return None
+    return (
+        "context now above 75%, you are allowed to rebuild context via "
+        "system(action='summarize', rebuild_only=true) or summarize already-"
+        "digested results; see meta_guidance for details."
+    )
 
 
 def _resolve_cache_miss_budget(agent) -> int | None:
@@ -1091,6 +1131,7 @@ def build_reconstruction_tool_meta(agent) -> dict | None:
         "trigger_threshold": raw.get(
             "trigger_threshold", CONTEXT_PRESSURE_RECONSTRUCTION_RATIO
         ),
+        "threshold_high": raw.get("threshold_high", CONTEXT_PRESSURE_HIGH_RATIO),
         "recovery_target": raw.get("recovery_target", CONTEXT_PRESSURE_RECOVERY_TARGET),
         "context_window": raw.get("context_window"),
         "before": raw.get("before", {}),
@@ -1100,6 +1141,17 @@ def build_reconstruction_tool_meta(agent) -> dict | None:
             "source": after_source,
         },
     }
+
+    if event["type"] == "delayed_summarize_reconstruction":
+        proactive_hint = render_reconstruction_emergency_hint(
+            after_usage=after_usage,
+            trigger_threshold=event.get(
+                "trigger_threshold", CONTEXT_PRESSURE_RECONSTRUCTION_RATIO
+            ),
+            high_threshold=event.get("threshold_high", CONTEXT_PRESSURE_HIGH_RATIO),
+        )
+        if proactive_hint:
+            event["proactive_hint"] = proactive_hint
 
     # The warning decision + prose (channel A) live in the reminder abstraction;
     # this function owns only the event assembly (provider-vs-local after-context
@@ -1115,7 +1167,9 @@ def build_reconstruction_tool_meta(agent) -> dict | None:
         )
     else:
         molt = render_reconstruction_molt(
-            after_usage=after_usage, recovery_target=recovery_target
+            after_usage=after_usage,
+            recovery_target=recovery_target,
+            reconstruction_ratio=event.get("threshold_high", CONTEXT_PRESSURE_HIGH_RATIO),
         )
     if molt:
         event["molt"] = molt
@@ -1326,6 +1380,7 @@ def build_meta(agent) -> dict:
         {
             "current_time": "<iso>",          # transient; promoted into tool_meta
             "_tool_meta_context": {           # transient; promoted into tool_meta.context
+                "rebuild": str,               # 75%+ manual rebuild permission hint
                 "molt": str,                  # sustained-pressure and/or cache-miss-budget reminder
                 "cache_miss_budget": int,     # present only when the budget guard is tripped
                 "cache_miss_tokens": int,     # present only when the budget guard is tripped
@@ -1347,9 +1402,11 @@ def build_meta(agent) -> dict:
     duplicated in ``agent_meta``; provider-round ``context_usage``/``window`` and
     session token stats live in ``tool_meta.token_usage``.
 
-    The ``_tool_meta_context`` sub-object is emitted when EITHER the
-    sustained-pressure warning is active OR the cache-miss budget guard is tripped
-    (:func:`build_cache_miss_budget_context`).  When both fire, both warnings are
+    The ``_tool_meta_context`` sub-object is emitted when the lightweight 75%+
+    manual-rebuild hint is active, OR the sustained-pressure warning is active,
+    OR the cache-miss budget guard is tripped
+    (:func:`build_cache_miss_budget_context`).  When warning paths fire together,
+    both warnings are
     preserved in ``molt`` (the budget line is appended on its own line, never
     replacing the context-pressure prose) and the budget fields
     (``cache_miss_budget`` / ``cache_miss_tokens``) ride alongside.  The budget
@@ -1365,6 +1422,12 @@ def build_meta(agent) -> dict:
 
     usage = _current_context_usage(agent)
 
+    rebuild_hint = build_context_rebuild_hint(agent, usage)
+    if rebuild_hint:
+        meta[TOOL_META_CONTEXT_PENDING_KEY] = {
+            TOOL_META_CONTEXT_REBUILD_KEY: rebuild_hint
+        }
+
     # Sustained-pressure molt reminder — now PERMANENT per-result metadata at
     # ``tool_meta.context.molt`` (moved off the sparse ``agent_meta.context`` so
     # it persists on every result while the warning is active).  It rides via a
@@ -1373,7 +1436,11 @@ def build_meta(agent) -> dict:
     # stay in ``tool_meta.token_usage``.
     molt = build_molt_context(agent, usage)
     if molt:
-        meta[TOOL_META_CONTEXT_PENDING_KEY] = {"molt": molt}
+        existing_context = meta.get(TOOL_META_CONTEXT_PENDING_KEY)
+        if isinstance(existing_context, dict):
+            existing_context["molt"] = molt
+        else:
+            meta[TOOL_META_CONTEXT_PENDING_KEY] = {"molt": molt}
         # The channel-B emission event is built from the PURE sustained-pressure
         # message (before the budget line is appended below), so its
         # ``message_hash`` and per-round dedup semantics stay unchanged even when

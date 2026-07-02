@@ -17,25 +17,33 @@ THINKING_LEVELS = ("low", "medium", "high", "xhigh")
 # (MANIFEST_LEGACY_IGNORED).
 MOLT_NOTICE_THRESHOLD = 0.60  # legacy name; now the molt RECOVERY TARGET (see below)
 
-# Sustained context-pressure / molt-warning constants (kernel-fixed).
+# Sustained context-pressure / manual-rebuild / molt-warning constants
+# (kernel-fixed).
 #
-# The molt warning surfaced in ``_meta.tool_meta.context.molt`` is no longer an
-# immediate ``usage >= 0.60`` trip-wire.  It is a *sustained-pressure* signal:
+# The warning surfaced in ``_meta.tool_meta.context.molt`` is no longer an
+# immediate ``usage >= 0.60`` trip-wire.  It is a *sustained-pressure* signal,
+# while provider-context reconstruction is a separate, rarer event:
 #
-#   * CONTEXT_PRESSURE_RECONSTRUCTION_RATIO (0.75) — a fresh provider round whose
-#     context usage is at/above this fraction counts as a "high" round.  This is
-#     the same ratio at which the codex adapter's delayed-summarize
-#     reconstruction fires (``_CODEX_SUMMARIZE_DELAY_THRESHOLD_RATIO``).
-#     Interpretation is INCLUSIVE (``usage >= 0.75``), matching the adapter's
-#     release check (``usage >= ratio``).
-#   * CONTEXT_PRESSURE_WARN_AFTER_ROUNDS (3) — the resident warning begins on the
-#     THIRD consecutive high round; the first two are the window in which
-#     summarize/reconstruction is expected to relieve pressure.
-#   * CONTEXT_PRESSURE_RECOVERY_TARGET (0.60) — if summarize/reconstruction
-#     cannot bring context below this fraction of the window, molt becomes the
-#     recommended action.  This is the new meaning of the legacy 0.60 constant:
-#     a recovery target, not an immediate trip-wire.
-CONTEXT_PRESSURE_RECONSTRUCTION_RATIO = 0.75
+#   * CONTEXT_PRESSURE_HIGH_RATIO (0.75) — a fresh provider round whose context
+#     usage is at/above this fraction counts as a "high" round.  The same
+#     inclusive threshold (``usage >= 0.75``) also continuously stamps
+#     ``_meta.tool_meta.context.rebuild`` with permission to manually rebuild via
+#     ``system(action='summarize', rebuild_only=true)``.  It does NOT force an
+#     automatic provider-context rebuild.
+#   * CONTEXT_PRESSURE_RECONSTRUCTION_RATIO (0.95) — a pending summarize's
+#     delayed provider-context reconstruction is forced on the next model request
+#     only once context reaches this inclusive threshold.  Keeping this much
+#     higher than the 75% hint avoids costly automatic rebuilds while still
+#     protecting near-full context windows.
+#   * CONTEXT_PRESSURE_WARN_AFTER_ROUNDS (3) — the resident ``context.molt``
+#     warning begins on the THIRD consecutive high round; earlier high rounds get
+#     the manual-rebuild hint but not the stronger molt reminder.
+#   * CONTEXT_PRESSURE_RECOVERY_TARGET (0.60) — if summarize/rebuild cannot bring
+#     context below this fraction of the window, molt becomes the recommended
+#     action.  This is the new meaning of the legacy 0.60 constant: a recovery
+#     target, not an immediate trip-wire.
+CONTEXT_PRESSURE_HIGH_RATIO = 0.75
+CONTEXT_PRESSURE_RECONSTRUCTION_RATIO = 0.95
 CONTEXT_PRESSURE_WARN_AFTER_ROUNDS = 3
 CONTEXT_PRESSURE_RECOVERY_TARGET = MOLT_NOTICE_THRESHOLD  # 0.60
 

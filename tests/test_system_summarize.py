@@ -82,6 +82,57 @@ def test_schema_has_items_property():
     assert items_schema["type"] == "array"
 
 
+def test_schema_has_rebuild_only_properties():
+    from lingtai_kernel.intrinsics.system.schema import get_schema
+    schema = get_schema("en")
+    assert schema["properties"]["rebuild_only"]["type"] == "boolean"
+    assert schema["properties"]["dry_run"]["type"] == "boolean"
+
+
+
+
+def test_rebuild_only_with_no_items_requests_chat_rebuild():
+    agent = _make_stub_agent()
+    agent._chat.request_history_rebuild = MagicMock(return_value=True)
+
+    result = _summarize(agent, {"action": "summarize", "rebuild_only": True})
+
+    assert result["status"] == "ok"
+    assert result["mode"] == "rebuild_only"
+    assert result["summarized"] == 0
+    assert result["items"] == []
+    assert result["rebuild_requested"] is True
+    agent._chat.request_history_rebuild.assert_called_once_with(
+        reason="summarize_rebuild_only"
+    )
+    agent._save_chat_history.assert_not_called()
+
+
+def test_dry_run_alias_requests_rebuild_without_items():
+    agent = _make_stub_agent()
+    agent._chat.request_history_rebuild = MagicMock(return_value=True)
+
+    result = _summarize(agent, {"action": "summarize", "dry_run": True})
+
+    assert result["status"] == "ok"
+    assert result["mode"] == "rebuild_only"
+    assert result["rebuild_requested"] is True
+
+
+def test_rebuild_only_rejects_items():
+    agent = _make_stub_agent()
+    result = _summarize(
+        agent,
+        {
+            "action": "summarize",
+            "rebuild_only": True,
+            "items": [{"tool_call_id": "x", "summary": "y"}],
+        },
+    )
+
+    assert result["status"] == "error"
+    assert result["reason"] == "rebuild_only_with_items"
+
 # ---------------------------------------------------------------------------
 # _is_already_summarized
 # ---------------------------------------------------------------------------

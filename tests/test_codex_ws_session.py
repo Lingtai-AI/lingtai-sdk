@@ -789,11 +789,11 @@ def test_rest_summarize_delays_epoch_reset_below_context_threshold(monkeypatch):
 
 
 def test_reconstruction_event_recorded_on_immediate_release(monkeypatch):
-    """When summarize is recorded while context is already >= 0.75, the delayed
+    """When summarize is recorded while context is already >= 0.95, the delayed
     reconstruction fires immediately (epoch reset reason 'summarize_delayed').
     That actual reconstruction must record a one-shot pending event capturing the
     before-context (A) and the fixed trigger/recovery metadata."""
-    client = RealisticRestClient(input_tokens=850)
+    client = RealisticRestClient(input_tokens=950)
     session = _make_rest_session(client)
     monkeypatch.setattr(session, "context_window", lambda: 1000)
 
@@ -807,12 +807,12 @@ def test_reconstruction_event_recorded_on_immediate_release(monkeypatch):
     event = session.take_pending_reconstruction_event()
     assert event is not None
     assert event["type"] == "delayed_summarize_reconstruction"
-    assert event["trigger_threshold"] == 0.75
+    assert event["trigger_threshold"] == 0.95
     assert event["recovery_target"] == 0.60
     assert event["context_window"] == 1000
     # Before-context (A): the provider input that crossed the threshold.
-    assert event["before"]["context_tokens"] == 850
-    assert event["before"]["usage"] == pytest.approx(0.85)
+    assert event["before"]["context_tokens"] == 950
+    assert event["before"]["usage"] == pytest.approx(0.95)
 
     # One-shot: a second take returns None.
     assert session.take_pending_reconstruction_event() is None
@@ -820,9 +820,9 @@ def test_reconstruction_event_recorded_on_immediate_release(monkeypatch):
 
 def test_reconstruction_event_recorded_on_delayed_release(monkeypatch):
     """Below threshold the summarize stays pending; the reconstruction fires on a
-    later send once context crosses 0.75. That release must also record the
+    later send once context crosses 0.95. That release must also record the
     one-shot event."""
-    client = RealisticRestClient(input_tokens=850)
+    client = RealisticRestClient(input_tokens=950)
     session = _make_rest_session(client)
     monkeypatch.setattr(session, "context_window", lambda: 1000)
 
@@ -839,7 +839,7 @@ def test_reconstruction_event_recorded_on_delayed_release(monkeypatch):
     event = session.take_pending_reconstruction_event()
     assert event is not None
     assert event["type"] == "delayed_summarize_reconstruction"
-    assert event["before"]["usage"] == pytest.approx(0.85)
+    assert event["before"]["usage"] == pytest.approx(0.95)
 
 
 def test_reconstruction_event_not_recorded_for_turn_count_reset(monkeypatch):
@@ -853,8 +853,45 @@ def test_reconstruction_event_not_recorded_for_turn_count_reset(monkeypatch):
     assert session.take_pending_reconstruction_event() is None
 
 
+def test_request_history_rebuild_returns_false_when_continuation_disabled(monkeypatch):
+    client = RealisticRestClient(input_tokens=100)
+    session = _make_rest_session(client)
+    monkeypatch.setattr(session, "context_window", lambda: 1000)
+    session._continuation_enabled = False
+
+    assert session.request_history_rebuild() is False
+    assert session.take_pending_reconstruction_event() is None
+    assert session._ws_epoch_reset_reason_pending is None
+
+
+def test_request_history_rebuild_records_manual_reconstruction_event(monkeypatch):
+    client = RealisticRestClient(input_tokens=800)
+    session = _make_rest_session(client)
+    monkeypatch.setattr(session, "context_window", lambda: 1000)
+
+    session.send("one")
+
+    assert session.request_history_rebuild() is True
+    assert session._ws_epoch_reset_reason_pending == "summarize_rebuild_only"
+    assert session._summarize_effect_delayed_last_release_reason == "summarize_rebuild_only"
+
+    event = session.take_pending_reconstruction_event()
+    assert event is not None
+    assert event["type"] == "summarize_rebuild_only_reconstruction"
+    assert event["reason"] == "summarize_rebuild_only_reconstruction"
+    assert event["trigger_threshold"] == 0.95
+    assert event["recovery_target"] == 0.60
+    assert event["context_window"] == 1000
+    assert event["before"]["context_tokens"] == 800
+    assert event["before"]["usage"] == pytest.approx(0.80)
+
+    second = session.send("two")
+    assert second.usage.extra["codex_request_mode"] == "rest_full"
+    assert second.usage.extra["codex_ws_epoch_reset_reason"] == "summarize_rebuild_only"
+
+
 def test_rest_summarize_releases_delayed_epoch_reset_at_context_threshold(monkeypatch):
-    client = RealisticRestClient(input_tokens=850)
+    client = RealisticRestClient(input_tokens=950)
     session = _make_rest_session(client)
     monkeypatch.setattr(session, "context_window", lambda: 1000)
 
@@ -872,10 +909,10 @@ def test_rest_summarize_releases_delayed_epoch_reset_at_context_threshold(monkey
 
 def test_rest_summarize_release_uses_previous_provider_input_not_interface_estimate(monkeypatch):
     """Live PR #535 regression: ChatInterface's local estimate can stay low even
-    when the real previous provider request crossed the 75% context threshold.
+    when the real previous provider request crossed the 95% automatic reconstruction threshold.
     Delayed summarize release must use the provider input-token count.
     """
-    client = RealisticRestClient(input_tokens=187_500)
+    client = RealisticRestClient(input_tokens=237_500)
     session = _make_rest_session(client, context_window=250_000)
     monkeypatch.setattr(session._interface, "estimate_context_tokens", lambda: 10)
 
@@ -893,9 +930,9 @@ def test_rest_summarize_release_uses_previous_provider_input_not_interface_estim
 def test_rest_summarize_uses_configured_context_window_when_base_returns_zero(monkeypatch):
     """Real Codex Responses sessions inherit ChatSession's 0 default unless the
     service-level context_window is carried into the session.  At 187.5k/250k the
-    0.75 threshold must release the delayed summarize effect.
+    0.95 threshold must release the delayed summarize effect.
     """
-    client = RealisticRestClient(input_tokens=187_500)
+    client = RealisticRestClient(input_tokens=237_500)
     session = _make_rest_session(client, context_window=250_000)
 
     first = session.send("one")
@@ -1222,7 +1259,7 @@ def test_rest_cache_ledger_counts_real_requests_not_pending_summarize_events(mon
 
 
 def test_rest_cache_ledger_counts_one_full_when_multiple_pending_summarizes_release(monkeypatch):
-    client = RealisticRestClient(input_tokens=750)
+    client = RealisticRestClient(input_tokens=950)
     session = _make_rest_session(client)
     monkeypatch.setattr(session, "context_window", lambda: 1000)
 
@@ -1345,7 +1382,7 @@ def test_history_summarized_delays_next_ws_full_below_context_threshold(monkeypa
 
 
 def test_history_summarized_releases_delayed_ws_full_at_context_threshold(monkeypatch):
-    t = FakeWsTransport(input_tokens=850)
+    t = FakeWsTransport(input_tokens=950)
     session = _make_session(t)
     monkeypatch.setattr(session, "context_window", lambda: 1000)
 
