@@ -939,7 +939,8 @@ def build_context_rebuild_hint(agent, usage: float) -> str | None:
     return (
         "context now above 75%, you are allowed to rebuild context via "
         "system(action='summarize', rebuild_only=true) or summarize already-"
-        "digested results; see meta_guidance for details."
+        "digested results; forced rebuild will be triggered at 95% context; "
+        "see meta_guidance for details."
     )
 
 
