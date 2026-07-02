@@ -3052,5 +3052,6 @@ def test_build_context_rebuild_hint_stamps_after_high_ratio():
     assert hint is not None
     assert "context now above 75%" in hint
     assert "rebuild_only=true" in hint
+    assert "forced rebuild will be triggered at 95% context" in hint
     assert "meta_guidance" in hint
     assert build_context_rebuild_hint(SimpleNamespace(_intrinsics=set()), 0.90) is None
