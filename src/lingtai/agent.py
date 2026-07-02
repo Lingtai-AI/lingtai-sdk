@@ -1143,16 +1143,20 @@ class Agent(BaseAgent):
         provider context (Jason, 2026-07-02) — the warm continuation/cache prefix
         is kept unless the agent explicitly opts in via
         ``system(action='refresh', rebuild_context=true)``. When ``None`` (the
-        common boot/relaunch call), the intent is read from the one-shot
-        ``LINGTAI_REFRESH_REBUILD_CONTEXT`` env marker set by ``_perform_refresh``
-        and then consumed so it cannot leak into a later molt-reload or a child
-        process. An explicit ``True``/``False`` argument overrides the marker.
+        common boot/relaunch call), the intent is read from the INTERNAL refresh
+        signal — the ``.refresh.taken`` handshake marker, which
+        ``_perform_refresh`` upgrades to a ``{"rebuild_context": true}`` payload
+        on an opt-in. ``cli.run`` unlinks that marker right after this call
+        returns, so the intent is one-shot and cannot leak into a later
+        molt-reload. No environment variable is involved (Jason, 2026-07-02). An
+        explicit ``True``/``False`` argument overrides the marker (used by the
+        in-process live-refresh tests and any direct caller).
         """
-        import os as _os
-
-        env_opt_in = _os.environ.pop("LINGTAI_REFRESH_REBUILD_CONTEXT", None) == "1"
         if rebuild_context is None:
-            rebuild_context = env_opt_in
+            from lingtai_kernel.base_agent.lifecycle import (
+                _marker_rebuild_context_requested,
+            )
+            rebuild_context = _marker_rebuild_context_requested(self._working_dir)
 
         self._log("refresh_start", rebuild_context=rebuild_context)
 
