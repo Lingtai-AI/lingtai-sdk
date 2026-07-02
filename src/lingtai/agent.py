@@ -1134,31 +1134,9 @@ class Agent(BaseAgent):
             raise RuntimeError("no default preset configured")
         self._activate_preset(default_name)
 
-    def _setup_from_init(self, *, rebuild_context: bool | None = None) -> None:
-        """Full construct/reconstruct from init.json.
-
-        ``rebuild_context`` controls the ONE refresh-attributable lever that
-        forces a fresh provider-context rebuild: the live-refresh Codex adapter
-        rebuild below (``codex_force_rebuild``). Default refresh must NOT rebuild
-        provider context (Jason, 2026-07-02) — the warm continuation/cache prefix
-        is kept unless the agent explicitly opts in via
-        ``system(action='refresh', rebuild_context=true)``. When ``None`` (the
-        common boot/relaunch call), the intent is read from the INTERNAL refresh
-        signal — the ``.refresh.taken`` handshake marker, which
-        ``_perform_refresh`` upgrades to a ``{"rebuild_context": true}`` payload
-        on an opt-in. ``cli.run`` unlinks that marker right after this call
-        returns, so the intent is one-shot and cannot leak into a later
-        molt-reload. No environment variable is involved (Jason, 2026-07-02). An
-        explicit ``True``/``False`` argument overrides the marker (used by the
-        in-process live-refresh tests and any direct caller).
-        """
-        if rebuild_context is None:
-            from lingtai_kernel.base_agent.lifecycle import (
-                _marker_rebuild_context_requested,
-            )
-            rebuild_context = _marker_rebuild_context_requested(self._working_dir)
-
-        self._log("refresh_start", rebuild_context=rebuild_context)
+    def _setup_from_init(self) -> None:
+        """Full construct/reconstruct from init.json."""
+        self._log("refresh_start")
 
         data = self._read_init()
         if data is None:
@@ -1260,26 +1238,19 @@ class Agent(BaseAgent):
         cur_provider_defaults_bucket = getattr(
             self.service, "_provider_defaults", {}
         ).get(new_provider.lower(), {})
-        # Codex live-refresh adapter rebuild — now GATED on the explicit
-        # rebuild_context opt-in (Jason, 2026-07-02): a default refresh must NOT
-        # rebuild provider context. Rebuilding the Codex adapter drops the warm
-        # in-memory continuation/cache epoch, forcing a full-context replay on
-        # the next model call — a provider-context rebuild. That is exactly the
-        # behavior a plain refresh must avoid, so we only force it when the agent
-        # opted in via system(action='refresh', rebuild_context=true).
-        #
-        # Historical context (#406): the adapter epoch-stamps the *current*
-        # cache-affinity id at construction, so a live refresh that replays
-        # existing history (``saved_interface is not None``) is the only moment
-        # the id/epoch can be rotated in-process. Boot has no prior session and
-        # already builds a fresh adapter, so it is excluded to avoid a redundant
-        # double-build. The affinity id itself is a stable hash of (agent path,
-        # molt_count) and does not depend on this rebuild, so keeping the warm
-        # adapter on a default refresh preserves the sticky-warm cache slot.
+        # Codex start/refresh is a cache-affinity rotate trigger (Jason's final
+        # #406 semantics): the adapter epoch-stamps the *current* affinity id at
+        # construction, so the 8-hit stalled-cache shuffle only becomes active
+        # once a live refresh REBUILDS the adapter at a fresh epoch. The agent
+        # path anchor is stable across refresh, so the provider-defaults bucket
+        # is byte-identical and the boot-epoch adapter (with its stale current
+        # id) would otherwise survive untouched — exactly the bug where the
+        # shuffle never went live. A *live* refresh is one that replays existing
+        # history (``saved_interface is not None``); boot has no prior session
+        # and already builds a fresh adapter, so it is excluded to avoid a
+        # redundant double-build.
         codex_force_rebuild = (
-            rebuild_context
-            and new_provider.lower() == "codex"
-            and saved_interface is not None
+            new_provider.lower() == "codex" and saved_interface is not None
         )
         # Compare the resolved provider-defaults bucket as a whole so explicit
         # init.json changes (codex_session_anchor, default_headers,
