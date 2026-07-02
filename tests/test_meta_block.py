@@ -268,10 +268,27 @@ def test_build_meta_readme_mentions_tool_result_char_count_and_summarize():
 
     assert "token_usage" in readme["tool_meta"]
     assert "provider-round token/cache snapshot" in readme["tool_meta"]
-    # The unified block documents both halves: provider-round + current-session.
+    # The block documents both halves: current-call + current-session.
     assert "session_cache_rate" in readme["tool_meta"]
     assert "api_calls" in readme["tool_meta"]
     assert "tool_meta.token_usage" in readme["agent_meta"]
+
+
+def test_build_meta_readme_documents_nested_current_call_and_session_split():
+    """The tool_meta readme must describe token_usage as a NESTED block split
+    into a current_call half and a session half (not one flat dict), so the
+    confusing flat `input` vs `input_tokens` no longer sit side by side."""
+    tool_meta_doc = build_meta_readme()["tool_meta"]
+    # Both nested half keys are named.
+    assert "current_call" in tool_meta_doc
+    assert "session" in tool_meta_doc
+    # The readme describes the block as nested, not flat.
+    lowered = tool_meta_doc.lower()
+    assert "nested" in lowered
+    # It must not POSITIVELY claim the block is one flat dict (saying "not one
+    # flat dict" is fine and expected).
+    assert "is one flat dict" not in lowered
+    assert "single flat" not in lowered
 
 
 def test_build_meta_readme_documents_cache_miss_budget_guard():
@@ -743,14 +760,21 @@ def test_build_meta_carries_latest_token_usage_for_tool_meta_only():
 
     meta = build_meta(agent)
 
+    # The token_usage block is NESTED: a `current_call` half (this result's own
+    # provider round) and a `session` half (current-runtime-session aggregate),
+    # each under its own explicit key, plus a shared `ref`. No session getter
+    # here, so only `current_call` + `ref` are present (the `session` half is
+    # omitted entirely rather than left empty).
     assert meta[TOOL_META_TOKEN_USAGE_PENDING_KEY] == {
-        "input": 190_000,
-        "cache_miss": 22_000,
-        "cache_rate": 0.882,
-        "context_usage": 0.759,
-        "window": 250_000,
-        "output": 636,
-        "thinking": 40,
+        "current_call": {
+            "input": 190_000,
+            "cache_miss": 22_000,
+            "cache_rate": 0.882,
+            "context_usage": 0.759,
+            "window": 250_000,
+            "output": 636,
+            "thinking": 40,
+        },
         "ref": "See meta_guidance.token_efficiency for details.",
     }
     # The unified token_usage block is the sole token diagnostics carrier; the
@@ -758,7 +782,11 @@ def test_build_meta_carries_latest_token_usage_for_tool_meta_only():
     assert "token_efficiency" not in meta
 
 
-# Provider-round half of the unified token_usage block (snapshot-derived).
+# The two nested-half keys and the shared ref hook on the token_usage block.
+_TOKEN_USAGE_CURRENT_CALL_KEY = "current_call"
+_TOKEN_USAGE_SESSION_KEY = "session"
+
+# Keys carried INSIDE the `current_call` half (snapshot-derived).
 _PROVIDER_TOKEN_USAGE_KEYS = {
     "input",
     "cache_miss",
@@ -768,7 +796,7 @@ _PROVIDER_TOKEN_USAGE_KEYS = {
     "output",
     "thinking",
 }
-# Current-session half of the unified token_usage block (get_token_usage-derived).
+# Keys carried INSIDE the `session` half (get_token_usage-derived).
 # ``cache_miss_tokens`` is always present with the session half (derivable from
 # the session counters); ``cache_miss_budget`` / ``cache_miss_remaining_tokens``
 # ride along only when a positive-int budget is resolvable from agent._config.
@@ -785,6 +813,21 @@ _SESSION_CACHE_MISS_BUDGET_KEYS = {
     "cache_miss_budget",
     "cache_miss_remaining_tokens",
 }
+
+
+def _session_half(compact):
+    """Return the nested `session` half of a token_usage block.
+
+    Raises KeyError if the block is missing the nested `session` key — which is
+    itself the contract under test: session stats must live under
+    token_usage.session, never flattened at the top level.
+    """
+    return compact["session"]
+
+
+def _current_call_half(compact):
+    """Return the nested `current_call` half of a token_usage block."""
+    return compact["current_call"]
 
 
 def test_build_tool_meta_token_usage_compacts_full_snapshot_to_exact_keys():
@@ -813,23 +856,28 @@ def test_build_tool_meta_token_usage_compacts_full_snapshot_to_exact_keys():
 
     compact = build_tool_meta_token_usage(agent)
 
-    assert set(compact) == _PROVIDER_TOKEN_USAGE_KEYS | {"ref"}
+    # Only the current_call half + ref (no session getter on this stub).
+    assert set(compact) == {_TOKEN_USAGE_CURRENT_CALL_KEY, "ref"}
+    assert set(compact[_TOKEN_USAGE_CURRENT_CALL_KEY]) == _PROVIDER_TOKEN_USAGE_KEYS
     assert compact == {
-        "input": 190_000,
-        "cache_miss": 22_000,
-        "cache_rate": 0.882,
-        "context_usage": 0.759,
-        "window": 250_000,
-        "output": 636,
-        "thinking": 40,
+        "current_call": {
+            "input": 190_000,
+            "cache_miss": 22_000,
+            "cache_rate": 0.882,
+            "context_usage": 0.759,
+            "window": 250_000,
+            "output": 636,
+            "thinking": 40,
+        },
         "ref": "See meta_guidance.token_efficiency for details.",
     }
 
 
 def test_build_tool_meta_token_usage_merges_session_aggregate_into_one_block():
-    # The unified block carries BOTH the provider-round half (from the snapshot)
-    # and the current-session half (from get_token_usage), in one flat dict —
-    # there is no separate token_efficiency block anywhere.
+    # The block nests BOTH halves under explicit keys: current_call (from the
+    # snapshot) and session (from get_token_usage) — there is no separate
+    # token_efficiency block anywhere, and the two halves never mingle their
+    # confusingly-similar keys (`input` vs `input_tokens`) at one level.
     snapshot = {
         "input_tokens": 190_000,
         "cache_miss_tokens": 22_000,
@@ -850,37 +898,45 @@ def test_build_tool_meta_token_usage_merges_session_aggregate_into_one_block():
 
     compact = build_tool_meta_token_usage(agent)
 
-    assert set(compact) == _PROVIDER_TOKEN_USAGE_KEYS | _SESSION_TOKEN_USAGE_KEYS | {"ref"}
+    assert set(compact) == {
+        _TOKEN_USAGE_CURRENT_CALL_KEY,
+        _TOKEN_USAGE_SESSION_KEY,
+        "ref",
+    }
     assert compact == {
-        # provider-round half
-        "input": 190_000,
-        "cache_miss": 22_000,
-        "cache_rate": 0.882,
-        "context_usage": 0.759,
-        "window": 250_000,
-        "output": 636,
-        "thinking": 40,
-        # current-session half
-        "session_cache_rate": 0.25,
-        "api_calls": 4,
-        "input_tokens": 22_000,
-        "cached_tokens": 5_500,
-        "avg_input_tokens_per_api_call": 5_500,
-        # always-on cache-miss telemetry (no _config -> no budget-derived fields,
-        # but cache_miss_tokens is always present: 22_000 - 5_500 = 16_500)
-        "cache_miss_tokens": 16_500,
-        # short guidance hook
+        "current_call": {
+            "input": 190_000,
+            "cache_miss": 22_000,
+            "cache_rate": 0.882,
+            "context_usage": 0.759,
+            "window": 250_000,
+            "output": 636,
+            "thinking": 40,
+        },
+        "session": {
+            "session_cache_rate": 0.25,
+            "api_calls": 4,
+            "input_tokens": 22_000,
+            "cached_tokens": 5_500,
+            "avg_input_tokens_per_api_call": 5_500,
+            # always-on cache-miss telemetry (no _config -> no budget-derived
+            # fields, but cache_miss_tokens is always present: 22_000 - 5_500)
+            "cache_miss_tokens": 16_500,
+        },
+        # short guidance hook, shared across both halves
         "ref": "See meta_guidance.token_efficiency for details.",
     }
-    # No dropped/noisy keys leak into the unified block — and the hook is the
-    # short `ref`, never the long `guidance_ref`.
-    for noisy in ("scope", "guidance_ref", "context_tokens", "context_window", "estimated", "api_call_id"):
-        assert noisy not in compact
+    # No dropped/noisy keys leak into either half — and the hook is the short
+    # `ref`, never the long `guidance_ref`.
+    flat = json.dumps(compact)
+    for noisy in ("scope", "guidance_ref", "context_tokens", "estimated", "api_call_id"):
+        assert noisy not in flat
 
 
 def test_build_tool_meta_token_usage_session_only_when_no_snapshot():
     # When no provider-round snapshot exists but session data does, only the
-    # session half is emitted (the block is never invented from nothing).
+    # session half is emitted (the block is never invented from nothing), and
+    # the current_call half is omitted rather than left empty.
     agent = SimpleNamespace(
         _session=SimpleNamespace(latest_token_usage_snapshot=lambda: None),
         get_token_usage=lambda: {
@@ -892,13 +948,16 @@ def test_build_tool_meta_token_usage_session_only_when_no_snapshot():
 
     compact = build_tool_meta_token_usage(agent)
 
-    assert set(compact) == _SESSION_TOKEN_USAGE_KEYS | {"ref"}
-    assert compact["session_cache_rate"] == 1.0
-    assert compact["avg_input_tokens_per_api_call"] == 500
+    assert set(compact) == {_TOKEN_USAGE_SESSION_KEY, "ref"}
+    assert _TOKEN_USAGE_CURRENT_CALL_KEY not in compact
+    assert set(compact[_TOKEN_USAGE_SESSION_KEY]) == _SESSION_TOKEN_USAGE_KEYS
+    assert compact[_TOKEN_USAGE_SESSION_KEY]["session_cache_rate"] == 1.0
+    assert compact[_TOKEN_USAGE_SESSION_KEY]["avg_input_tokens_per_api_call"] == 500
 
 
 def test_build_tool_meta_token_usage_preserves_zero_and_sentinel_values():
-    # Existing numeric zero / sentinel values are kept, not dropped or invented.
+    # Existing numeric zero / sentinel values are kept, not dropped or invented,
+    # inside the current_call half.
     snapshot = {
         "input_tokens": 0,
         "cache_miss_tokens": 0,
@@ -915,20 +974,22 @@ def test_build_tool_meta_token_usage_preserves_zero_and_sentinel_values():
     compact = build_tool_meta_token_usage(agent)
 
     assert compact == {
-        "input": 0,
-        "cache_miss": 0,
-        "cache_rate": 0.0,
-        "context_usage": -1.0,
-        "window": 0,
-        "output": 0,
-        "thinking": 0,
+        "current_call": {
+            "input": 0,
+            "cache_miss": 0,
+            "cache_rate": 0.0,
+            "context_usage": -1.0,
+            "window": 0,
+            "output": 0,
+            "thinking": 0,
+        },
         "ref": "See meta_guidance.token_efficiency for details.",
     }
 
 
 def test_build_tool_meta_token_usage_robust_to_missing_fields():
-    # Partial snapshot: only present fields are emitted; absent ones are omitted
-    # rather than invented.
+    # Partial snapshot: only present fields are emitted inside current_call;
+    # absent ones are omitted rather than invented.
     snapshot = {"input_tokens": 100, "cache_rate": 0.5}
     agent = SimpleNamespace(
         _session=SimpleNamespace(latest_token_usage_snapshot=lambda: snapshot)
@@ -936,7 +997,10 @@ def test_build_tool_meta_token_usage_robust_to_missing_fields():
 
     compact = build_tool_meta_token_usage(agent)
 
-    assert compact == {"input": 100, "cache_rate": 0.5, "ref": "See meta_guidance.token_efficiency for details."}
+    assert compact == {
+        "current_call": {"input": 100, "cache_rate": 0.5},
+        "ref": "See meta_guidance.token_efficiency for details.",
+    }
 
 
 def test_build_meta_folds_session_economy_into_token_usage_not_efficiency():
@@ -957,17 +1021,17 @@ def test_build_meta_folds_session_economy_into_token_usage_not_efficiency():
 
     assert "context" not in meta
     # There is NO token_efficiency block anywhere — the session economy now lives
-    # inside the unified token_usage transit block (destined for tool_meta).
+    # inside the `session` half of the nested token_usage transit block.
     assert "token_efficiency" not in meta
-    usage = meta[TOOL_META_TOKEN_USAGE_PENDING_KEY]
-    assert usage["api_calls"] == 4
-    assert usage["input_tokens"] == 22000
-    assert usage["cached_tokens"] == 5500
-    assert usage["session_cache_rate"] == 0.25
-    assert usage["avg_input_tokens_per_api_call"] == 5500
-    # Dropped noisy/invalid fields never reappear.
+    session = meta[TOOL_META_TOKEN_USAGE_PENDING_KEY]["session"]
+    assert session["api_calls"] == 4
+    assert session["input_tokens"] == 22000
+    assert session["cached_tokens"] == 5500
+    assert session["session_cache_rate"] == 0.25
+    assert session["avg_input_tokens_per_api_call"] == 5500
+    # Dropped noisy/invalid fields never reappear in the session half.
     for noisy in ("scope", "guidance_ref", "context_tokens", "context_window"):
-        assert noisy not in usage
+        assert noisy not in session
 
 
 def test_build_meta_session_cache_rate_clamps_to_fraction():
@@ -986,13 +1050,15 @@ def test_build_meta_session_cache_rate_clamps_to_fraction():
 
     meta = build_meta(agent)
 
-    assert meta[TOOL_META_TOKEN_USAGE_PENDING_KEY]["session_cache_rate"] == 1.0
+    session = meta[TOOL_META_TOKEN_USAGE_PENDING_KEY]["session"]
+    assert session["session_cache_rate"] == 1.0
 
 
 def test_synthetic_meta_envelope_shows_token_usage_in_tool_meta_not_agent_meta():
     # /notification synthetic raw meta carries token diagnostics under
     # tool_meta.token_usage when pending/session data is available; agent_meta
-    # never carries token diagnostics.
+    # never carries token diagnostics. The nested current_call/session split is
+    # preserved on the synthetic tool_meta too.
     snapshot = {
         "input_tokens": 190_000,
         "cache_miss_tokens": 22_000,
@@ -1015,9 +1081,9 @@ def test_synthetic_meta_envelope_shows_token_usage_in_tool_meta_not_agent_meta()
 
     tool_meta = envelope["tool_meta"]
     assert tool_meta["synthetic"] is True
-    assert tool_meta["token_usage"]["input"] == 190_000
-    assert tool_meta["token_usage"]["session_cache_rate"] == 0.25
-    assert tool_meta["token_usage"]["api_calls"] == 4
+    assert tool_meta["token_usage"]["current_call"]["input"] == 190_000
+    assert tool_meta["token_usage"]["session"]["session_cache_rate"] == 0.25
+    assert tool_meta["token_usage"]["session"]["api_calls"] == 4
     # agent_meta must not carry token diagnostics in any form.
     agent_meta = envelope["agent_meta"]
     assert "token_efficiency" not in agent_meta
@@ -1059,14 +1125,15 @@ def test_session_economy_prefers_current_session_over_lifetime_totals():
 
     compact = build_tool_meta_token_usage(agent)
 
-    assert compact["api_calls"] == 2
-    assert compact["input_tokens"] == 200
-    assert compact["cached_tokens"] == 40
-    assert compact["avg_input_tokens_per_api_call"] == 100
-    assert compact["session_cache_rate"] == 0.2
+    session = _session_half(compact)
+    assert session["api_calls"] == 2
+    assert session["input_tokens"] == 200
+    assert session["cached_tokens"] == 40
+    assert session["avg_input_tokens_per_api_call"] == 100
+    assert session["session_cache_rate"] == 0.2
     # The lifetime giants never leak in.
-    assert compact["api_calls"] != 27_863
-    assert compact["input_tokens"] != 5_000_000_000
+    assert session["api_calls"] != 27_863
+    assert session["input_tokens"] != 5_000_000_000
 
 
 def test_session_economy_falls_back_to_lifetime_getter_when_no_current_session():
@@ -1083,15 +1150,17 @@ def test_session_economy_falls_back_to_lifetime_getter_when_no_current_session()
 
     compact = build_tool_meta_token_usage(agent)
 
-    assert compact["api_calls"] == 4
-    assert compact["input_tokens"] == 22_000
-    assert compact["cached_tokens"] == 5_500
+    session = _session_half(compact)
+    assert session["api_calls"] == 4
+    assert session["input_tokens"] == 22_000
+    assert session["cached_tokens"] == 5_500
 
 
 def test_token_usage_block_carries_short_guidance_ref():
-    # The unified token_usage block always carries a short `ref` hook (NOT
-    # `guidance_ref`) — a short sentence, not a bare path — pointing at the
-    # resident guidance section.
+    # The token_usage block always carries a short `ref` hook (NOT `guidance_ref`)
+    # — a short sentence, not a bare path — pointing at the resident guidance
+    # section.  The ref lives at the TOP level of the block, shared across both
+    # halves, not inside current_call/session.
     snapshot = {"input_tokens": 100, "cache_rate": 0.5}
     agent = SimpleNamespace(
         _session=SimpleNamespace(latest_token_usage_snapshot=lambda: snapshot)
@@ -1100,7 +1169,9 @@ def test_token_usage_block_carries_short_guidance_ref():
     compact = build_tool_meta_token_usage(agent)
 
     assert compact["ref"] == "See meta_guidance.token_efficiency for details."
-    assert "guidance_ref" not in compact
+    assert "guidance_ref" not in json.dumps(compact)
+    # The ref is not duplicated inside the halves.
+    assert "ref" not in _current_call_half(compact)
 
 
 # ---------------------------------------------------------------------------
@@ -1143,11 +1214,12 @@ def test_session_half_always_carries_cache_miss_tokens_and_budget_fields():
 
     compact = build_tool_meta_token_usage(agent)
 
-    assert compact["cache_miss_tokens"] == 200_000  # 300k - 100k
-    assert compact["cache_miss_budget"] == 1_000_000
-    assert compact["cache_miss_remaining_tokens"] == 800_000  # 1M - 200k
+    session = _session_half(compact)
+    assert session["cache_miss_tokens"] == 200_000  # 300k - 100k
+    assert session["cache_miss_budget"] == 1_000_000
+    assert session["cache_miss_remaining_tokens"] == 800_000  # 1M - 200k
     # The full session half plus the two budget-derived fields are all present.
-    assert (_SESSION_TOKEN_USAGE_KEYS | _SESSION_CACHE_MISS_BUDGET_KEYS) <= set(compact)
+    assert (_SESSION_TOKEN_USAGE_KEYS | _SESSION_CACHE_MISS_BUDGET_KEYS) <= set(session)
 
 
 def test_session_half_cache_miss_tokens_clamps_to_zero():
@@ -1159,8 +1231,9 @@ def test_session_half_cache_miss_tokens_clamps_to_zero():
 
     compact = build_tool_meta_token_usage(agent)
 
-    assert compact["cache_miss_tokens"] == 0
-    assert compact["cache_miss_remaining_tokens"] == 1_000_000
+    session = _session_half(compact)
+    assert session["cache_miss_tokens"] == 0
+    assert session["cache_miss_remaining_tokens"] == 1_000_000
 
 
 def test_session_half_remaining_clamps_to_zero_above_budget():
@@ -1172,8 +1245,9 @@ def test_session_half_remaining_clamps_to_zero_above_budget():
 
     compact = build_tool_meta_token_usage(agent)
 
-    assert compact["cache_miss_tokens"] == 1_300_000
-    assert compact["cache_miss_remaining_tokens"] == 0
+    session = _session_half(compact)
+    assert session["cache_miss_tokens"] == 1_300_000
+    assert session["cache_miss_remaining_tokens"] == 0
 
 
 def test_session_half_omits_budget_fields_without_config():
@@ -1185,9 +1259,10 @@ def test_session_half_omits_budget_fields_without_config():
 
     compact = build_tool_meta_token_usage(agent)
 
-    assert compact["cache_miss_tokens"] == 200_000
-    assert "cache_miss_budget" not in compact
-    assert "cache_miss_remaining_tokens" not in compact
+    session = _session_half(compact)
+    assert session["cache_miss_tokens"] == 200_000
+    assert "cache_miss_budget" not in session
+    assert "cache_miss_remaining_tokens" not in session
 
 
 def test_session_half_omits_budget_fields_for_nonpositive_budget():
@@ -1198,9 +1273,10 @@ def test_session_half_omits_budget_fields_for_nonpositive_budget():
             input_tokens=300_000, cached_tokens=100_000, budget=bad
         )
         compact = build_tool_meta_token_usage(agent)
-        assert compact["cache_miss_tokens"] == 200_000
-        assert "cache_miss_budget" not in compact
-        assert "cache_miss_remaining_tokens" not in compact
+        session = _session_half(compact)
+        assert session["cache_miss_tokens"] == 200_000
+        assert "cache_miss_budget" not in session
+        assert "cache_miss_remaining_tokens" not in session
 
 
 def test_session_half_honors_custom_budget():
@@ -1210,8 +1286,9 @@ def test_session_half_honors_custom_budget():
 
     compact = build_tool_meta_token_usage(agent)
 
-    assert compact["cache_miss_budget"] == 250_000
-    assert compact["cache_miss_remaining_tokens"] == 50_000  # 250k - 200k
+    session = _session_half(compact)
+    assert session["cache_miss_budget"] == 250_000
+    assert session["cache_miss_remaining_tokens"] == 50_000  # 250k - 200k
 
 
 def test_session_half_cache_miss_uses_current_session_not_lifetime():
@@ -1234,8 +1311,9 @@ def test_session_half_cache_miss_uses_current_session_not_lifetime():
 
     compact = build_tool_meta_token_usage(agent)
 
-    assert compact["cache_miss_tokens"] == 160  # 200 - 40, not the lifetime giant
-    assert compact["cache_miss_remaining_tokens"] == 999_840
+    session = _session_half(compact)
+    assert session["cache_miss_tokens"] == 160  # 200 - 40, not the lifetime giant
+    assert session["cache_miss_remaining_tokens"] == 999_840
 
 
 def test_build_meta_token_usage_carries_always_on_cache_miss_below_budget():
@@ -1247,10 +1325,10 @@ def test_build_meta_token_usage_carries_always_on_cache_miss_below_budget():
 
     # No context guard below budget.
     assert meta_block.TOOL_META_CONTEXT_PENDING_KEY not in meta
-    usage = meta[TOOL_META_TOKEN_USAGE_PENDING_KEY]
-    assert usage["cache_miss_tokens"] == 200_000
-    assert usage["cache_miss_budget"] == 1_000_000
-    assert usage["cache_miss_remaining_tokens"] == 800_000
+    session = meta[TOOL_META_TOKEN_USAGE_PENDING_KEY]["session"]
+    assert session["cache_miss_tokens"] == 200_000
+    assert session["cache_miss_budget"] == 1_000_000
+    assert session["cache_miss_remaining_tokens"] == 800_000
 
 
 def test_build_meta_omits_context_before_decomp_runs():

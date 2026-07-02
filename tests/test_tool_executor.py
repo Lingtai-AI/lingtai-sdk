@@ -914,18 +914,29 @@ def test_tool_executor_uses_meta_fn_for_stamping():
 
 
 def test_tool_executor_moves_token_usage_snapshot_to_tool_meta():
-    # build_meta places the compact token_usage object (input/cache_miss/
-    # cache_rate/context_usage/window/output/thinking) under the private pending
-    # key; the executor moves it verbatim into _meta.tool_meta.token_usage and
-    # must not leak the private pending key onto the result.
+    # build_meta places the NESTED token_usage object (current_call + session
+    # halves, plus a shared ref) under the private pending key; the executor
+    # moves it verbatim into _meta.tool_meta.token_usage and must not leak the
+    # private pending key onto the result.
     snapshot = {
-        "input": 200_000,
-        "cache_miss": 30_000,
-        "cache_rate": 0.85,
-        "context_usage": 0.8,
-        "window": 250_000,
-        "output": 600,
-        "thinking": 0,
+        "current_call": {
+            "input": 200_000,
+            "cache_miss": 30_000,
+            "cache_rate": 0.85,
+            "context_usage": 0.8,
+            "window": 250_000,
+            "output": 600,
+            "thinking": 0,
+        },
+        "session": {
+            "session_cache_rate": 0.15,
+            "api_calls": 3,
+            "input_tokens": 40_000,
+            "cached_tokens": 6_000,
+            "avg_input_tokens_per_api_call": 13_333,
+            "cache_miss_tokens": 34_000,
+        },
+        "ref": "See meta_guidance.token_efficiency for details.",
     }
 
     def dispatch(tc):

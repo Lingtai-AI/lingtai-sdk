@@ -1897,7 +1897,7 @@ class BaseAgent:
         """Return current-runtime-session token usage DELTAS (not lifetime totals).
 
         Delegates to :meth:`SessionManager.get_current_session_token_usage`. Used
-        by the injected ``_meta.tool_meta.token_usage`` session-stat half so that
+        by the injected ``_meta.tool_meta.token_usage.session`` half so that
         restored cumulative/persisted totals never leak in as current-session
         activity. Distinct from :meth:`get_token_usage`, which reports lifetime
         totals for status/identity surfaces.

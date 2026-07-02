@@ -93,6 +93,13 @@ TOOL_META_COMMENT_KEY = "comment"
 TOOL_META_COMMENT_OVERFLOW_KEY = "overflow"
 TOOL_META_TOKEN_USAGE_KEY = "token_usage"
 TOOL_META_TOKEN_USAGE_PENDING_KEY = "_tool_meta_token_usage"
+# The two nested halves of ``tool_meta.token_usage``.  ``current_call`` carries
+# this result's own provider-round token/cache fields; ``session`` carries the
+# current-runtime-session aggregate.  Splitting them into named sub-objects (vs
+# the former single flat dict) removes the confusing flat ``input`` vs
+# ``input_tokens`` adjacency — see :func:`build_tool_meta_token_usage`.
+TOKEN_USAGE_CURRENT_CALL_KEY = "current_call"
+TOKEN_USAGE_SESSION_KEY = "session"
 TOOL_META_CURRENT_TIME_KEY = "current_time"
 # Current sustained-pressure molt reminder — permanent per-result metadata at
 # ``tool_meta.context.molt`` (moved here from the former sparse
@@ -116,7 +123,7 @@ TOOL_META_CONTEXT_CACHE_MISS_BUDGET_KEY = "cache_miss_budget"
 TOOL_META_CONTEXT_CACHE_MISS_TOKENS_KEY = "cache_miss_tokens"
 
 # Always-on current-session cache-miss/budget telemetry surfaced inside the
-# current-session half of ``tool_meta.token_usage`` (see
+# ``session`` (current-runtime-session) half of ``tool_meta.token_usage`` (see
 # :func:`_build_session_token_economy`).  Unlike the ``tool_meta.context`` guard
 # above — which appears ONLY once the session cache-miss total reaches/exceeds
 # the budget — these three fields ride on EVERY result whenever the session
@@ -491,17 +498,20 @@ def build_meta_readme() -> dict:
             "context.cache_miss_tokens report the configured budget and the current "
             "cache-miss total. When the sustained-pressure warning is also active, "
             "both warnings are preserved in context.molt (the budget line is "
-            "appended). The action when warned is to molt. token_usage is the single unified token-diagnostics block "
-            "(see meta_guidance.token_efficiency). It is one flat dict combining a "
-            "provider-round token/cache snapshot — keys input, cache_miss, cache_rate, "
-            "context_usage, window, output, thinking — with a current-session "
-            "aggregate half — keys session_cache_rate, api_calls, input_tokens, "
-            "cached_tokens, avg_input_tokens_per_api_call, plus ALWAYS-ON "
+            "appended). The action when warned is to molt. token_usage is the single token-diagnostics block "
+            "(see meta_guidance.token_efficiency). It is NESTED into two explicitly "
+            "named halves (not one flat dict): current_call — this result's own "
+            "provider-round token/cache snapshot, keys input, cache_miss, cache_rate, "
+            "context_usage, window, output, thinking; and session — the "
+            "current-runtime-session aggregate, keys session_cache_rate, api_calls, "
+            "input_tokens, cached_tokens, avg_input_tokens_per_api_call, plus ALWAYS-ON "
             "current-session cache-miss/budget telemetry: cache_miss_tokens "
             "(current-session cumulative cache miss = max(input_tokens - "
             "cached_tokens, 0)), cache_miss_budget (the configured budget), and "
             "cache_miss_remaining_tokens (max(cache_miss_budget - cache_miss_tokens, "
-            "0)). These three ride on EVERY result whenever session aggregate token "
+            "0)). The nesting removes the confusing flat current_call.input vs "
+            "session.input_tokens adjacency. These three cache-miss fields ride under "
+            "session on EVERY result whenever session aggregate token "
             "usage is available (cache_miss_budget/cache_miss_remaining_tokens are "
             "present only when a budget is configured), so you can always read your "
             "current cumulative cache miss and remaining budget here without "
@@ -510,14 +520,15 @@ def build_meta_readme() -> dict:
             "once you have reached/exceeded the budget. If you have reached or are "
             "nearing the cache-miss budget, do NOT use summarize to reconstruct "
             "context because reconstruction itself will create a large cache miss; "
-            "molt proactively. The session-stat fields "
+            "molt proactively. The session-half fields "
             "are CURRENT runtime-session deltas (counted since this process "
             "started/last refreshed), NOT restored lifetime/cumulative totals. The "
-            "block also carries a short ref sentence ('See "
+            "block also carries a short top-level ref sentence ('See "
             "meta_guidance.token_efficiency for details.') hooking the guidance "
             "subsection that explains how to act on it. Each "
-            "half appears only "
-            "when its source data is available; missing values are omitted, not "
+            "half (current_call, session) appears only "
+            "when its source data is available (an empty half is omitted, not left "
+            "empty); missing inner values are omitted, not "
             "invented. Copied here so agents can inspect historical high-context "
             "summarize/rebuild costs after newer results arrive. May also "
             "carry a one-shot 'reconstruction' event when the runtime just "
@@ -1123,7 +1134,7 @@ def build_reconstruction_tool_meta(agent) -> dict | None:
 
 
 def _build_provider_round_token_usage(agent) -> dict:
-    """Return the provider-round half of the unified token_usage block.
+    """Return the ``current_call`` (provider-round) half of the token_usage block.
 
     Reads ``SessionManager.latest_token_usage_snapshot()`` — the full
     provider-round record kept for internal logging (scope, api-call index/id,
@@ -1166,7 +1177,7 @@ def _build_provider_round_token_usage(agent) -> dict:
 
 
 def _build_session_token_economy(agent) -> dict:
-    """Return the current-session half of the unified token_usage block.
+    """Return the ``session`` (current-runtime-session) half of the token_usage block.
 
     Prefers ``agent.get_current_session_token_usage()`` — the CURRENT runtime
     session deltas (``current_total - session_baseline``), which exclude restored
@@ -1237,34 +1248,45 @@ def _build_session_token_economy(agent) -> dict:
 
 
 def build_tool_meta_token_usage(agent) -> dict | None:
-    """Return the unified token diagnostics block for permanent ``tool_meta``.
+    """Return the token diagnostics block for permanent ``tool_meta``.
 
-    Jason's FINAL contract: ALL token-related diagnostics live in ONE flat
-    ``_meta.tool_meta.token_usage`` block — there is no separate
-    ``tool_meta.token_efficiency`` nor ``agent_meta.token_efficiency``. The block
-    has two halves merged into one flat dict:
+    ALL token-related diagnostics live in ONE ``_meta.tool_meta.token_usage``
+    block — there is no separate ``tool_meta.token_efficiency`` nor
+    ``agent_meta.token_efficiency``.  The block is NESTED into two explicitly
+    named halves so the confusing flat ``input`` vs ``input_tokens`` adjacency is
+    gone; each half keeps its own local key convention:
 
-    * provider-round (per-result evidence): ``input``, ``cache_miss``,
-      ``cache_rate``, ``context_usage``, ``window``, ``output``, ``thinking``.
-    * current-session aggregate: ``session_cache_rate``, ``api_calls``,
-      ``input_tokens``, ``cached_tokens``, ``avg_input_tokens_per_api_call``,
-      plus the always-on cache-miss/budget telemetry ``cache_miss_tokens`` and
-      (when a positive-int budget is configured) ``cache_miss_budget`` /
-      ``cache_miss_remaining_tokens``.  These are CURRENT runtime-session deltas
-      (not restored lifetime totals); see :func:`_build_session_token_economy`.
+    * ``current_call`` — this tool result's own provider round (per-result
+      evidence): ``input``, ``cache_miss``, ``cache_rate``, ``context_usage``,
+      ``window``, ``output``, ``thinking`` (see
+      :func:`_build_provider_round_token_usage`).
+    * ``session`` — the current-runtime-session aggregate: ``session_cache_rate``,
+      ``api_calls``, ``input_tokens``, ``cached_tokens``,
+      ``avg_input_tokens_per_api_call``, plus the always-on cache-miss/budget
+      telemetry ``cache_miss_tokens`` and (when a positive-int budget is
+      configured) ``cache_miss_budget`` / ``cache_miss_remaining_tokens``.  These
+      are CURRENT runtime-session deltas (not restored lifetime totals); see
+      :func:`_build_session_token_economy`.
 
-    Each half is emitted only when its source data is available; missing values
-    are omitted, not invented; numeric zero/sentinel values are preserved. When
-    the block exists it always carries a short ``ref`` hook
-    (:data:`TOKEN_USAGE_GUIDANCE_REF`) back to the resident guidance subsection.
-    Returns ``None`` when neither half has any data (never an empty block).
+    Each half is emitted only when its source data is available (an empty half is
+    omitted entirely, not left as an empty sub-object); missing inner values are
+    omitted, not invented; numeric zero/sentinel values are preserved.  When the
+    block exists it always carries a single top-level ``ref`` hook
+    (:data:`TOKEN_USAGE_GUIDANCE_REF`) — shared across both halves, never
+    duplicated inside them — back to the resident guidance subsection.  Returns
+    ``None`` when neither half has any data (never an empty block).
     """
-    compact = _build_provider_round_token_usage(agent)
-    compact.update(_build_session_token_economy(agent))
-    if not compact:
+    current_call = _build_provider_round_token_usage(agent)
+    session = _build_session_token_economy(agent)
+    if not current_call and not session:
         return None
-    compact["ref"] = TOKEN_USAGE_GUIDANCE_REF
-    return compact
+    block: dict = {}
+    if current_call:
+        block[TOKEN_USAGE_CURRENT_CALL_KEY] = current_call
+    if session:
+        block[TOKEN_USAGE_SESSION_KEY] = session
+    block["ref"] = TOKEN_USAGE_GUIDANCE_REF
+    return block
 
 def _current_context_usage(agent) -> float:
     """Return the current context-window usage ratio for warnings/events.

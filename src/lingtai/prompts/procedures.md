@@ -59,7 +59,7 @@ is nothing to reconstruct.
 **Molt boundary.** At task completion, after necessary reporting and durable
 stores are tended, if no human reply or concrete next action remains, do not
 molt automatically. Default to proactive task-boundary molt only when
-`_meta.tool_meta.token_usage.api_calls > 100`; below that threshold, go
+`_meta.tool_meta.token_usage.session.api_calls > 100`; below that threshold, go
 idle unless context pressure is present, summarize plus automatic reconstruction
 still cannot bring context below `0.6 * context_window`, the human explicitly
 asks for a reset, or conversation confusion makes the fresh briefing worth the
