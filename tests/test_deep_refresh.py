@@ -726,7 +726,8 @@ def _codex_agent(tmp_path: Path, epoch: float):
 
 
 def test_refresh_rebuilds_codex_adapter_with_stable_id(tmp_path):
-    """A live Codex refresh rebuilds the adapter but KEEPS the same affinity id.
+    """A live Codex refresh WITH rebuild_context=true rebuilds the adapter but
+    KEEPS the same affinity id.
 
     The Codex cache-affinity id is a hash of the agent path + current molt_count
     (no epoch, no time dependence). At a fixed molt_count a refresh — even at a
@@ -735,6 +736,11 @@ def test_refresh_rebuilds_codex_adapter_with_stable_id(tmp_path):
     epoch-stamp / rotation: within a molt segment the agent keeps routing to the
     same sticky-warm backend cache slot across restarts. (The id intentionally
     moves only at a molt boundary, which a refresh is not.)
+
+    Note (2026-07-02): the adapter rebuild is now GATED on the explicit
+    rebuild_context=true opt-in. A default refresh keeps the warm adapter and is
+    covered by test_system_refresh_rebuild_context; this test exercises the
+    opt-in rebuild path and its stable-id invariant.
     """
     from unittest.mock import patch
 
@@ -758,7 +764,7 @@ def test_refresh_rebuilds_codex_adapter_with_stable_id(tmp_path):
         "time.time", return_value=1_700_000_500
     ):
         mgr_cls.return_value.get_access_token.return_value = "fake-token"
-        agent._setup_from_init()
+        agent._setup_from_init(rebuild_context=True)
 
     new_adapter = agent.service.get_adapter("codex")
     new_id, _ = new_adapter._resolve_codex_ids("gpt-5.5")

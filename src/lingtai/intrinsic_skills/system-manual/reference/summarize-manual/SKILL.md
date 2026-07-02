@@ -213,7 +213,10 @@ summarize would discard cache benefit.
 
 - **Below 0.95 of the context window:** summarize stays pending at the provider
   layer and the session keeps appending. This delay is normal, not a failure; do
-  not call `refresh` merely to "apply" the summary.
+  not call `refresh` merely to "apply" the summary. A default `refresh` does NOT
+  rebuild provider context — it keeps the warm continuation/cache prefix. The
+  preferred explicit provider-context rebuild path is
+  `system(action="summarize", rebuild_only=true)`, not `refresh`.
 - **At or above 0.75 of the context window:** `_meta.tool_meta.context.rebuild`
   is stamped continuously. If an earlier fresh provider context is worth the
   cost, make one explicit `system(action="summarize", rebuild_only=true)` call
@@ -228,9 +231,16 @@ summarize would discard cache benefit.
 If no summarize has been recorded, there is no compacted history to apply, though
 rebuild-only can still force a fresh replay of current history on adapters that
 support it. `refresh` remains the emergency path for broken/stale context or
-explicit human direction, not the normal way to apply summarize. If summarize or
-a rebuild still cannot bring context below `0.6 * context_window`, tend durable
-stores and molt deliberately.
+explicit human direction, not the normal way to apply summarize. By default
+`refresh` reloads tools/config/prompt WITHOUT rebuilding provider context; it
+keeps the warm continuation/cache prefix. Only if you deliberately want refresh
+to also force a fresh provider-context rebuild do you pass
+`system(action="refresh", rebuild_context=true)` — an exceptional, explicit
+escape hatch. Do not use `refresh` to apply a summarize unless you explicitly
+pass `rebuild_context=true`; the cheaper, preferred rebuild path is still
+`system(action="summarize", rebuild_only=true)`. If summarize or a rebuild still
+cannot bring context below `0.6 * context_window`, tend durable stores and molt
+deliberately.
 
 ## 4 · Recovering the original result
 

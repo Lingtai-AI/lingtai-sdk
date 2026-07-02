@@ -320,7 +320,7 @@ def test_refresh_with_unauthorized_preset_returns_error(tmp_path, monkeypatch):
     # Track _perform_refresh calls — should NOT be called when swap is refused
     perform_calls = []
     monkeypatch.setattr(agent, "_perform_refresh",
-                        lambda: perform_calls.append(True))
+                        lambda *a, **k: perform_calls.append(True))
 
     # _activate_preset must NOT be called — the allowed-gate runs first
     activate_calls = []
@@ -368,7 +368,7 @@ def test_refresh_with_known_preset_calls_activate_then_perform(tmp_path, monkeyp
     monkeypatch.setattr(agent, "_activate_preset",
                         lambda n: activate_calls.append(n))
     monkeypatch.setattr(agent, "_perform_refresh",
-                        lambda: perform_calls.append(True))
+                        lambda *a, **k: perform_calls.append(True))
 
     result = agent._intrinsics["system"]({"action": "refresh",
                                            "preset": "minimax"})
@@ -387,7 +387,7 @@ def test_refresh_no_preset_arg_unchanged(tmp_path, monkeypatch):
     monkeypatch.setattr(agent, "_activate_preset",
                         lambda n: activate_calls.append(n))
     monkeypatch.setattr(agent, "_perform_refresh",
-                        lambda: perform_calls.append(True))
+                        lambda *a, **k: perform_calls.append(True))
 
     agent._intrinsics["system"]({"action": "refresh"})
 
@@ -410,7 +410,7 @@ def test_refresh_empty_preset_is_no_swap(tmp_path, monkeypatch):
     monkeypatch.setattr(agent, "_activate_preset",
                         lambda n: activate_calls.append(n))
     monkeypatch.setattr(agent, "_perform_refresh",
-                        lambda: perform_calls.append(True))
+                        lambda *a, **k: perform_calls.append(True))
 
     result = agent._intrinsics["system"]({"action": "refresh", "preset": ""})
     assert result["status"] == "ok"
@@ -427,7 +427,7 @@ def test_refresh_whitespace_preset_is_no_swap(tmp_path, monkeypatch):
     monkeypatch.setattr(agent, "_activate_preset",
                         lambda n: activate_calls.append(n))
     monkeypatch.setattr(agent, "_perform_refresh",
-                        lambda: perform_calls.append(True))
+                        lambda *a, **k: perform_calls.append(True))
 
     result = agent._intrinsics["system"]({"action": "refresh", "preset": "   \t\n"})
     assert result["status"] == "ok"
@@ -537,7 +537,7 @@ def test_refresh_with_preset_handles_not_implemented(tmp_path):
     perform_calls = []
     import unittest.mock as _mock
     with _mock.patch.object(agent, "_perform_refresh",
-                            lambda: perform_calls.append(True)):
+                            lambda *a, **k: perform_calls.append(True)):
         result = agent._intrinsics["system"](
             {"action": "refresh", "preset": "anything"})
     assert result["status"] == "error"
@@ -578,7 +578,7 @@ def test_refresh_revert_preset_swaps_to_default(tmp_path, monkeypatch):
     monkeypatch.setattr(agent, "_activate_default_preset",
                         lambda: activate_default_calls.append(True))
     monkeypatch.setattr(agent, "_perform_refresh",
-                        lambda: perform_calls.append(True))
+                        lambda *a, **k: perform_calls.append(True))
 
     result = agent._intrinsics["system"]({"action": "refresh", "revert_preset": True})
 
@@ -636,7 +636,7 @@ def test_refresh_empty_preset_with_revert_preset_treats_empty_as_absent(
     monkeypatch.setattr(agent, "_activate_default_preset",
                         lambda: activate_default_calls.append(True))
     monkeypatch.setattr(agent, "_perform_refresh",
-                        lambda: perform_calls.append(True))
+                        lambda *a, **k: perform_calls.append(True))
 
     result = agent._intrinsics["system"]({
         "action": "refresh",
@@ -678,7 +678,7 @@ def test_refresh_revert_preset_when_no_preset_configured_errors(tmp_path, monkey
     agent = BaseAgent(service=svc, agent_name="alice", working_dir=wd)
 
     # Don't actually relaunch on _perform_refresh
-    monkeypatch.setattr(agent, "_perform_refresh", lambda: None)
+    monkeypatch.setattr(agent, "_perform_refresh", lambda *a, **k: None)
 
     result = agent._intrinsics["system"]({"action": "refresh", "revert_preset": True})
     assert result["status"] == "error"
@@ -698,7 +698,7 @@ def test_refresh_revert_preset_false_is_noop(tmp_path, monkeypatch):
     monkeypatch.setattr(agent, "_activate_preset",
                         lambda n: activate_calls.append(n))
     monkeypatch.setattr(agent, "_perform_refresh",
-                        lambda: perform_calls.append(True))
+                        lambda *a, **k: perform_calls.append(True))
 
     result = agent._intrinsics["system"]({"action": "refresh", "revert_preset": False})
 
@@ -730,7 +730,7 @@ def test_refresh_revert_preset_when_active_equals_default_still_succeeds(tmp_pat
     monkeypatch.setattr(agent, "_activate_default_preset",
                         lambda: activate_default_calls.append(True))
     monkeypatch.setattr(agent, "_perform_refresh",
-                        lambda: perform_calls.append(True))
+                        lambda *a, **k: perform_calls.append(True))
 
     result = agent._intrinsics["system"]({"action": "refresh", "revert_preset": True})
 

@@ -76,11 +76,33 @@ def _check_context_fits(agent, preset_name: str) -> tuple:
     return True, None, None
 
 
+def _rebuild_context_requested(value) -> bool:
+    """Return True only for an explicit truthy ``rebuild_context`` opt-in.
+
+    Default refresh must NOT rebuild provider context (Jason, 2026-07-02): the
+    warm continuation/cache prefix is kept unless the agent explicitly opts in.
+    Absent, ``None``, ``False``, empty string, and any non-truthy value all mean
+    "do not rebuild"; only a real boolean ``True`` or an explicit truthy string
+    ("1"/"true"/"yes"/"on") requests the exceptional rebuild. Mirrors
+    ``summarize._truthy_flag`` so both context-rebuild opt-ins parse identically.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
+
 def _refresh(agent, args: dict) -> dict:
     from ...i18n import t
     reason = args.get("reason", "")
     preset_name = args.get("preset")
     revert_preset = args.get("revert_preset", False)
+    # Opt-in provider-context rebuild. Default false: a plain refresh reloads
+    # tools/config/prompt and keeps the warm continuation/cache prefix. Only an
+    # explicit rebuild_context=true forces a fresh provider-context rebuild on
+    # refresh (the exceptional path; summarize(rebuild_only=true) is preferred).
+    rebuild_context = _rebuild_context_requested(args.get("rebuild_context"))
 
     # Normalize empty/whitespace preset to None. Some tool-call providers
     # serialize optional string fields as "" instead of omitting them, and
@@ -176,7 +198,7 @@ def _refresh(agent, args: dict) -> dict:
         agent._log("preset_swap_started",
                    preset=preset_name, reason=reason, revert=revert_preset)
 
-    agent._log("refresh_requested", reason=reason)
+    agent._log("refresh_requested", reason=reason, rebuild_context=rebuild_context)
 
     # Re-spawn any init.json MCPs whose subprocess exited at boot (or has
     # since died). The Agent subclass owns the retry — BaseAgent has no
@@ -192,7 +214,7 @@ def _refresh(agent, args: dict) -> dict:
         except Exception as e:
             agent._log("mcp_retry_error", error=str(e))
 
-    agent._perform_refresh()
+    agent._perform_refresh(rebuild_context=rebuild_context)
     return {
         "status": "ok",
         "message": t(agent._config.language, "system_tool.refresh_message"),

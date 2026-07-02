@@ -104,7 +104,7 @@ def test_swap_refused_when_current_context_exceeds_target_limit(tmp_path, monkey
     monkeypatch.setattr(agent, "_activate_preset",
                         lambda n: activate_calls.append(n))
     monkeypatch.setattr(agent, "_perform_refresh",
-                        lambda: perform_calls.append(True))
+                        lambda *a, **k: perform_calls.append(True))
 
     log_events = []
     real_log = agent._log
@@ -141,7 +141,7 @@ def test_swap_allowed_when_current_context_fits(tmp_path, monkeypatch):
     monkeypatch.setattr(agent, "_activate_preset",
                         lambda n: activate_calls.append(n))
     monkeypatch.setattr(agent, "_perform_refresh",
-                        lambda: perform_calls.append(True))
+                        lambda *a, **k: perform_calls.append(True))
 
     small_path = str(plib / "small.json")
     result = agent._intrinsics["system"]({"action": "refresh", "preset": small_path})
@@ -166,7 +166,7 @@ def test_swap_allowed_when_target_has_no_context_limit(tmp_path, monkeypatch):
     activate_calls = []
     monkeypatch.setattr(agent, "_activate_preset",
                         lambda n: activate_calls.append(n))
-    monkeypatch.setattr(agent, "_perform_refresh", lambda: None)
+    monkeypatch.setattr(agent, "_perform_refresh", lambda *a, **k: None)
 
     no_limit_path = str(plib / "no_limit.json")
     result = agent._intrinsics["system"]({"action": "refresh", "preset": no_limit_path})
@@ -201,7 +201,7 @@ def test_swap_skips_guard_when_target_limit_is_zero(tmp_path, monkeypatch):
     activate_calls = []
     monkeypatch.setattr(agent, "_activate_preset",
                         lambda n: activate_calls.append(n))
-    monkeypatch.setattr(agent, "_perform_refresh", lambda: None)
+    monkeypatch.setattr(agent, "_perform_refresh", lambda *a, **k: None)
 
     zero_path = str(plib / "zero.json")
     result = agent._intrinsics["system"]({"action": "refresh", "preset": zero_path})
@@ -234,7 +234,7 @@ def test_swap_skips_guard_when_target_limit_is_negative(tmp_path, monkeypatch):
     activate_calls = []
     monkeypatch.setattr(agent, "_activate_preset",
                         lambda n: activate_calls.append(n))
-    monkeypatch.setattr(agent, "_perform_refresh", lambda: None)
+    monkeypatch.setattr(agent, "_perform_refresh", lambda *a, **k: None)
 
     negone_path = str(plib / "negone.json")
     result = agent._intrinsics["system"]({"action": "refresh", "preset": negone_path})
@@ -275,7 +275,7 @@ def test_guard_reads_context_limit_from_llm_block(tmp_path, monkeypatch):
     activate_calls = []
     monkeypatch.setattr(agent, "_activate_preset",
                         lambda n: activate_calls.append(n))
-    monkeypatch.setattr(agent, "_perform_refresh", lambda: None)
+    monkeypatch.setattr(agent, "_perform_refresh", lambda *a, **k: None)
 
     tight_path = str(plib / "tight.json")
     result = agent._intrinsics["system"]({"action": "refresh", "preset": tight_path})
@@ -320,7 +320,7 @@ def test_revert_refused_when_current_context_exceeds_default_limit(tmp_path, mon
     monkeypatch.setattr(agent, "_activate_default_preset",
                         lambda: activate_default_calls.append(True))
     monkeypatch.setattr(agent, "_perform_refresh",
-                        lambda: perform_calls.append(True))
+                        lambda *a, **k: perform_calls.append(True))
 
     log_events = []
     real_log = agent._log

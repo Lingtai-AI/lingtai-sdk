@@ -1744,12 +1744,14 @@ class BaseAgent:
         *,
         skip_chat_history_save: bool = False,
         skip_save_reason: str | None = None,
+        rebuild_context: bool = False,
     ) -> None:
         from .lifecycle import _perform_refresh
         _perform_refresh(
             self,
             skip_chat_history_save=skip_chat_history_save,
             skip_save_reason=skip_save_reason,
+            rebuild_context=rebuild_context,
         )
 
     def _activate_preset(self, name: str) -> None:

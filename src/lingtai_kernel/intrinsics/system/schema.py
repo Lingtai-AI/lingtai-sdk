@@ -33,6 +33,10 @@ def get_schema(lang: str = "en") -> dict:
                 "type": "boolean",
                 "description": t(lang, "system_tool.revert_preset_description"),
             },
+            "rebuild_context": {
+                "type": "boolean",
+                "description": t(lang, "system_tool.rebuild_context_description"),
+            },
             "rebuild_only": {
                 "type": "boolean",
                 "description": "For action='summarize': request a one-shot provider-context rebuild without summarizing any items. Use with no items.",

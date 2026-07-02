@@ -660,13 +660,69 @@ def _write_heartbeat_tick(agent) -> None:
         pass
 
 
+# The refresh handshake marker. The old process renames ``.refresh`` →
+# ``.refresh.taken`` (or synthesizes an empty touch) so the watcher subprocess
+# can ack the handshake; the relaunched process reads it at boot and ``cli.run``
+# unlinks it after ``_setup_from_init`` returns. It doubles as the INTERNAL
+# refresh signal that carries the one-shot ``rebuild_context`` opt-in across the
+# relaunch process boundary (Jason, 2026-07-02: no environment variable).
+REFRESH_TAKEN_MARKER = ".refresh.taken"
+
+
+def _marker_rebuild_context_requested(working_dir) -> bool:
+    """Return True iff the ``.refresh.taken`` marker carries a rebuild opt-in.
+
+    The marker is the internal refresh signal that crosses the relaunch process
+    boundary. When the agent opted in via
+    ``system(action='refresh', rebuild_context=true)``, the old process writes a
+    small JSON payload ``{"rebuild_context": true}`` into the marker; the boot
+    ``Agent._setup_from_init`` reads it here.
+
+    Backward compatible with older empty/touch markers (the heartbeat path
+    renaming an empty ``.refresh``, the telegram ``/refresh`` command, or any
+    pre-payload marker): a missing file, empty content, non-JSON content, JSON
+    that is not an object, or an absent/falsey ``rebuild_context`` key all mean
+    "do not rebuild". Fails closed to ``False`` on any read/parse error so a
+    corrupt marker can never force an unwanted provider-context rebuild.
+    """
+    try:
+        raw = (Path(working_dir) / REFRESH_TAKEN_MARKER).read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return False
+    raw = raw.strip()
+    if not raw:
+        return False
+    try:
+        payload = json.loads(raw)
+    except (ValueError, TypeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    return payload.get("rebuild_context") is True
+
+
 def _perform_refresh(
     agent,
     *,
     skip_chat_history_save: bool = False,
     skip_save_reason: str | None = None,
+    rebuild_context: bool = False,
 ) -> None:
     """Refresh = .refresh handshake + deferred relaunch.
+
+    ``rebuild_context`` (default ``False``) is the explicit opt-in that lets a
+    refresh ALSO force a fresh provider-context rebuild. When ``True`` it is
+    threaded to the relaunched process via an INTERNAL refresh signal — the
+    ``.refresh.taken`` handshake marker is upgraded to a small JSON payload
+    ``{"rebuild_context": true}`` (see ``_marker_rebuild_context_requested``),
+    which the boot's ``_setup_from_init`` reads and ``cli.run`` then unlinks so
+    it cannot leak into a later molt-reload. When ``False`` (the default) the
+    marker stays an empty/touch handshake and the relaunched agent keeps its
+    warm continuation/cache prefix rather than forcing a rebuild. No environment
+    variable is involved (Jason, 2026-07-02).
+    Note: a relaunch is a new process, so in-memory provider continuation state
+    is not carried across the boundary regardless; the marker governs the
+    adapter's *explicit* forced-rebuild lever, not the process boundary itself.
 
     Self-sufficient across all call sites — heartbeat, tool-call (intrinsic
     ``system(action='refresh')``), and AED preset-fallback in ``turn.py`` all
@@ -758,6 +814,23 @@ def _perform_refresh(
         refresh_path.unlink(missing_ok=True)
     except OSError:
         pass
+
+    # Internal refresh signal for the one-shot rebuild_context opt-in
+    # (Jason, 2026-07-02: no environment variable). The handshake above
+    # guarantees .refresh.taken now exists — an empty/renamed touch by default.
+    # Only an explicit rebuild_context=true refresh upgrades it to a small JSON
+    # payload that the boot _setup_from_init reads (see
+    # _marker_rebuild_context_requested). A default refresh leaves it empty so
+    # the relaunched agent keeps its warm continuation/cache prefix, and older
+    # empty markers stay valid. Failure to write the payload is logged and
+    # swallowed: the refresh still proceeds, just without the rebuild opt-in.
+    if rebuild_context:
+        try:
+            taken_path_obj.write_text(
+                json.dumps({"rebuild_context": True}), encoding="utf-8"
+            )
+        except OSError as e:
+            agent._log("refresh_rebuild_context_marker_write_failed", error=str(e))
 
     taken_path = str(taken_path_obj)
     lock_path = str(working_dir / ".agent.lock")
@@ -1137,6 +1210,8 @@ def _perform_refresh(
         "log('refresh_failed_permanent', alert_id=alert_id, **meta)\n"
     )
     watcher_env = {**os.environ, "LINGTAI_REFRESH_ENV_OVERWRITE": "1"}
+    # The rebuild_context opt-in is NOT threaded via the environment (Jason,
+    # 2026-07-02); it rides the internal .refresh.taken payload written above.
     subprocess.Popen(
         [sys.executable, "-c", relaunch_script],
         stdin=subprocess.DEVNULL,
