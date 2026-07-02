@@ -56,7 +56,7 @@ def _tool_meta(wire):
 
 _EVENT = {
     "type": "delayed_summarize_reconstruction",
-    "trigger_threshold": 0.75,
+    "trigger_threshold": 0.95,
     "recovery_target": 0.60,
     "context_window": 100000,
     "before": {"context_tokens": 85000, "usage": 0.85},
@@ -67,6 +67,14 @@ _EVENT = {
         "above the 60% recovery target. If more digested tool results can be "
         "summarized, do that first; otherwise tend durable stores and molt "
         "deliberately. See psyche-manual."
+    ),
+    "proactive_hint": (
+        "Emergency provider-context rebuild has been applied automatically at 95% "
+        "of the context window. You should have used system(action='summarize', "
+        "rebuild_only=true) once after context passed 75% to proactively rebuild "
+        "context and reduce pressure before the forced path was needed. See "
+        "meta_guidance and summarize-manual for the manual 75% rebuild vs "
+        "automatic 95% rebuild rule."
     ),
 }
 
@@ -95,6 +103,8 @@ def test_reconstruction_event_attaches_to_tool_meta(tmp_path):
     assert isinstance(tm["reconstruction"]["molt"], str)
     assert "runtime already rebuilt the provider context" in tm["reconstruction"]["molt"]
     assert "molt deliberately" in tm["reconstruction"]["molt"]
+    assert "proactive_hint" in tm["reconstruction"]
+    assert "rebuild_only=true" in tm["reconstruction"]["proactive_hint"]
 
 
 def test_reconstruction_event_is_one_shot_across_batch(tmp_path):
@@ -183,7 +193,7 @@ def test_reconstruction_event_emits_reminder_event_when_molt_attached(tmp_path):
     assert payload["before_usage"] == 0.85
     assert payload["after_usage"] == 0.70
     assert payload["branch"] == "above_recovery"
-    assert payload["trigger_threshold"] == 0.75
+    assert payload["trigger_threshold"] == 0.95
     assert payload["recovery_target"] == 0.60
     # Redaction-safe: no full reminder prose in the event payload.
     import json

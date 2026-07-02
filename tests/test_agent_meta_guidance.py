@@ -17,7 +17,7 @@ STATIC_CODEX_COMMENT = {
         "timing is the generic runtime behavior documented in "
         "substrate/procedures, not a Codex-only policy. Summary content is "
         "recorded in runtime history now; provider-side context reconstruction "
-        "may be delayed until context reaches 0.75 of the window. Below "
+        "may be delayed until context reaches 0.95 of the window. Below "
         "the threshold, keep working normally. At or above the threshold, the "
         "runtime automatically reconstructs context on the next request with "
         "the compacted history — no manual action is needed. Refresh is an "
@@ -27,7 +27,7 @@ STATIC_CODEX_COMMENT = {
         "molt is the higher-level replacement for summarize."
     ),
     "long_context_strategy": (
-        "When local context reaches 0.75 of the context window, "
+        "When local context reaches 0.95 of the context window, "
         "summarize/batch the noisy history; if that summarize pass cannot "
         "bring local context back below that threshold, molt instead of "
         "repeatedly paying fresh full replays."

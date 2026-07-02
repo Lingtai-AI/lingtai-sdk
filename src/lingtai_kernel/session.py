@@ -11,6 +11,7 @@ import uuid
 from typing import Any, Callable, TYPE_CHECKING
 
 from .config import (
+    CONTEXT_PRESSURE_HIGH_RATIO,
     AgentConfig,
     # Re-exported for backward compatibility: the streak logic now lives in
     # ``ContextPressureReminder`` and reads these off ``config`` directly, but
@@ -37,6 +38,7 @@ from .token_counter import count_tokens, count_tool_tokens
 
 __all__ = [
     "SessionManager",
+    "CONTEXT_PRESSURE_HIGH_RATIO",
     "CONTEXT_PRESSURE_RECONSTRUCTION_RATIO",
     "CONTEXT_PRESSURE_WARN_AFTER_ROUNDS",
     "CONTEXT_PRESSURE_RECOVERY_TARGET",

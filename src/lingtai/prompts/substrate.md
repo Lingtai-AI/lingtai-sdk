@@ -126,13 +126,19 @@ the raw; a posteriori reclaims context after the fact.
 **Delayed summarization reconstruction:** summarize has two mechanisms. It
 records a compact replacement in runtime history and may clear reminders, but it
 does not necessarily rebuild the active provider-side context immediately. Below
-`0.75` of the context window, summarized history may remain pending at the
+`0.95` of the context window, summarized history may remain pending at the
 provider layer while the session keeps appending; from the agent's perspective,
 the old raw block may still be in the current continuation. Do not call
-`refresh` just to apply summarize. When pending summarized history exists and
-context reaches `0.75`, the runtime automatically reconstructs with the
+`refresh` just to apply summarize. Once context is at/above `0.75`, the runtime
+also stamps `_meta.tool_meta.context.rebuild`, which permits a one-shot manual
+provider-context rebuild with `system(action="summarize", rebuild_only=true)`
+when the fresh context is worth the cost. When pending summarized history exists
+and context reaches `0.95`, the runtime automatically reconstructs with the
 compacted history on the next request; that is when provider-context replacement
-becomes real for the agent. If no summarize has been recorded, there is no
+becomes real for the agent. The one-shot reconstruction event also carries
+`reconstruction.proactive_hint` on the automatic 95% path, reminding you that one
+manual `rebuild_only` call after the 75% hint should have reduced pressure
+before the emergency rebuild. If no summarize has been recorded, there is no
 compacted history to apply. Reference manuals explain why this threshold exists;
 this resident section states what to do.
 

@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 from lingtai_kernel.config import AgentConfig
 from lingtai_kernel.session import (
     SessionManager,
+    CONTEXT_PRESSURE_HIGH_RATIO,
     CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,
     CONTEXT_PRESSURE_WARN_AFTER_ROUNDS,
 )
@@ -47,7 +48,8 @@ def make_session_manager(**kw):
 
 
 def test_constants_match_contract():
-    assert CONTEXT_PRESSURE_RECONSTRUCTION_RATIO == 0.75
+    assert CONTEXT_PRESSURE_HIGH_RATIO == 0.75
+    assert CONTEXT_PRESSURE_RECONSTRUCTION_RATIO == 0.95
     assert CONTEXT_PRESSURE_WARN_AFTER_ROUNDS == 3
 
 

@@ -18,6 +18,7 @@ from lingtai_kernel.meta_block import (
     build_meta,
     build_meta_guidance,
     build_meta_readme,
+    build_context_rebuild_hint,
     build_molt_context,
     build_notification_payload,
     build_synthetic_meta_envelope,
@@ -399,6 +400,7 @@ def test_build_meta_guidance_renders_guidance_meta_readme_and_adapter():
     assert "progressive disclosure" in section
     assert "Delayed summarization reconstruction threshold" in section
     assert "0.75" in section
+    assert "0.95" in section
     assert "Do not call `refresh` just to apply a summarize" in section
     assert "does not mean the active provider-side context" in section
     # meta_readme content (the _meta envelope explanation) is present.
@@ -1521,7 +1523,7 @@ def _recon_agent(
 _RAW_EVENT = {
     "type": "delayed_summarize_reconstruction",
     "reason": "delayed_summarize_reconstruction",
-    "trigger_threshold": 0.75,
+    "trigger_threshold": 0.95,
     "recovery_target": 0.60,
     "context_window": 100000,
     "before": {"context_tokens": 85000, "usage": 0.85},
@@ -1539,13 +1541,31 @@ def test_reconstruction_tool_meta_below_recovery_target_no_warning():
     event = meta_block.build_reconstruction_tool_meta(agent)
     assert event is not None
     assert event["type"] == "delayed_summarize_reconstruction"
-    assert event["trigger_threshold"] == 0.75
+    assert event["trigger_threshold"] == 0.95
     assert event["recovery_target"] == 0.60
     assert event["context_window"] == 100000
     assert event["before"]["usage"] == 0.85
     assert event["after"]["usage"] == pytest.approx(0.40)
     assert event["after"]["context_tokens"] == 40000
     assert event["after"]["source"] == "provider_input_tokens"
+    assert "molt" not in event
+    hint = event["proactive_hint"]
+    assert "Emergency provider-context rebuild" in hint
+    assert "95%" in hint
+    assert "75%" in hint
+    assert "rebuild_only=true" in hint
+    assert "meta_guidance" in hint
+    assert "summarize-manual" in hint
+
+
+def test_reconstruction_tool_meta_manual_rebuild_only_has_no_proactive_hint():
+    raw = dict(_RAW_EVENT)
+    raw["type"] = "summarize_rebuild_only_reconstruction"
+    raw["reason"] = "summarize_rebuild_only_reconstruction"
+    agent = _recon_agent(raw_event=raw, after_usage=0.40)
+    event = meta_block.build_reconstruction_tool_meta(agent)
+    assert event["type"] == "summarize_rebuild_only_reconstruction"
+    assert "proactive_hint" not in event
     assert "molt" not in event
 
 
@@ -2545,6 +2565,7 @@ def test_packaged_guidance_resource_is_valid():
     assert "stronger whole-conversation boundary" in body
     assert "skip pre-molt summarize" in body
     assert "0.75" in body
+    assert "0.95" in body
     assert "Do not call `refresh` just to apply a summarize" in body
     assert "does not mean the active provider-side context" in body
     assert "0.6 * context_window" in body
@@ -3020,3 +3041,16 @@ def test_attach_tool_block_promotes_budget_context_and_pops_transit_key():
     # strips whatever remains of _runtime_pending; the key itself must not
     # survive into the promoted tool_meta.context beyond molt + budget fields).
     assert meta_block.TOOL_META_CONTEXT_PENDING_KEY not in result["_runtime_pending"]
+
+
+def test_build_context_rebuild_hint_stamps_after_high_ratio():
+    agent = SimpleNamespace(_intrinsics={"system"})
+
+    assert build_context_rebuild_hint(agent, 0.7499) is None
+    hint = build_context_rebuild_hint(agent, 0.75)
+
+    assert hint is not None
+    assert "context now above 75%" in hint
+    assert "rebuild_only=true" in hint
+    assert "meta_guidance" in hint
+    assert build_context_rebuild_hint(SimpleNamespace(_intrinsics=set()), 0.90) is None

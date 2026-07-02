@@ -71,30 +71,24 @@ methodology.
 ### Delayed summarization reconstruction threshold
 
 Summarize records compact replacements in runtime history and may clear large-result
-reminders, but active provider-side reconstruction is delayed and that delay is
-expected. Runtimes append onto a stable cache prefix instead of rebuilding it
-every turn, so below 0.75 of the context window you simply keep working — do not
-treat the "pending"/delayed status as a failure or reach for `refresh` to force a
-rebuild. If summarized history is pending, then at 0.75 of the context window
-the runtime reconstructs context automatically on the next request with that
-compacted history; no extra summarize call is needed. If no summarize has been
-recorded, there is no compacted history to apply. Reserve `refresh` for
-emergencies (broken/stale context). If summarize plus that automatic
-reconstruction still cannot get context below `0.6 * context_window`, molt
-deliberately. At a task boundary, after necessary reporting and durable stores
-are tended, if there is no human reply or concrete next action, default to
-proactive task-boundary molt only when current-session API calls exceed 100.
-Below that threshold, go idle unless context pressure, explicit human request,
-or conversation confusion makes the fresh briefing worth the molt cost.
-Summarize is a mini molt for a consumed tool result. If you have already decided
-to molt, do not summarize first merely to prepare: molt is the stronger
-whole-conversation summarize boundary.
+reminders immediately, but active provider-side reconstruction is deliberately
+delayed. Runtimes usually append onto a stable cache/continuation prefix instead
+of rebuilding that prefix every turn. Below 0.95 of the context window, keep
+working: do not treat pending summarized history as failure, and do not call
+`refresh` just to force a rebuild. Once context is at/above 0.75, the runtime
+stamps `_meta.tool_meta.context.rebuild`; if a fresh provider context is worth
+the cost before the automatic threshold, make one explicit
+`system(action="summarize", rebuild_only=true)` call with no items. When
+summarized history is pending and context reaches 0.95, the runtime reconstructs
+automatically on the next request with the compacted history. No extra summarize
+call is needed for the automatic path; if that emergency path fires, the one-shot
+`reconstruction.proactive_hint` says a proactive 75% rebuild-only call could have
+relieved pressure earlier. If no summarize has been recorded, there is nothing
+to apply.
 
-Runtime `_meta.guidance` gives the high-attention reminder when summarization is
-timely. For the full procedure — urgent large-result handling, idle cleanup
-sweeps, quality checklist, original-result recovery, append-vs-reconstruction
-timing, and summarize-vs-molt boundaries — read
-`reference/summarize-manual/SKILL.md`.
+Reserve `refresh` for emergencies (broken/stale context). If summarize or a
+rebuild still cannot bring context below `0.6 * context_window`, tend durable
+stores and molt deliberately.
 
 ## 2. Action and responsiveness
 

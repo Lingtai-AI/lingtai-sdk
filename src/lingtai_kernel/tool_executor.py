@@ -18,6 +18,7 @@ from .meta_block import (
     TOOL_META_CONTEXT_KEY,
     TOOL_META_CONTEXT_PENDING_KEY,
     TOOL_META_CONTEXT_EVENT_PENDING_KEY,
+    TOOL_META_CONTEXT_REBUILD_KEY,
     TOOL_META_CONTEXT_CACHE_MISS_BUDGET_KEY,
     TOOL_META_CONTEXT_CACHE_MISS_TOKENS_KEY,
     TOOL_META_TOKEN_USAGE_KEY,
@@ -448,21 +449,24 @@ class ToolExecutor:
             candidate = pending.pop(TOOL_META_TOKEN_USAGE_PENDING_KEY, None)
             if isinstance(candidate, dict):
                 token_usage = dict(candidate)
-            # Current sustained-pressure molt reminder — permanent per-result
-            # metadata at tool_meta.context.molt (build_meta stashes it under a
-            # transit key so it lands on tool_meta, not the sparse agent_meta).
-            # The same transit sub-object also carries the cache-miss budget guard
-            # (a "molt now" warning plus the cache_miss_budget / cache_miss_tokens
-            # fields), so promote those alongside the molt string when present.
+            # Current context guidance — permanent per-result metadata at
+            # tool_meta.context.* (build_meta stashes it under a transit key so it
+            # lands on tool_meta, not the sparse agent_meta).  The same transit
+            # sub-object carries the 75% manual rebuild hint, the sustained-pressure
+            # molt warning, and the cache-miss budget guard fields.
             candidate_context = pending.pop(TOOL_META_CONTEXT_PENDING_KEY, None)
-            if isinstance(candidate_context, dict) and candidate_context.get("molt"):
-                context_block = {"molt": candidate_context["molt"]}
-                for budget_key in (
+            if isinstance(candidate_context, dict):
+                promoted_context = {}
+                for context_key in (
+                    TOOL_META_CONTEXT_REBUILD_KEY,
+                    "molt",
                     TOOL_META_CONTEXT_CACHE_MISS_BUDGET_KEY,
                     TOOL_META_CONTEXT_CACHE_MISS_TOKENS_KEY,
                 ):
-                    if budget_key in candidate_context:
-                        context_block[budget_key] = candidate_context[budget_key]
+                    if context_key in candidate_context and candidate_context[context_key]:
+                        promoted_context[context_key] = candidate_context[context_key]
+                if promoted_context:
+                    context_block = promoted_context
             # The matching one-shot emission-event payload rides alongside; it is
             # only present when build_meta decided this is a NEW emission (deduped
             # against agent state), so logging it here counts genuine emissions

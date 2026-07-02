@@ -22,9 +22,10 @@ The abstraction owns:
   * a :meth:`snapshot` / :meth:`to_debug_dict` view for tests / logs /
     debugging (thresholds, streak, active, last usage/round, and why).
 
-Reminder prose and thresholds are unchanged (same 0.75 high-round ratio, 3-round
-warn count, 0.60 recovery target, one-shot reconstruction event, natural-language
-strings).  The one contract change: the current sustained-pressure reminder moved
+Reminder prose now separates the 0.75 high-context/manual-rebuild threshold from
+the 0.95 automatic reconstruction trigger: high rounds still drive the sustained
+3-round warning, while forced delayed-summarize reconstruction is rarer.  The
+current sustained-pressure reminder lives in permanent tool metadata: it moved
 from ``_meta.agent_meta.context.molt`` to permanent ``_meta.tool_meta.context.molt``;
 the reconstruction reminder stays at ``_meta.tool_meta.reconstruction.molt``.  See
 ``config.py`` for the constants' rationale and ``meta_block.py`` /
@@ -36,6 +37,7 @@ import hashlib
 from dataclasses import dataclass
 
 from ..config import (
+    CONTEXT_PRESSURE_HIGH_RATIO,
     CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,
     CONTEXT_PRESSURE_RECOVERY_TARGET,
     CONTEXT_PRESSURE_WARN_AFTER_ROUNDS,
@@ -128,6 +130,11 @@ def reconstruction_molt_emission_descriptor(event: dict, *, message: str) -> dic
     trigger = _safe_float(event.get("trigger_threshold"))
     if trigger is None:
         trigger = CONTEXT_PRESSURE_RECONSTRUCTION_RATIO
+    high = _safe_float(event.get("threshold_high"))
+    if high is None:
+        high = _safe_float(event.get("high_context_threshold"))
+    if high is None:
+        high = CONTEXT_PRESSURE_HIGH_RATIO
     recovery = _safe_float(event.get("recovery_target"))
     if recovery is None:
         recovery = CONTEXT_PRESSURE_RECOVERY_TARGET
@@ -138,11 +145,12 @@ def reconstruction_molt_emission_descriptor(event: dict, *, message: str) -> dic
     after_source = after.get("source")
     branch = None
     if after_usage is not None:
-        branch = "still_high" if after_usage >= trigger else "above_recovery"
+        branch = "still_high" if after_usage >= high else "above_recovery"
     payload = {
         "target_path": RECONSTRUCTION_MOLT_TARGET_PATH,
         "message_hash": reminder_message_hash(message),
         "trigger_threshold": trigger,
+        "threshold_high": high,
         "recovery_target": recovery,
         "before_usage": before_usage,
         "after_usage": after_usage,
@@ -192,10 +200,13 @@ class ContextPressureReminder:
 
     Thresholds default to the kernel-fixed ``CONTEXT_PRESSURE_*`` constants and
     are stored on the instance so :meth:`to_debug_dict` can report exactly which
-    values drove a decision (and so tests can inject variants).
+    values drove a decision (and so tests can inject variants).  The historical
+    field name ``reconstruction_ratio`` is retained for compatibility, but on the
+    current-state reminder it means the 75% high-context/manual-rebuild ratio,
+    not the 95% forced-reconstruction trigger.
     """
 
-    reconstruction_ratio: float = CONTEXT_PRESSURE_RECONSTRUCTION_RATIO
+    reconstruction_ratio: float = CONTEXT_PRESSURE_HIGH_RATIO
     warn_after_rounds: int = CONTEXT_PRESSURE_WARN_AFTER_ROUNDS
     recovery_target: float = CONTEXT_PRESSURE_RECOVERY_TARGET
 
@@ -360,11 +371,13 @@ def render_current_molt_context(
         f"Context has stayed high across {int(streak)} consecutive fresh model calls "
         f"(currently {usage_text} of the context window). This is a context-pressure "
         "reminder, not an immediate command: when continuing, batch tool results "
-        "you have already digested before summarizing. Repeated summarize calls "
-        "while context stays above 75% substantially hurt token efficiency. "
+        "you have already digested before summarizing. Repeated summarize "
+        "calls while context stays above 75% substantially hurt token efficiency; "
+        "if you only need a fresh provider context, use one rebuild-only summarize "
+        "call instead. "
         f"The recovery target is {recovery_text}, but if a batched summarize/"
-        "reconstruction pass still leaves context above 75%, stop repeating "
-        "summarize, tend durable stores, and molt deliberately. See psyche-manual."
+        "reconstruction pass still leaves context above 75%, stop repeating summarize, "
+        "tend durable stores, and molt deliberately. See psyche-manual."
     )
 
 
@@ -372,7 +385,7 @@ def render_reconstruction_molt(
     *,
     after_usage: float,
     recovery_target: float = CONTEXT_PRESSURE_RECOVERY_TARGET,
-    reconstruction_ratio: float = CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,
+    reconstruction_ratio: float = CONTEXT_PRESSURE_HIGH_RATIO,
 ) -> str | None:
     """Render the channel-A reconstruction ``molt`` reminder, or ``None``.
 
@@ -394,9 +407,10 @@ def render_reconstruction_molt(
         return (
             "The runtime already rebuilt the provider context after summarization, "
             f"but the rebuilt context is still at {after_text} of the context "
-            "window, above the 75% high-context threshold. Repeated summarize "
-            "calls while context stays above 75% substantially hurt token "
-            "efficiency; stop repeating summarize, tend durable stores, and molt "
+            "window, above the 75% high-context threshold. Repeated small "
+            "summarize calls while context stays above 75% substantially hurt "
+            "token efficiency; use at most one rebuild-only summarize call, then "
+            "stop repeating summarize, tend durable stores, and molt "
             "deliberately. See psyche-manual."
         )
     return (
@@ -406,4 +420,39 @@ def render_reconstruction_molt(
         "If more digested tool results can be summarized, do that as one "
         "batch; otherwise tend durable stores and molt deliberately. See "
         "psyche-manual."
+    )
+
+
+def render_reconstruction_emergency_hint(
+    *,
+    after_usage: float,
+    trigger_threshold: float = CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,
+    high_threshold: float = CONTEXT_PRESSURE_HIGH_RATIO,
+) -> str:
+    """Render the one-shot proactive hint for an automatic 0.95 rebuild.
+
+    This is distinct from ``render_reconstruction_molt``: ``molt`` is a recovery
+    warning emitted only when the rebuilt context is still too large, while this
+    hint is permanent evidence that the runtime had to take the emergency
+    automatic path.  It is attached only to automatic delayed-summarize
+    reconstruction events, not to manual ``rebuild_only`` events.
+    """
+    trigger_text = _format_ratio_percent(trigger_threshold)
+    high_text = _format_ratio_percent(high_threshold)
+    try:
+        after = float(after_usage)
+    except (TypeError, ValueError):
+        after = -1.0
+    after_clause = (
+        f" The rebuilt context is now at {_format_ratio_percent(after)}."
+        if after >= 0
+        else ""
+    )
+    return (
+        "Emergency provider-context rebuild has been applied automatically at "
+        f"{trigger_text} of the context window. You should have used "
+        "system(action='summarize', rebuild_only=true) once after context passed "
+        f"{high_text} to proactively rebuild context and reduce pressure before "
+        f"the forced path was needed.{after_clause} See meta_guidance and "
+        "summarize-manual for the manual 75% rebuild vs automatic 95% rebuild rule."
     )

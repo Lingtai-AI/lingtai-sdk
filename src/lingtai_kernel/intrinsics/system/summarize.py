@@ -61,6 +61,71 @@ def _visible_len(content: Any) -> int:
     return formal_tool_result_visible_len(content)
 
 
+def _truthy_flag(value: Any) -> bool:
+    """Return True only for explicit boolean-ish true values."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
+
+def _request_rebuild_only(agent, *, current_threshold: int) -> dict:
+    """Handle summarize rebuild-only mode (no compression, just rebuild)."""
+    chat = getattr(agent, "_chat", None)
+    if chat is None:
+        return {
+            "status": "error",
+            "reason": "no_chat_session",
+            "message": "No active chat session — cannot request a context rebuild.",
+            "notification_threshold_chars": current_threshold,
+        }
+    hook = getattr(chat, "request_history_rebuild", None)
+    requested = False
+    if callable(hook):
+        try:
+            requested = bool(hook(reason="summarize_rebuild_only"))
+        except TypeError:
+            requested = bool(hook())
+        except Exception as exc:  # pragma: no cover - defensive hook isolation
+            try:
+                agent._log("history_rebuild_only_request_failed", error=type(exc).__name__)
+            except Exception:
+                pass
+            return {
+                "status": "error",
+                "reason": "rebuild_request_failed",
+                "message": "The chat session rejected the rebuild-only request.",
+                "notification_threshold_chars": current_threshold,
+            }
+    try:
+        agent._log(
+            "history_rebuild_only_requested",
+            requested=requested,
+            reason="summarize_rebuild_only",
+        )
+    except Exception:
+        pass
+    return {
+        "status": "ok",
+        "mode": "rebuild_only",
+        "summarized": 0,
+        "failed": 0,
+        "items": [],
+        "cleared_reminders": [],
+        "rebuild_requested": requested,
+        "notification_threshold_chars": current_threshold,
+        "reconstruction": (
+            "No tool results were summarized. A one-shot provider-context rebuild "
+            "was requested for the next model call."
+            if requested
+            else "No tool results were summarized. This chat backend has no explicit "
+            "rebuild hook (or continuation is disabled), so there may be no "
+            "provider-context action to take."
+        ),
+    }
+
+
 def _summarize(agent, args: dict) -> dict:
     """Handle system(action='summarize').
 
@@ -103,7 +168,22 @@ def _summarize(agent, args: dict) -> dict:
             "notification_threshold_chars": current_threshold,
         }
 
+    rebuild_only = _truthy_flag(args.get("rebuild_only")) or _truthy_flag(args.get("dry_run"))
     items_arg = args.get("items")
+
+    if rebuild_only:
+        if isinstance(items_arg, list) and len(items_arg) > 0:
+            return {
+                "status": "error",
+                "reason": "rebuild_only_with_items",
+                "message": (
+                    "system(action='summarize', rebuild_only=true) performs no "
+                    "compression; call it with no items, or omit rebuild_only to "
+                    "summarize tool results."
+                ),
+                "notification_threshold_chars": current_threshold,
+            }
+        return _request_rebuild_only(agent, current_threshold=current_threshold)
 
     if not isinstance(items_arg, list) or len(items_arg) == 0:
         return {
@@ -111,7 +191,9 @@ def _summarize(agent, args: dict) -> dict:
             "reason": "missing_items",
             "message": (
                 "system(action='summarize') requires a non-empty 'items' list, "
-                "each with 'tool_call_id' and 'summary'."
+                "each with 'tool_call_id' and 'summary'. To rebuild provider "
+                "context without compression, call system(action='summarize', "
+                "rebuild_only=true) with no items."
             ),
             "notification_threshold_chars": current_threshold,
         }
@@ -300,17 +382,20 @@ def _summarize(agent, args: dict) -> dict:
     # chat-history block was updated and large-result reminders were cleared
     # immediately above; the active provider request may still ride the existing
     # append/continuation prefix with the old raw block until summarized history
-    # is pending and context reaches the runtime reconstruction threshold (0.75
-    # of the window).  This is a short, generic status, not a per-provider policy
-    # object — runtimes that reconstruct on every request simply observe no
-    # delay.
+    # is pending and context reaches the runtime reconstruction threshold (0.95
+    # of the window). Above 0.75 the runtime stamps a manual rebuild hint so the
+    # agent may call rebuild_only once if a fresh provider context is worth the
+    # cost. This is a short, generic status, not a per-provider policy object —
+    # runtimes that reconstruct on every request simply observe no delay.
     if summarized_count > 0:
         result["reconstruction"] = (
             "Summary recorded in runtime history. The active provider context may still "
             "contain the old result until delayed reconstruction; when summarized history "
-            "is pending, reconstruction happens automatically once context reaches 0.75 "
-            "of the window. This is normal — keep working. See meta_guidance and "
-            "substrate for details."
+            "is pending, reconstruction happens automatically once context reaches 0.95 "
+            "of the window. Above 0.75, _meta.tool_meta.context.rebuild may invite "
+            "a one-shot system(action='summarize', rebuild_only=true) if you want to "
+            "pay for an earlier rebuild without compression. This is normal — keep "
+            "working. See meta_guidance and substrate for details."
         )
 
     return result

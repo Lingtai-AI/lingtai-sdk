@@ -26,6 +26,7 @@ import openai
 from lingtai_kernel.logging import get_logger
 from lingtai_kernel.config import (
     THINKING_LEVELS,
+    CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,
     CONTEXT_PRESSURE_RECOVERY_TARGET,
 )
 
@@ -2238,7 +2239,7 @@ class OpenAIAdapter(LLMAdapter):
 # ---------------------------------------------------------------------------
 
 
-_CODEX_SUMMARIZE_DELAY_THRESHOLD_RATIO = 0.75
+_CODEX_SUMMARIZE_DELAY_THRESHOLD_RATIO = CONTEXT_PRESSURE_RECONSTRUCTION_RATIO
 
 
 class CodexResponsesSession(OpenAIResponsesSession):
@@ -2868,8 +2869,8 @@ class CodexResponsesSession(OpenAIResponsesSession):
         # reconstruction (not a turn_count reset, which carries no summarized
         # history to apply). This is the one moment the provider context is
         # genuinely rebuilt around the compacted history.
-        if reason == "summarize_delayed":
-            self._record_reconstruction_event()
+        if reason in {"summarize_delayed", "summarize_rebuild_only"}:
+            self._record_reconstruction_event(reason=reason)
 
         self._close_ws_transport()
         self._ws_session = _CodexWebsocketSession()
@@ -2881,8 +2882,8 @@ class CodexResponsesSession(OpenAIResponsesSession):
             self._summarize_effect_delayed_pending_ids.clear()
             self._summarize_effect_delayed_last_release_reason = reason
 
-    def _record_reconstruction_event(self) -> None:
-        """Record the one-shot delayed-summarize reconstruction event (channel A).
+    def _record_reconstruction_event(self, *, reason: str = "summarize_delayed") -> None:
+        """Record the one-shot summarize/rebuild reconstruction event (channel A).
 
         Captures the before-context (A) from the last real provider request and
         the fixed trigger/recovery metadata. The after-context (B) and any molt
@@ -2895,9 +2896,14 @@ class CodexResponsesSession(OpenAIResponsesSession):
         before_tokens = ctx.get("current_context_tokens")
         before_usage = ctx.get("current_context_usage")
         context_window = ctx.get("context_window")
+        event_type = (
+            "summarize_rebuild_only_reconstruction"
+            if reason == "summarize_rebuild_only"
+            else "delayed_summarize_reconstruction"
+        )
         self._pending_reconstruction_event = {
-            "type": "delayed_summarize_reconstruction",
-            "reason": "delayed_summarize_reconstruction",
+            "type": event_type,
+            "reason": event_type,
             "trigger_threshold": self._summarize_delay_threshold_ratio,
             "recovery_target": CONTEXT_PRESSURE_RECOVERY_TARGET,
             "context_window": context_window,
@@ -2981,6 +2987,18 @@ class CodexResponsesSession(OpenAIResponsesSession):
         if usage is not None and usage >= self._summarize_delay_threshold_ratio:
             self._reset_ws_epoch("summarize_delayed")
 
+    def request_history_rebuild(self, reason: str = "summarize_rebuild_only") -> bool:
+        # Explicit rebuild-only summarize: no history compression happened, but the
+        # agent asked to discard the remote continuation prefix and replay the
+        # current local history on the next model request. This is the manual path
+        # advertised at 75%; automatic delayed-summarize release remains at 95%.
+        if not self._continuation_enabled:
+            return False
+        self._summarize_effect_delayed_last_context = self._summarize_delay_context()
+        self._summarize_effect_delayed_last_release_reason = reason
+        self._reset_ws_epoch(reason)
+        return True
+
     def on_notification_dismissed(self, channel: str | None = None) -> None:
         # Notification dismiss is high-frequency housekeeping, not context
         # compaction. It should not break the Codex previous_response_id
@@ -3022,6 +3040,7 @@ class CodexResponsesSession(OpenAIResponsesSession):
             reset_codes = {
                 "summarize": "sum",
                 "summarize_delayed": "sumd",
+                "summarize_rebuild_only": "sumr",
                 "turn_count": "turns",
             }
             if reset_reason in reset_codes:
@@ -3123,6 +3142,7 @@ class CodexResponsesSession(OpenAIResponsesSession):
                 "F": "full",
                 "sum": "epoch_reset:summarize",
                 "sumd": "epoch_reset:summarize_delayed",
+                "sumr": "epoch_reset:summarize_rebuild_only",
                 "turns": "epoch_reset:turn_count",
                 "pm": "prefix_mismatch",
                 "nb": "no_baseline",

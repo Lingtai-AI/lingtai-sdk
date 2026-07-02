@@ -198,41 +198,39 @@ Operational rules:
 
 ## 3a · Delayed summarization: summary recorded now, provider reconstruction delayed
 
-Summarize has two layers of effect, and they are deliberately decoupled.
+Summarize has two decoupled effects:
 
-**Runtime-history effect — immediate.** The moment the call succeeds, LingTai
-updates the live/persisted chat-history entry for the target tool result to your
-summary, records the summarize bookkeeping, and clears any matching large-result
-reminders. This is not a guarantee that the current provider continuation already
-contains that compacted view; from the agent's current provider-context
-perspective, the old raw block may still be present until reconstruction.
+1. **Runtime-history replacement now.** The prior tool-result block in local
+   history is replaced with your agent-authored summary, and matching large-result
+   reminders may clear.
+2. **Provider-side reconstruction later.** The current provider continuation may
+   still contain the old raw block until the runtime rebuilds the provider prefix
+   around compacted history.
 
-**Provider-side reconstruction — delayed.** Runtimes serve most requests by
-*appending* new turns onto a stable cache/continuation prefix, not by
-*reconstructing* that prefix from scratch each time. Rebuilding the prefix on
-every summarize would throw away the cache/continuation benefit. So summarizing
-does not immediately force the provider to rebuild context:
+Provider-side reconstruction is delayed because runtimes usually append turns
+onto a stable cache/continuation prefix. Rebuilding that prefix on every
+summarize would discard cache benefit.
 
-- **Below 0.75 of the context window:** the summarize stays "pending" at the
-  provider layer. The session keeps appending; you can keep working, batch
-  later summaries when practical, and follow any provider-specific cache guidance.
-  This delay is normal and is not a failure.
-- **At or above 0.75 of the context window:** if summarized history is
-  pending, the runtime automatically reconstructs context with that compacted
-  history on the next provider request. You do not need to call summarize again
-  or take manual action for this to happen. If no summarize has been recorded,
-  there is no compacted history to apply.
+- **Below 0.95 of the context window:** summarize stays pending at the provider
+  layer and the session keeps appending. This delay is normal, not a failure; do
+  not call `refresh` merely to "apply" the summary.
+- **At or above 0.75 of the context window:** `_meta.tool_meta.context.rebuild`
+  is stamped continuously. If an earlier fresh provider context is worth the
+  cost, make one explicit `system(action="summarize", rebuild_only=true)` call
+  with no items. Do not loop rebuild-only calls.
+- **At or above 0.95 of the context window:** if summarized history is pending,
+  the runtime automatically reconstructs with compacted history on the next
+  provider request. No repeat summarize call or manual action is required for the
+  automatic path. If you reach this emergency path without having used
+  rebuild-only earlier, the runtime notes that one proactive 75% rebuild-only
+  call could have relieved pressure before the forced rebuild was needed.
 
-`refresh` is an **emergency** reconstruction path — for context that is broken or
-stale, or when an immediate rebuild is urgently needed. It is not a routine knob
-for the normal summarize flow; do not reach for it just to "apply" a summarize.
-
-If summarize and the automatic reconstruction still cannot bring context back
-below `0.6 * context_window`, that is the signal to **molt** (see §6 and
-`psyche-manual`).
-
-Runtimes that already reconstruct on every request simply observe no delay; the
-above is generic behavior, not a single provider's policy.
+If no summarize has been recorded, there is no compacted history to apply, though
+rebuild-only can still force a fresh replay of current history on adapters that
+support it. `refresh` remains the emergency path for broken/stale context or
+explicit human direction, not the normal way to apply summarize. If summarize or
+a rebuild still cannot bring context below `0.6 * context_window`, tend durable
+stores and molt deliberately.
 
 ## 4 · Recovering the original result
 
