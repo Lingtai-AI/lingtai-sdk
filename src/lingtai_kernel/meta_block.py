@@ -1289,14 +1289,26 @@ def _session_context_window(agent) -> int:
 def _build_session_token_economy(agent) -> dict:
     """Return the ``session`` (since-last-molt) half of the token_usage block.
 
-    Sources the aggregate from ``agent.get_token_usage()`` — the CUMULATIVE /
-    restored ``_total_*``/``_api_calls`` counters, which SURVIVE
-    ``restore_token_state`` (refresh/restart).  This is the "since last molt"
-    contract: the injected ``token_usage.session`` must NOT reset on refresh, so
-    it deliberately reads the cumulative totals rather than
+    Sources the aggregate from the AGENT-SESSION object when available
+    (``agent.agent_session_token_usage()``), falling back to
+    ``agent.get_token_usage()`` for agents/stubs that expose no agent-session
+    accessor.  Both read the CUMULATIVE / restored ``_total_*``/``_api_calls``
+    counters, which SURVIVE ``restore_token_state`` (refresh/restart) — and, since
+    the startup restore is now seeded from the rebuilt agent session's since-molt
+    totals (see ``lifecycle._start``), those counters are genuinely
+    since-current-molt across a refresh rather than lifetime.  This is the
+    "since last molt" contract: the injected ``token_usage.session`` must NOT
+    reset on refresh, so it deliberately reads these totals rather than
     ``get_runtime_session_token_usage()`` (the since-refresh deltas, which zero
     out on every restart — that was the #679 defect).  The since-refresh runtime
     getter is never consulted here.
+
+    Routing the numbers through the agent-session view keeps a single owner for
+    the since-molt aggregate (the ``AgentSession``), per Jason's same-PR wiring:
+    the numbers are identical to ``get_token_usage`` (same counters), but the
+    agent-session object is now the named source.  The current CONTEXT state
+    (``ctx_total_tokens``) still comes from ``get_token_usage`` since it is live
+    context, not part of the since-molt token aggregate.
 
     Projects the aggregate counters agents act on now: ``session_cache_rate``
     (cached/input clamped to a 0-1 fraction), ``api_calls``,
@@ -1339,9 +1351,23 @@ def _build_session_token_economy(agent) -> dict:
     if not isinstance(usage, Mapping):
         return {}
 
-    api_calls = _non_negative_int(usage.get("api_calls"))
-    input_tokens = _non_negative_int(usage.get("input_tokens"))
-    cached_tokens = _non_negative_int(usage.get("cached_tokens"))
+    # Prefer the AGENT-SESSION view for the since-molt token aggregate (single
+    # owner), falling back to the raw cumulative counters for stubs/agents that
+    # expose no agent-session accessor. The numbers are the same counters; this
+    # only routes them through the named object per the same-PR wiring.
+    agg = usage
+    agent_session_usage_fn = getattr(agent, "agent_session_token_usage", None)
+    if callable(agent_session_usage_fn):
+        try:
+            candidate = agent_session_usage_fn()
+        except Exception:
+            candidate = None
+        if isinstance(candidate, Mapping):
+            agg = candidate
+
+    api_calls = _non_negative_int(agg.get("api_calls"))
+    input_tokens = _non_negative_int(agg.get("input_tokens"))
+    cached_tokens = _non_negative_int(agg.get("cached_tokens"))
     avg_input = int(round(input_tokens / api_calls)) if api_calls > 0 else 0
     session_cache_rate = (
         round(min(cached_tokens / input_tokens, 1.0), 5)

@@ -167,14 +167,58 @@ def _start(agent) -> None:
             agent._log("worker_hang_recovery_rehydrate_failed", error=str(e)[:300])
         except Exception:
             pass
-    # Restore token state from ledger (lifetime accumulator)
+    # Rebuild the AGENT-SESSION (since-current-molt) from the durable trajectory
+    # and seed the token counters from it, so a refresh/restart preserves the
+    # since-molt ``token_usage.session`` totals instead of restoring LIFETIME
+    # ledger totals. This is the fix for the #679-class defect the session spec
+    # names (docs/references/runtime-vs-agent-session-objects.md §4.1/§5): the
+    # ledger sum is a lifetime aggregate, so restoring from it made the injected
+    # since-molt ``session`` half report lifetime numbers after a refresh.
+    #
+    # The rebuild uses the optimized path (indexed sqlite → bounded reverse scan
+    # → full-scan last resort), so the normal case does NOT full-scan
+    # events.jsonl. The lifetime ledger is still read as a compatibility fallback
+    # only if the event-based rebuild is unavailable (e.g. no trajectory yet).
     try:
-        ledger_path = agent._working_dir / "logs" / "token_ledger.jsonl"
-        totals = sum_token_ledger(ledger_path)
-        agent.restore_token_state(totals)
+        agent_session = agent.rebuild_agent_session()
+        seeded = False
+        if agent_session is not None and agent_session.rebuild_tier != "none":
+            agent.restore_token_state(
+                {
+                    "input_tokens": agent_session.input_tokens,
+                    "output_tokens": agent_session.output_tokens,
+                    "thinking_tokens": agent_session.thinking_tokens,
+                    "cached_tokens": agent_session.cached_tokens,
+                    "api_calls": agent_session.api_calls,
+                }
+            )
+            seeded = True
+            agent._log(
+                "agent_session_rebuilt",
+                molt_count=agent_session.molt_count,
+                rebuild_tier=agent_session.rebuild_tier,
+                events_scanned=agent_session.rebuild_events_scanned,
+                api_calls=agent_session.api_calls,
+                input_tokens=agent_session.input_tokens,
+                cached_tokens=agent_session.cached_tokens,
+            )
+        if not seeded:
+            # No usable trajectory (brand-new agent, or corrupt/absent events):
+            # fall back to the lifetime ledger accumulator for back-compat.
+            ledger_path = agent._working_dir / "logs" / "token_ledger.jsonl"
+            totals = sum_token_ledger(ledger_path)
+            agent.restore_token_state(totals)
     except Exception as e:
         from ..logging import get_logger
-        get_logger().warning(f"[{agent.agent_name}] Failed to restore token state from ledger: {e}")
+        get_logger().warning(
+            f"[{agent.agent_name}] Failed to rebuild/restore token state: {e}"
+        )
+        # Last-resort: never leave the counters unrestored on an unexpected error.
+        try:
+            ledger_path = agent._working_dir / "logs" / "token_ledger.jsonl"
+            agent.restore_token_state(sum_token_ledger(ledger_path))
+        except Exception:
+            pass
 
     # Start MailService listener if configured
     if agent._mail_service is not None:
